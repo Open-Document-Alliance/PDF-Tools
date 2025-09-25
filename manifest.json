@@ -1,9 +1,9 @@
 {
-  "dxt_version": "0.1",
+  "manifest_version": "0.2",
   "name": "pdf-filler",
-  "display_name": "PDF Filler",
-  "description": "Fill PDF forms with Claude Desktop",
-  "long_description": "A powerful PDF form filling extension for Claude Desktop that enables automated form completion, bulk processing, and data extraction. Features include reading PDF form fields, filling forms with custom data, saving reusable profiles, bulk filling from CSV files, extracting filled data to CSV, validating completed forms, and reading PDF content through the MCP Resources API. Perfect for streamlining document workflows and automating repetitive PDF form tasks.",
+  "display_name": "PDF Read, Write, Analyze",
+  "description": "Fill and Analyze PDF forms with Claude Desktop",
+  "long_description": "A powerful PDF form filling extension for Claude Desktop that enables automated form completion, bulk processing, and data extraction. Features include reading PDF form fields (text, checkboxes, dropdowns, radio buttons), filling forms with custom data, saving reusable profiles, bulk filling from CSV files, extracting filled data to CSV, validating completed forms, reading PDF content, and full support for password-protected PDFs. Perfect for streamlining document workflows and automating repetitive PDF form tasks.",
   "version": "0.3.0",
   "author": {
     "name": "Mat Silverstein",

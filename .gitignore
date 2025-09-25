@@ -26,3 +26,4 @@ npm-debug.log*
 
 # Private Claude context
 .claude/
+AGENTS.md
