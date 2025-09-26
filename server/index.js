@@ -102,7 +102,7 @@ async function convertPdfPageToImage(pdfBuffer, pageNumber = 1, scale = 1.0) {
 const server = new Server(
   {
     name: "pdf-filler",
-    version: "0.3.0",
+    version: "0.4.0",
   },
   {
     capabilities: {
@@ -112,9 +112,9 @@ const server = new Server(
   }
 );
 
-// Default directories
-const DEFAULT_PDF_DIR = path.join(homedir(), "Documents");
-const PROFILES_DIR = path.join(homedir(), ".pdf-filler-profiles");
+// Default directories - use environment variables from manifest or fallback to defaults
+const DEFAULT_PDF_DIR = process.env.DEFAULT_PDF_DIR || path.join(homedir(), "Documents");
+const PROFILES_DIR = process.env.DEFAULT_PROFILES_DIR || path.join(homedir(), ".pdf-toolkit-files");
 
 // Helper function to parse CSV
 function parseCSV(content) {

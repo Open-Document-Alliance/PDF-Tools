@@ -1,0 +1,143 @@
+{
+  "dxt_version": "0.1",
+  "name": "pdf-toolkit",
+  "display_name": "PDF Tools - Analyze, Extract, Fill, Compare",
+  "description": "Let Claude work with PDFs on your computer: read, analyze, fill forms, extract data",
+  "long_description": "Powerful PDF analysis toolkit for Claude Desktop.\n\n**What Claude can do with your PDFs:**\n• Analyze lengthy research papers and academic documents\n• Extract data from technical documentation\n• Compare multiple contract versions\n• Fill out forms automatically\n• Summarize complex reports\n\n**Works with any PDF type:** Scientific papers, legal contracts, technical manuals, financial statements, invoices, and forms (W-9, 1099, I-9). Handles fillable forms, scanned documents, and encrypted PDFs.\n\n**Key features:**\n• Work with PDFs already on your computer without uploading\n• Extract tables and structured data to CSV\n• Bulk process hundreds of documents\n• Handle password-protected files\n• Save reusable profiles for common forms\n\n**Perfect for:** Researchers analyzing literature, lawyers comparing contracts, engineers reviewing specifications, and businesses processing invoices. Claude excels at maintaining context across 300+ page documents.",
+  "version": "0.4.0",
+  "author": {
+    "name": "Mat Silverstein",
+    "url": "https://github.com/silverstein",
+    "email": "mat@businessvacation.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/silverstein/pdf-filler-simple"
+  },
+  "homepage": "https://github.com/silverstein/pdf-filler-simple",
+  "documentation": "https://github.com/silverstein/pdf-filler-simple/blob/master/README.md",
+  "support": "https://github.com/silverstein/pdf-filler-simple/issues",
+  "license": "MIT",
+  "keywords": ["pdf", "research", "academic", "analyze", "compare", "extract", "documentation", "contracts", "forms", "fill", "w9", "1099", "tax", "invoice", "literature"],
+  "icon": "icon.png",
+  "tools": [
+    {
+      "name": "list_pdfs",
+      "description": "List all PDF files in a directory"
+    },
+    {
+      "name": "read_pdf_fields",
+      "description": "Read all form fields from a PDF file"
+    },
+    {
+      "name": "fill_pdf",
+      "description": "Fill a PDF form with provided data and save it"
+    },
+    {
+      "name": "bulk_fill_from_csv",
+      "description": "Fill multiple PDFs using data from a CSV file"
+    },
+    {
+      "name": "save_profile",
+      "description": "Save form data as a reusable profile"
+    },
+    {
+      "name": "load_profile",
+      "description": "Load a saved profile"
+    },
+    {
+      "name": "list_profiles",
+      "description": "List all saved profiles"
+    },
+    {
+      "name": "fill_with_profile",
+      "description": "Fill a PDF using a saved profile"
+    },
+    {
+      "name": "extract_to_csv",
+      "description": "Extract form data from filled PDFs to a CSV file"
+    },
+    {
+      "name": "validate_pdf",
+      "description": "Validate if all required fields in a PDF are filled"
+    },
+    {
+      "name": "read_pdf_content",
+      "description": "Read and analyze the full content of a PDF file - extract text, summarize, convert to other formats, or answer questions about the document"
+    },
+    {
+      "name": "get_pdf_resource_uri",
+      "description": "Get a resource URI for a PDF file that can be used with Claude's built-in PDF reading capabilities via the Resources API"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "research_paper_analysis",
+      "description": "Analyze & summarize research papers",
+      "arguments": ["focus_area"],
+      "text": "I'll analyze your research paper or academic document, focusing on ${arguments.focus_area}. I can extract key findings and methodology, identify research gaps, create chapter-by-chapter summaries, pull out all citations, and generate a literature review outline."
+    },
+    {
+      "name": "contract_comparison",
+      "description": "Compare legal documents & contracts",
+      "arguments": ["comparison_focus"],
+      "text": "I'll compare multiple contracts or legal documents, focusing on ${arguments.comparison_focus}. I'll highlight changed clauses, modified terms, added/removed sections, pricing differences, liability changes, and create a comparison summary."
+    },
+    {
+      "name": "financial_report_extraction",
+      "description": "Extract data from financial statements",
+      "arguments": ["output_format"],
+      "text": "I'll extract and analyze data from your financial PDFs including all tables and key metrics. I'll convert the data to ${arguments.output_format} format for analysis, with specific page references for all extracted information."
+    },
+    {
+      "name": "document_qa_session",
+      "description": "Interactive Q&A about your documents",
+      "arguments": ["initial_question"],
+      "text": "Let's discuss your PDF document. Starting with: ${arguments.initial_question}. I can find specific information, explain complex sections, cross-reference different parts, extract quotes with page numbers, and answer 'what if' scenarios."
+    },
+    {
+      "name": "bulk_invoice_processing",
+      "description": "Process multiple invoices into structured data",
+      "arguments": ["folder_path", "output_format"],
+      "text": "I'll process all invoice PDFs in ${arguments.folder_path} and create a unified dataset in ${arguments.output_format} format. I'll extract vendor names, invoice numbers, dates, line items, totals, tax amounts, and payment terms."
+    },
+    {
+      "name": "technical_documentation_summary",
+      "description": "Summarize technical manuals & documentation",
+      "arguments": ["summary_type"],
+      "text": "I'll analyze your technical documentation and create ${arguments.summary_type}. I'll extract code examples, create reference guides, identify implementation steps, and summarize troubleshooting sections."
+    },
+    {
+      "name": "fill_w9_business",
+      "description": "Fill W-9 for business entity",
+      "text": "I'll help fill the W-9 for your business. I need: Business legal name, DBA/trade name (if different), business type (LLC/Corp/Partnership), tax classification, EIN, and business address. I'll properly check the correct tax classification boxes and ensure the form meets IRS requirements."
+    },
+    {
+      "name": "batch_invoices",
+      "description": "Process multiple invoices",
+      "text": "I'll help you batch process invoices. Point me to the folder containing your invoice PDFs. I can: extract all amounts and dates, create a summary spreadsheet, identify missing information, calculate totals by vendor/date/category. What specific data do you need extracted?"
+    },
+    {
+      "name": "rental_application",
+      "description": "Fill rental application",
+      "text": "I'll help complete rental applications. Have ready: personal info, employment history (3 years), income verification, previous addresses (3 years), references, vehicle info, and emergency contact. I'll ensure all required fields are filled and flag any that need supporting documents."
+    },
+    {
+      "name": "extract_1099_data",
+      "description": "Extract data from 1099 forms",
+      "text": "I'll extract all data from your 1099 forms (1099-NEC, 1099-MISC, 1099-DIV, 1099-INT, etc.) and create a tax summary. I'll organize by payer, identify the type of income, sum totals by category, and format it for easy import into tax software."
+    }
+  ],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.js"],
+      "env": {
+        "DEFAULT_PDF_DIR": "${DOCUMENTS}",
+        "DEFAULT_PROFILES_DIR": "${HOME}/.pdf-filler-profiles"
+      }
+    }
+  }
+}

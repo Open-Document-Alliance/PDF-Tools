@@ -1,0 +1,26 @@
+# Ignore other packages
+*.dxt
+*.mcpb
+*.zip
+
+# Ignore sharing/distribution folders
+pdf-filler-mcp-share/
+pdf-filler-mcp/
+
+# Ignore test files
+test-*.pdf
+*-test.pdf
+
+# Ignore temporary files
+*.tmp
+*.log
+.DS_Store
+
+# Ignore git files (already handled by default)
+.git/
+.gitignore
+
+# Ignore old/backup files
+*.backup
+*.old
+manifest.dxt.backup.json
