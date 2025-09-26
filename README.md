@@ -1,6 +1,6 @@
-# PDF Filler - Universal Claude Integration
+# PDF Tools - Analyze, Extract, Fill, Compare
 
-A PDF form filling solution that works with **both** Claude Desktop (as an extension) **and** Cursor (as an MCP server). Choose your preferred Claude environment!
+A comprehensive PDF toolkit for Claude that enables document analysis, data extraction, form filling, and comparison. Works with **both** Claude Desktop (as an extension) **and** Cursor (as an MCP server).
 
 ## 🎯 **Choose Your Platform**
 
@@ -13,13 +13,13 @@ Perfect for developers who want PDF filling while coding in Cursor.
 ## Features
 
 ### Core Features
-- 📋 List PDF files in any directory
-- 🔍 Read form fields from PDFs (text fields, checkboxes, dropdowns, etc.)
-- ✏️ Fill PDF forms programmatically
-- 💾 Save filled PDFs to new files
-- 🔐 **Password Support** - Handle password-protected PDFs
-- 📖 **Read PDF Content** - Extract and analyze full PDF content (text, images, structure)
-- 🔍 **OCR Support** - Automatically extracts text from scanned PDFs using vision capabilities
+- 📖 **Analyze Documents** - Extract and analyze full PDF content (300+ pages)
+- 📊 **Extract Data** - Pull tables, text, and structured data from any PDF
+- 🔍 **Compare Contracts** - Identify changes between document versions
+- ✏️ **Fill Forms** - Automate form completion (W-9, 1099, I-9, etc.)
+- 📋 **List & Organize** - Browse and manage PDF collections
+- 🔐 **Password Support** - Handle encrypted and protected PDFs
+- 👁️ **OCR Support** - Extract text from scanned documents
 
 ### Advanced Features
 - 📊 **Bulk Fill from CSV** - Fill multiple PDFs using data from spreadsheets
