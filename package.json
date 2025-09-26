@@ -1,11 +1,11 @@
 {
-  "name": "pdf-filler",
+  "name": "pdf-tools",
   "version": "0.4.0",
-  "description": "PDF MCP server for Claude Desktop",
+  "description": "PDF Tools MCP server for Claude Desktop",
   "main": "server/index.js",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.18.2",
     "canvas": "^3.1.2",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.1",

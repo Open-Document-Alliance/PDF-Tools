@@ -33,24 +33,24 @@ Perfect for developers who want PDF filling while coding in Cursor.
 ### 🖥️ **For Claude Desktop**
 
 #### Quick Install
-1. **[Download the latest .dxt file from Releases](https://github.com/silverstein/pdf-filler-simple/releases/latest)**
-2. Double-click the `.dxt` file or drag it to Claude Desktop to install
+1. **[Download the latest .mcpb file from Releases](https://github.com/silverstein/pdf-filler-simple/releases/latest)**
+2. Double-click the `.mcpb` file to install in Claude Desktop
 
 Or manually:
 1. Open Claude Desktop
-2. Go to Settings → Extensions → Browse Extensions → Desktop Extensions → Advanced Settings  
-3. Click "Install Extension" and select the `.dxt` file
+2. Go to Settings → Developer → Edit Config
+3. The `.mcpb` file will auto-configure itself when opened
 
-NOTE: There's a brand new Claude Extensions page and PDF Filler is featured by Claude. However, that version might not be compatible with the latest Claude Desktops versions, so in the meantime, use the above instructions.
+NOTE: The extension is also available in the Claude Extensions directory. If installing from there doesn't work with your Claude Desktop version, use the `.mcpb` file from our releases instead.
 
 #### Build from Source
 ```bash
 git clone https://github.com/silverstein/pdf-filler-simple
 cd pdf-filler-simple
 npm install
-npm install -g @anthropic-ai/dxt
-dxt pack
-# Install the generated .dxt file in Claude Desktop
+npm install -g @anthropic-ai/mcpb
+mcpb pack
+# Install the generated .mcpb file in Claude Desktop
 ```
 
 ### ⚡ **For Cursor**
@@ -164,7 +164,7 @@ pdf-filler-simple/
 ├── server/index.js           # MCP server (works for both!)
 ├── package.json             # Node.js dependencies
 ├── manifest.json            # Claude Desktop extension metadata
-├── pdf-filler-simple.dxt    # Claude Desktop extension package
+├── pdf-toolkit.dxt    # Claude Desktop extension package
 ├── pdf-filler-mcp-share/    # Cursor shareable package
 ├── pdf-filler-mcp.zip       # Cursor ready-to-share installer
 └── README.md               # This file

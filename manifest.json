@@ -1,5 +1,5 @@
 {
-  "dxt_version": "0.1",
+  "manifest_version": "0.2",
   "name": "pdf-toolkit",
   "display_name": "PDF Tools - Analyze, Extract, Fill, Compare",
   "description": "Let Claude work with PDFs on your computer: read, analyze, fill forms, extract data",
