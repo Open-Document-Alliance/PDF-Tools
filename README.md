@@ -56,11 +56,11 @@ mcpb pack
 ### ⚡ **For Cursor**
 
 #### 📦 Easy Install
-1. **[Download pdf-filler-mcp.zip from Releases](https://github.com/silverstein/pdf-filler-simple/releases/latest)**
+1. **[Download pdf-toolkit-mcp.zip from Releases](https://github.com/silverstein/pdf-filler-simple/releases/latest)**
 2. **Unzip** the file anywhere
 3. **Mac users**: Double-click `install.command` 
 4. **All users**: Or run `./smart-install.sh` in Terminal
-5. **Restart Cursor** - Look for "pdf-filler" with "11 tools enabled"
+5. **Restart Cursor** - Look for "pdf-filler" with "12 tools enabled"
 
 #### 🛠️ Developer Install
 ```bash
@@ -111,7 +111,7 @@ Works the same way in both Claude Desktop and Cursor! Ask Claude to:
 ### Validate Forms
 *"Validate if all required fields are filled in application.pdf"*
 
-### Read PDF Content (NEW! v0.3.0)
+### Read PDF Content
 *"Read the content of this PDF: /path/to/document.pdf"*
 *"Convert this PDF to markdown format"*
 *"Extract all text from my estate planning PDF"*
@@ -127,7 +127,7 @@ Works the same way in both Claude Desktop and Cursor! Ask Claude to:
 ```bash
 # For Cursor users - creates easy installer
 node package-for-friend.js
-# Share the generated pdf-filler-mcp.zip
+# Share the generated pdf-toolkit-mcp.zip
 ```
 
 ### 🖥️ Share Claude Desktop Extension
@@ -164,15 +164,15 @@ pdf-filler-simple/
 ├── server/index.js           # MCP server (works for both!)
 ├── package.json             # Node.js dependencies
 ├── manifest.json            # Claude Desktop extension metadata
-├── pdf-toolkit.dxt    # Claude Desktop extension package
-├── pdf-filler-mcp-share/    # Cursor shareable package
-├── pdf-filler-mcp.zip       # Cursor ready-to-share installer
+├── pdf-toolkit.dxt          # Claude Desktop extension package
+├── pdf-toolkit-mcp-share/   # Cursor shareable package
+├── pdf-toolkit-mcp.zip      # Cursor ready-to-share installer
 └── README.md               # This file
 ```
 
 ### Available Tools
 
-Same 11 tools work in both Claude Desktop and Cursor:
+Same 12 tools work in both Claude Desktop and Cursor:
 
 1. **list_pdfs** - Lists all PDF files in a specified directory
 2. **read_pdf_fields** - Extracts form field information from a PDF (supports password parameter)
@@ -185,6 +185,7 @@ Same 11 tools work in both Claude Desktop and Cursor:
 9. **extract_to_csv** - Extract data from PDFs to CSV
 10. **validate_pdf** - Check for missing required fields (supports password parameter)
 11. **read_pdf_content** - Read and analyze full PDF content - extract text, summarize, convert formats, answer questions
+12. **get_pdf_resource_uri** - Generate a resource URI for local PDFs so Claude can ingest them via the Resources API
 
 ## Requirements
 
