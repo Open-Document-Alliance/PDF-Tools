@@ -114,7 +114,8 @@ const server = new Server(
 
 // Default directories - use environment variables from manifest or fallback to defaults
 const DEFAULT_PDF_DIR = process.env.DEFAULT_PDF_DIR || path.join(homedir(), "Documents");
-const PROFILES_DIR = process.env.DEFAULT_PROFILES_DIR || path.join(homedir(), ".pdf-toolkit-files");
+// Keep in sync with manifest.json and share bundle defaults
+const PROFILES_DIR = process.env.DEFAULT_PROFILES_DIR || path.join(homedir(), ".pdf-filler-profiles");
 
 // Helper function to parse CSV
 function parseCSV(content) {

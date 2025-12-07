@@ -7,8 +7,8 @@ import { execSync } from 'child_process';
 async function createPackage() {
   console.log('📦 Creating shareable package for Cursor...\n');
 
-  const sourceDir = 'pdf-filler-mcp-share';
-  const outputFile = 'pdf-filler-mcp.zip';
+  const sourceDir = 'pdf-toolkit-mcp-share';
+  const outputFile = 'pdf-toolkit-mcp.zip';
 
   // Check if source directory exists
   try {
