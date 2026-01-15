@@ -50,49 +50,69 @@ function resolvePath(inputPath) {
   return path.resolve(inputPath);
 }
 
+async function withSuppressedStderr(action) {
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, encoding, callback) => {
+    if (typeof encoding === "function") {
+      encoding();
+    } else if (typeof callback === "function") {
+      callback();
+    }
+    return true;
+  };
+
+  try {
+    return await action();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+}
+
 // Helper function to convert PDF page to image
 async function convertPdfPageToImage(pdfBuffer, pageNumber = 1, scale = 1.0) {
   try {
-    // Load dependencies only when needed
-    loadImageDependencies();
-    // Load the PDF
-    const loadingTask = pdfjsLib.getDocument({ 
-      data: pdfBuffer,
-      useSystemFonts: true,
-      disableFontFace: true, // Disable font loading to avoid issues
-      verbosity: 0 // Suppress warnings
+    return await withSuppressedStderr(async () => {
+      // Load dependencies only when needed
+      loadImageDependencies();
+      // Load the PDF
+      const loadingTask = pdfjsLib.getDocument({ 
+        data: pdfBuffer,
+        useSystemFonts: true,
+        disableFontFace: true, // Disable font loading to avoid issues
+        verbosity: 0 // Suppress warnings
+      });
+      const pdfDocument = await loadingTask.promise;
+      
+      // Validate page number
+      const numPages = pdfDocument.numPages;
+      if (pageNumber < 1 || pageNumber > numPages) {
+        throw new Error(`Invalid page number. PDF has ${numPages} pages.`);
+      }
+      
+      // Get the page
+      const page = await pdfDocument.getPage(pageNumber);
+      
+      // Set up the canvas with proper dimensions
+      const viewport = page.getViewport({ scale });
+      const canvas = createCanvas(viewport.width, viewport.height);
+      const context = canvas.getContext('2d');
+      
+      // Set white background
+      context.fillStyle = 'white';
+      context.fillRect(0, 0, viewport.width, viewport.height);
+      
+      // Render the page
+      await page.render({
+        canvasContext: context,
+        viewport: viewport
+      }).promise;
+      
+      // Cleanup
+      await pdfDocument.destroy();
+      
+      // Return as PNG buffer
+      return canvas.toBuffer('image/png');
     });
-    const pdfDocument = await loadingTask.promise;
-    
-    // Validate page number
-    const numPages = pdfDocument.numPages;
-    if (pageNumber < 1 || pageNumber > numPages) {
-      throw new Error(`Invalid page number. PDF has ${numPages} pages.`);
-    }
-    
-    // Get the page
-    const page = await pdfDocument.getPage(pageNumber);
-    
-    // Set up the canvas with proper dimensions
-    const viewport = page.getViewport({ scale });
-    const canvas = createCanvas(viewport.width, viewport.height);
-    const context = canvas.getContext('2d');
-    
-    // Set white background
-    context.fillStyle = 'white';
-    context.fillRect(0, 0, viewport.width, viewport.height);
-    
-    // Render the page
-    await page.render({
-      canvasContext: context,
-      viewport: viewport
-    }).promise;
-    
-    // Cleanup
-    await pdfDocument.destroy();
-    
-    // Return as PNG buffer
-    return canvas.toBuffer('image/png');
   } catch (error) {
     console.error('Error converting PDF to image:', error);
     throw error;
@@ -778,21 +798,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const pdfBuffer = await fs.readFile(resolvedPath);
           
           // Extract text content using pdf-parse
-          let pdfData;
-          try {
-            // Suppress console output during pdf-parse to avoid TrueType warnings
-            const originalError = console.error;
-            console.error = () => {}; // Temporarily disable console.error
-            
-            pdfData = await pdfParse(pdfBuffer);
-            
-            // Restore console.error
-            console.error = originalError;
-          } catch (parseError) {
-            // If parsing fails completely, restore console and rethrow
-            console.error = originalError;
-            throw parseError;
-          }
+          const pdfData = await withSuppressedStderr(() => pdfParse(pdfBuffer));
           
           // Get page count from pdf-lib for additional info
           const pdfDoc = await PDFDocument.load(pdfBuffer);
