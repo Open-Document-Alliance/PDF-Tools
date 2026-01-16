@@ -33,7 +33,7 @@ Perfect for developers who want PDF filling while coding in Cursor.
 ### 🖥️ **For Claude Desktop**
 
 #### Quick Install
-1. **[Download the latest .mcpb file from Releases](https://github.com/silverstein/pdf-filler-simple/releases/latest)**
+1. **[Download the latest .mcpb file from Releases](https://github.com/Open-Document-Alliance/PDF-Tools/releases/latest)**
 2. Double-click the `.mcpb` file to install in Claude Desktop
 
 Or manually:
@@ -45,8 +45,8 @@ NOTE: The extension is also available in the Claude Extensions directory. If ins
 
 #### Build from Source
 ```bash
-git clone https://github.com/silverstein/pdf-filler-simple
-cd pdf-filler-simple
+git clone https://github.com/Open-Document-Alliance/PDF-Tools
+cd PDF-Tools
 npm install
 npm install -g @anthropic-ai/mcpb
 mcpb pack
@@ -56,7 +56,7 @@ mcpb pack
 ### ⚡ **For Cursor**
 
 #### 📦 Easy Install
-1. **[Download pdf-toolkit-mcp.zip from Releases](https://github.com/silverstein/pdf-filler-simple/releases/latest)**
+1. **[Download pdf-toolkit-mcp.zip from Releases](https://github.com/Open-Document-Alliance/PDF-Tools/releases/latest)**
 2. **Unzip** the file anywhere
 3. **Mac users**: Double-click `install.command` 
 4. **All users**: Or run `./smart-install.sh` in Terminal
@@ -64,8 +64,8 @@ mcpb pack
 
 #### 🛠️ Developer Install
 ```bash
-git clone https://github.com/silverstein/pdf-filler-simple
-cd pdf-filler-simple
+git clone https://github.com/Open-Document-Alliance/PDF-Tools
+cd PDF-Tools
 npm install
 
 # Add to your ~/.cursor/mcp.json:
@@ -73,7 +73,7 @@ npm install
   "mcpServers": {
     "pdf-filler": {
       "command": "node",
-      "args": ["/full/path/to/pdf-filler-simple/server/index.js"]
+      "args": ["/full/path/to/PDF-Tools/server/index.js"]
     }
   }
 }
@@ -160,7 +160,7 @@ This solution uses:
 
 ### Project Structure
 ```
-pdf-filler-simple/
+PDF-Tools/
 ├── server/index.js           # MCP server (works for both!)
 ├── package.json             # Node.js dependencies
 ├── manifest.json            # Claude Desktop extension metadata

@@ -12,11 +12,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/silverstein/pdf-filler-simple"
+    "url": "https://github.com/Open-Document-Alliance/PDF-Tools"
   },
-  "homepage": "https://github.com/silverstein/pdf-filler-simple",
-  "documentation": "https://github.com/silverstein/pdf-filler-simple/blob/master/README.md",
-  "support": "https://github.com/silverstein/pdf-filler-simple/issues",
+  "homepage": "https://github.com/Open-Document-Alliance/PDF-Tools",
+  "documentation": "https://github.com/Open-Document-Alliance/PDF-Tools/blob/master/README.md",
+  "support": "https://github.com/Open-Document-Alliance/PDF-Tools/issues",
   "license": "MIT",
   "keywords": ["pdf", "research", "academic", "analyze", "compare", "extract", "documentation", "contracts", "forms", "fill", "w9", "1099", "tax", "invoice", "literature"],
   "icon": "icon.png",
