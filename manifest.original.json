@@ -4,7 +4,7 @@
   "display_name": "PDF Tools - Analyze, Extract, Fill, Compare",
   "description": "Let Claude work with PDFs on your computer: read, analyze, fill forms, extract data",
   "long_description": "Powerful PDF analysis toolkit for Claude Desktop.\n\n**What Claude can do with your PDFs:**\n• Analyze lengthy research papers and academic documents\n• Extract data from technical documentation\n• Compare multiple contract versions\n• Fill out forms automatically\n• Summarize complex reports\n\n**Works with any PDF type:** Scientific papers, legal contracts, technical manuals, financial statements, invoices, and forms (W-9, 1099, I-9). Handles fillable forms, scanned documents, and encrypted PDFs.\n\n**Key features:**\n• Work with PDFs already on your computer without uploading\n• Extract tables and structured data to CSV\n• Bulk process hundreds of documents\n• Handle password-protected files\n• Save reusable profiles for common forms\n\n**Perfect for:** Researchers analyzing literature, lawyers comparing contracts, engineers reviewing specifications, and businesses processing invoices. Claude excels at maintaining context across 300+ page documents.",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "author": {
     "name": "Mat Silverstein",
     "url": "https://github.com/silverstein",

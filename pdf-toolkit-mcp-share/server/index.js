@@ -122,7 +122,7 @@ async function convertPdfPageToImage(pdfBuffer, pageNumber = 1, scale = 1.0) {
 const server = new Server(
   {
     name: "pdf-filler",
-    version: "0.4.0",
+    version: "0.4.1",
   },
   {
     capabilities: {
