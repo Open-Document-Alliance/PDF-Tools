@@ -53,6 +53,8 @@ mcpb pack
 # Install the generated .mcpb file in Claude Desktop
 ```
 
+MCPB repo: https://github.com/modelcontextprotocol/mcpb
+
 ### ⚡ **For Cursor**
 
 #### 📦 Easy Install
@@ -133,8 +135,8 @@ node package-for-friend.js
 ### 🖥️ Share Claude Desktop Extension
 ```bash
 # For Claude Desktop users
-dxt pack
-# Share the generated .dxt file
+mcpb pack
+# Share the generated .mcpb file
 ```
 
 ### 🚀 What Your Friends Get
@@ -146,13 +148,13 @@ dxt pack
 - **Safe installation** - moves files to permanent location
 
 **Claude Desktop Users:**
-- **Simple .dxt file install**
+- **Simple .mcpb file install**
 - **Built-in extension experience**
 
 ## How It Works
 
 This solution uses:
-- [MCP (Model Context Protocol)](https://github.com/anthropics/mcp) for both Claude Desktop and Cursor integration
+- [MCP (Model Context Protocol)](https://github.com/modelcontextprotocol) for both Claude Desktop and Cursor integration
 - [pdf-lib](https://github.com/Hopding/pdf-lib) for PDF manipulation
 - Node.js for the server runtime
 
@@ -164,11 +166,23 @@ PDF-Tools/
 ├── server/index.js           # MCP server (works for both!)
 ├── package.json             # Node.js dependencies
 ├── manifest.json            # Claude Desktop extension metadata
-├── pdf-toolkit.dxt          # Claude Desktop extension package
 ├── pdf-toolkit-mcp-share/   # Cursor shareable package
 ├── pdf-toolkit-mcp.zip      # Cursor ready-to-share installer
 └── README.md               # This file
 ```
+
+### Maintainer Docs
+
+- `docs/MAINTAINERS.md`
+- `docs/RELEASE.md`
+- `docs/SUPPORT.md`
+
+### Maintainer Quickstart
+
+- `npm install`
+- `node server/index.js` (run MCP server for Claude Desktop or Cursor)
+- `mcpb pack` (Claude Desktop .mcpb) and `node package-for-friend.js` (Cursor zip)
+- Follow `docs/RELEASE.md` before publishing
 
 ### Available Tools
 
@@ -198,6 +212,12 @@ Same 12 tools work in both Claude Desktop and Cursor:
 - Node.js 18+
 
 **Both support:** macOS, Windows, Linux
+
+## Upstream Dependencies
+
+- MCP spec and org: https://github.com/modelcontextprotocol
+- MCPB CLI: https://github.com/modelcontextprotocol/mcpb
+- SDK package: `@modelcontextprotocol/sdk`
 
 ## Examples
 
