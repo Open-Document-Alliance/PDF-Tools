@@ -196,7 +196,23 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // and read-coverage descriptions replace the previous fingerprint
 // 1be7e32a616bf23a4bcf4b064eaad15bcf094c807088ac5f0074369bdb66c716.
 // Names, input schemas and effect annotations remain unchanged.
-const TOOL_CONTRACT_SHA256 = "38efffcecdfd667010d18267de70c92cb89671b27a74c2edd4fb00f024cd1e88";
+// 2026-08-18: the list_signatures output schema gains `unreadable` and
+// `malformed`, the files in the signatures folder that did not become an
+// entry. Measured at dc90e75, a store whose records could not be read was
+// reported as an empty one -- "No signatures yet. Use create_signature to save
+// one." over the user's own signatures, with structuredContent.signatures set
+// to [] -- and a single unreadable record was dropped from the count with the
+// same output as a corrupt one. A caller reading only `signatures` could not
+// tell any of those apart. No tool name, description, input schema, or
+// annotation changes. Previously
+// 38efffcecdfd667010d18267de70c92cb89671b27a74c2edd4fb00f024cd1e88.
+// Re-derived onto b0deb60b on 2026-09-20. The digest below is neither this
+// change's original value measured on 91b969dd
+// (324333fedf66c1b7b4f8ccd306699cde4ee0d8bf0b5d2fe336d37c9b77b9eeea) nor the
+// master value it replaces, because each of those was measured against a
+// different tree; it was read from a live tools/list over the real stdio
+// transport, both runtimes agreeing, rather than chosen between them.
+const TOOL_CONTRACT_SHA256 = "537800312b4fe1fd88934a378b724728732f4d0b81c6e94d7118e099a19b1850";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

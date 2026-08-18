@@ -7530,16 +7530,30 @@ async function handleToolCall(request) {
           if (err.code === "ENOENT") {
             return {
               content: [{ type: "text", text: "No signatures yet. Use create_signature to save one." }],
-              structuredContent: { signatures: [] },
+              structuredContent: { signatures: [], unreadable: [], malformed: [] },
             };
           }
           throw err;
         }
         const entries = [];
+        // A file that exists but cannot be read is not an absent signature.
+        // Folding the two together answers "No signatures yet" over a store
+        // that still holds the user's signatures, and recommends the one
+        // action a user who already has them does not want. Keep the two
+        // apart: a record that cannot be parsed is skipped as before, a file
+        // that cannot be read is reported with the errno that explains it.
+        const unreadable = [];
+        const malformed = [];
         for (const file of files) {
           if (!file.endsWith(".json")) continue;
+          let raw;
           try {
-            const raw = await fs.readFile(path.join(SIGNATURES_DIR, file), "utf8");
+            raw = await fs.readFile(path.join(SIGNATURES_DIR, file), "utf8");
+          } catch (readError) {
+            unreadable.push({ file, code: readError.code ?? null });
+            continue;
+          }
+          try {
             const rec = JSON.parse(raw);
             const summary = await normalizeStoredSignatureSummary(rec);
             if (file !== `${summary.name.replace(/\s+/g, "-")}.json`) {
@@ -7550,14 +7564,35 @@ async function handleToolCall(request) {
             }
             entries.push(summary);
           } catch {
-            // Skip malformed files
+            malformed.push({ file });
           }
         }
         entries.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+        const notes = [];
+        if (unreadable.length > 0) {
+          const named = unreadable.map(e => (e.code ? `${e.file} (${e.code})` : e.file)).join(", ");
+          notes.push(
+            `Could not read ${unreadable.length} file${unreadable.length === 1 ? "" : "s"} in `
+            + `${SIGNATURES_DIR}: ${named}. Any signature stored there still exists and is not `
+            + `listed above.`
+          );
+        }
+        if (malformed.length > 0) {
+          const named = malformed.map(e => e.file).join(", ");
+          notes.push(
+            `Skipped ${malformed.length} file${malformed.length === 1 ? "" : "s"} in `
+            + `${SIGNATURES_DIR} that could not be parsed as a signature record: ${named}.`
+          );
+        }
         if (entries.length === 0) {
           return {
-            content: [{ type: "text", text: "No signatures yet. Use create_signature to save one." }],
-            structuredContent: { signatures: [] },
+            content: [{
+              type: "text",
+              text: notes.length === 0
+                ? "No signatures yet. Use create_signature to save one."
+                : ["No signatures could be listed.", ...notes].join("\n"),
+            }],
+            structuredContent: { signatures: [], unreadable, malformed },
           };
         }
         const lines = entries.map(e =>
@@ -7567,9 +7602,9 @@ async function handleToolCall(request) {
         return {
           content: [{
             type: "text",
-            text: `Saved signatures (${entries.length}):\n${lines.join("\n")}`
+            text: [`Saved signatures (${entries.length}):\n${lines.join("\n")}`, ...notes].join("\n\n")
           }],
-          structuredContent: { signatures: entries },
+          structuredContent: { signatures: entries, unreadable, malformed },
         };
       }
 

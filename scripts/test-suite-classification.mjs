@@ -82,6 +82,7 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
   "test/host-placeholder-expansion.test.js",
   "test/integration.test.js",
   "test/list-pdfs-default-directory.test.js",
+  "test/list-signatures-unreadable.test.js",
   "test/metadata-provenance.test.js",
   "test/mutation-input-limits.test.js",
   "test/path-handler-toctou.test.js",
