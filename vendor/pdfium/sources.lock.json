@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "upstream": {
+    "repository": "https://github.com/bblanchon/pdfium-binaries",
+    "tag": "chromium/8044",
+    "commit": "5453f3afc4785cbad82c05f6ceb4dabea0cb81a0",
+    "pdfium_version": "155.0.8044.0",
+    "build_flags": {
+      "pdf_enable_v8": false,
+      "pdf_enable_xfa": false
+    }
+  },
+  "assets": [
+    {
+      "arch": "win-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8044/pdfium-win-x64.tgz",
+      "archive_sha256": "78a17d9a5f14467631c26a3ac8741b27a0471ecc05bd6a119b523598160a0537",
+      "extracted_file": "bin/pdfium.dll",
+      "extracted_sha256": "04100c03e41cac1f979e36e5e26fb860bcb5a7461f53830d3c098716624a27a9",
+      "extracted_size_bytes": 7370752
+    },
+    {
+      "arch": "win-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8044/pdfium-win-arm64.tgz",
+      "archive_sha256": "6c9ac0ddc69edd8a18d47b95098a5b843eaed5c5bbdcb9587a18c196457449f8",
+      "extracted_file": "bin/pdfium.dll",
+      "extracted_sha256": "963307405023898d887f76a54ed59eae0462e25cd6b50716cbc2be10a8a6f6ed",
+      "extracted_size_bytes": 6797824
+    }
+  ]
+}

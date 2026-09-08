@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "artifact_id": "pdf-tools.runtime.pdfium.v1",
+  "ownership": "Vendored official Google Chromium PDFium prebuilt binaries via bblanchon/pdfium-binaries",
+  "license": "BSD-3-Clause (PDFium) plus the additional bundled notices in vendor/pdfium/licenses/manifest.json; all permissive, none copyleft",
+  "privacy": "Compiled third-party binary and license notices only; no personal data and no PDF content",
+  "redistribution": "allowed while the complete notice directory travels with the runtime",
+  "integration_status": "Not yet wired into server/. Intended to be loaded by exactly one helper process, server/pdfium-render-host.mjs, spawned as a disposable child process by server/pdfjs-subprocess.js's runSystemCommand on win32, mirroring the qlmanage system-renderer isolation already used on darwin: a hang or crash inside pdfium.dll takes down only that child process, never the long-lived worker thread serving other requests. Renders one page to an in-memory RGBA bitmap via the FPDF_* C API; PNG encoding happens in pure JavaScript, not inside pdfium.dll.",
+  "generator": {
+    "path": "scripts/vendor-pdfium-runtime.mjs",
+    "runtime": "Node.js standard library plus the system tar binary",
+    "command": "node scripts/vendor-pdfium-runtime.mjs"
+  },
+  "build": {
+    "recipe_directory": "vendor/pdfium",
+    "note": "PDFium is not built from source here. bblanchon/pdfium-binaries already publishes official Google Chromium PDFium builds; this script downloads, verifies against sources.lock.json, and promotes the pinned Windows release assets unmodified.",
+    "upstream_repository": "https://github.com/bblanchon/pdfium-binaries",
+    "upstream_tag": "chromium/8044",
+    "upstream_commit": "5453f3afc4785cbad82c05f6ceb4dabea0cb81a0",
+    "pdfium_version": "155.0.8044.0",
+    "build_flags": {
+      "pdf_enable_v8": false,
+      "pdf_enable_xfa": false
+    },
+    "sources_lock": "vendor/pdfium/sources.lock.json"
+  },
+  "reproduction": {
+    "developer_gate": {
+      "command": "npm test -- test/pdfium-runtime-artifact.test.js",
+      "requires": "Nothing beyond Node",
+      "scope": "Binds the committed runtime bytes and license notices to this provenance record and to sources.lock.json, and asserts the packager allow-lists cover the directory exactly",
+      "cadence": "Every `npm test`."
+    },
+    "promotion": {
+      "command": "node scripts/vendor-pdfium-runtime.mjs",
+      "scope": "Downloads the pinned release assets, verifies both the archive and the extracted pdfium.dll against sources.lock.json, and refuses to promote on any mismatch"
+    }
+  },
+  "notices": {
+    "manifest_path": "vendor/pdfium/licenses/manifest.json",
+    "note": "licenses/pdfium-binaries-build-scripts.txt (MIT, Benoit Blanchon) is the top-level LICENSE of the bblanchon/pdfium-binaries repository itself, covering its build scripts. It is not part of the release archive's own licenses/ directory and so is not reproduced by scripts/vendor-pdfium-runtime.mjs; it is committed alongside the release-bundled notices to attribute the build recipe as well as the binary.",
+    "components": [
+      { "component": "PDFium", "spdx": "BSD-3-Clause", "file": "licenses/pdfium.txt" },
+      { "component": "pdfium-binaries build scripts", "spdx": "MIT", "file": "licenses/pdfium-binaries-build-scripts.txt" },
+      { "component": "FreeType", "spdx": "FTL", "file": "licenses/freetype.txt" },
+      { "component": "libpng", "spdx": "libpng-2.0", "file": "licenses/libpng.txt" },
+      { "component": "zlib", "spdx": "Zlib", "file": "licenses/zlib.txt" },
+      { "component": "Little CMS (lcms)", "spdx": "MIT", "file": "licenses/lcms.txt" },
+      { "component": "libjpeg-turbo", "spdx": "BSD-3-Clause AND IJG", "file": "licenses/libjpeg_turbo.md" },
+      { "component": "libjpeg-turbo (IJG README)", "spdx": "IJG", "file": "licenses/libjpeg_turbo.ijg" },
+      { "component": "OpenJPEG", "spdx": "BSD-2-Clause", "file": "licenses/libopenjpeg.txt" },
+      { "component": "ICU", "spdx": "Unicode-3.0", "file": "licenses/icu.txt" },
+      { "component": "Abseil", "spdx": "Apache-2.0", "file": "licenses/abseil.txt" },
+      { "component": "LLVM libc", "spdx": "Apache-2.0 WITH LLVM-exception", "file": "licenses/llvm-libc.txt" },
+      { "component": "simdutf", "spdx": "MIT", "file": "licenses/simdutf.txt" },
+      { "component": "fast_float", "spdx": "MIT", "file": "licenses/fast_float.txt" },
+      { "component": "Anti-Grain Geometry (agg23)", "spdx": "AGG", "file": "licenses/agg23.txt" }
+    ]
+  },
+  "runtime_assets": {
+    "directory": "vendor/pdfium/runtime",
+    "shipped_in": [
+      "pdf-toolkit-mcp.mcpb (Windows platform targets only)",
+      "pdf-toolkit-mcp.zip (Windows platform targets only)"
+    ],
+    "files": [
+      {
+        "path": "vendor/pdfium/runtime/win-x64/pdfium.dll",
+        "sha256": "04100c03e41cac1f979e36e5e26fb860bcb5a7461f53830d3c098716624a27a9",
+        "size_bytes": 7370752
+      },
+      {
+        "path": "vendor/pdfium/runtime/win-arm64/pdfium.dll",
+        "sha256": "963307405023898d887f76a54ed59eae0462e25cd6b50716cbc2be10a8a6f6ed",
+        "size_bytes": 6797824
+      }
+    ]
+  }
+}

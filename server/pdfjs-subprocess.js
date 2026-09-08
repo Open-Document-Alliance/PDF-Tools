@@ -18,6 +18,23 @@ import { Worker } from "node:worker_threads";
 
 export const PDF_RESOURCE_LIMIT_CODE = "PDF_RESOURCE_LIMIT_EXCEEDED";
 
+const SERVER_DIR = dirname(fileURLToPath(import.meta.url));
+// The Windows system-render fallback never invokes pdfium.dll directly: it
+// spawns this trusted, repository-owned helper script as a disposable Node
+// child process, exactly the isolation qlmanage/sips get on darwin. Only this
+// exact absolute path is ever accepted as args[0] below.
+const PDFIUM_RENDER_HOST_PATH = join(SERVER_DIR, "pdfium-render-host.mjs");
+// Only these two exact, repository-owned DLL paths are ever accepted as
+// args[1]. Neither is influenced by PDF content or by the caller.
+const PDFIUM_DLL_PATHS = new Map([
+  ["x64", join(SERVER_DIR, "..", "vendor", "pdfium", "runtime", "win-x64", "pdfium.dll")],
+  ["arm64", join(SERVER_DIR, "..", "vendor", "pdfium", "runtime", "win-arm64", "pdfium.dll")],
+]);
+// Mirrors the identically named set in server/pdfjs-worker.js. Duplicated
+// rather than imported, matching how PDF_RESOURCE_LIMIT_CODE is already
+// duplicated across this worker/controller boundary in both files.
+const SYSTEM_RENDERER_LABELS = new Set(["macOS", "Windows"]);
+
 const PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RESULT_BYTES = 24 * 1024 * 1024;
@@ -690,26 +707,100 @@ async function runThreadWorker({
       }
     };
 
+    const validatePdfiumRenderRequest = async args => {
+      try {
+        const expectedDllPath = PDFIUM_DLL_PATHS.get(process.arch);
+        if (
+          args.length !== 5
+          || expectedDllPath === undefined
+          || args[0] !== expectedDllPath
+          || basename(args[1]) !== "source.pdf"
+          || !/^\d{1,5}$/.test(args[2])
+          || Number(args[2]) < 1
+          || Number(args[2]) > 8192
+          || !/^\d{1,5}$/.test(args[3])
+          || Number(args[3]) < 1
+          || Number(args[3]) > 8192
+          || basename(args[4]) !== "source.pdf.png"
+        ) {
+          throw new Error("invalid PDFium render request shape");
+        }
+        const [
+          canonicalOperationDirectory,
+          canonicalDllPath,
+          canonicalSourcePath,
+          dllStats,
+          sourceStats,
+          outputStats,
+        ] = await Promise.all([
+          realpath(operationDirectory),
+          realpath(args[0]),
+          realpath(args[1]),
+          lstat(args[0]),
+          lstat(args[1]),
+          lstat(args[4]).catch(error => {
+            if (error?.code === "ENOENT") return null;
+            throw error;
+          }),
+        ]);
+        if (
+          canonicalDllPath !== expectedDllPath
+          || dllStats.isSymbolicLink()
+          || !dllStats.isFile()
+          || sourceStats.isSymbolicLink()
+          || !sourceStats.isFile()
+          || sourceStats.size < 1
+          || sourceStats.size > 250 * 1024 * 1024
+          || dirname(canonicalSourcePath) !== canonicalOperationDirectory
+          || dirname(args[4]) !== operationDirectory
+          || (outputStats !== null && outputStats.isSymbolicLink())
+        ) {
+          throw new Error("PDFium render paths leave the operation directory");
+        }
+      } catch {
+        throw subprocessFailure(
+          "The PDF.js worker requested an invalid PDFium render workspace.",
+        );
+      }
+    };
+
+    const isWhitelistedSystemCommand = message => {
+      if (platform === "darwin") {
+        return new Set(["/usr/bin/qlmanage", "/usr/bin/sips"]).has(message.command);
+      }
+      if (platform === "win32") {
+        return message.command === process.execPath
+          && Array.isArray(message.args)
+          && message.args[0] === PDFIUM_RENDER_HOST_PATH;
+      }
+      return false;
+    };
+
     const runSystemCommand = async message => {
       exactKeys(
         message,
-        ["args", "command", "id", "kind", "timeout_ms"],
+        ["args", "command", "id", "kind", "renderer_label", "timeout_ms"],
         "PDF.js system-command frame",
       );
       if (
-        platform !== "darwin"
-        || !new Set(["/usr/bin/qlmanage", "/usr/bin/sips"]).has(message.command)
+        !isWhitelistedSystemCommand(message)
         || !Array.isArray(message.args)
         || message.args.length > 128
         || message.args.some(argument => typeof argument !== "string" || argument.length > 32_768)
       ) {
         throw subprocessFailure("The PDF.js worker requested an unsupported system command.");
       }
+      const rendererLabel = SYSTEM_RENDERER_LABELS.has(message.renderer_label)
+        ? message.renderer_label
+        : "macOS";
       boundedInteger(message.id, "PDF.js system-command id", 1, 2 ** 31 - 1);
       boundedInteger(message.timeout_ms, "PDF.js system-command timeout", 100, 30_000);
       if (shutdownInProgress || terminationStarted) throw abortError();
       if (message.command === "/usr/bin/qlmanage") {
         await validateQuickLookRequest(message.args);
+      }
+      if (platform === "win32") {
+        await validatePdfiumRenderRequest(message.args.slice(1));
       }
       if (shutdownInProgress || terminationStarted) throw abortError();
       if (systemChildren.size >= 1) {
@@ -777,7 +868,7 @@ async function runThreadWorker({
           } else if (outputOverflow) {
             finishCommand(resourceLimitError("system_renderer_output_limit"));
           } else if (code !== 0 || signalName !== null) {
-            finishCommand(subprocessFailure("The macOS system PDF renderer could not render this page."));
+            finishCommand(subprocessFailure(`The ${rendererLabel} system PDF renderer could not render this page.`));
           } else {
             finishCommand(null);
           }

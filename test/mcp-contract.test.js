@@ -188,7 +188,7 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // configuration from account signup; start/finish return a next_step string.
 // Tool names, input schemas, send confirmation and transport remain unchanged.
 // Previously fd4b388bf9f7e45a4cbffea05a15ecc99c739c1486bdfa2b7b91e7ec3bbc6216.
-const TOOL_CONTRACT_SHA256 = "c3a5e232adbad9bc08060530fa800dfa11217df7231553f93d25561a3e5f5ad4";
+const TOOL_CONTRACT_SHA256 = "6b6b8decca1099d576c9c136d1b51dcbe473d1de57f4dfd4f16c36755edfb4b4";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -440,7 +440,9 @@ describe("MCPB static declarations", () => {
     // pdf-lib-rss-monitor.js shipped in the mirror unguarded. The count
     // assertion below fails if another one is added without being listed.
     const shareServer = path.join(REPO_ROOT, "pdf-toolkit-mcp-share", "server");
-    const mirrored = (await fs.readdir(shareServer)).filter(name => name.endsWith(".js")).sort();
+    const mirrored = (await fs.readdir(shareServer))
+      .filter(name => name.endsWith(".js") || name.endsWith(".mjs"))
+      .sort();
     for (const filename of [
       "accessibility-inspection.js",
       "bounded-pdf-file.js",
@@ -461,10 +463,12 @@ describe("MCPB static declarations", () => {
       "markdown-output-transaction.js",
       "pdf-lib-subprocess.js",
       "pdf-lib-worker.js",
+      "pdfium-render-host.mjs",
       "pdfjs-subprocess.js",
       "pdfjs-worker.js",
       "pdf-lib-rss-monitor.js",
       "pdf-observations.js",
+      "png-encoder.js",
       "qpdf-decrypt.js",
       "qpdf-decrypt-worker.js",
       "resource-uri.js",
@@ -477,7 +481,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(29);
+    expect(mirrored).toHaveLength(31);
     for (const relativePath of [
       "scripts/eval-strict-json.mjs",
       "scripts/verified-extraction-proposal.mjs",

@@ -16,6 +16,132 @@
         }
       ]
     },
+    "@koromix/koffi-android-arm64@3.2.1": {
+      "integrity": "sha512-1pJQ4jnZlUJduK9u9DC5CGy3aOgDUPvIXpNb6syV3+Dh5Q/ugezAIGCqvY+w+1mgXsve0pd0NVvJRjdZNHQ6MA==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-android-arm64/-/koffi-android-arm64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-android-x64@3.2.1": {
+      "integrity": "sha512-HH40xGh3gVQifjOBnhwT2tECC0lL1lYe+nxHvWNSzxDIyQNcVPXg38ta7vuONRFpD+uIrw7fqGYLzbZIagkVcg==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-android-x64/-/koffi-android-x64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-darwin-arm64@3.2.1": {
+      "integrity": "sha512-Vj4h+xcjc5+Cn0DhPHjgRX4omKAv96Kehtcd+1YgYuY2W7FvQn9vS+3SmzVwhC5Qmg9bIwUZObYQ8T/4hBqQqA==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-darwin-arm64/-/koffi-darwin-arm64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-darwin-x64@3.2.1": {
+      "integrity": "sha512-gFCWxNBTZIvxo1p+PURWfsy2Ctj5FGnVVs1f03lTLhBvmxEto70pdIiFztdFLDFkAJ1pmtQmruRKapeK+E8YPA==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-darwin-x64/-/koffi-darwin-x64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-freebsd-arm64@3.2.1": {
+      "integrity": "sha512-qj+f1s2e6vULaUG1cdlTcCXmunCq2t+rjxku1+esaMIqVnHpOwj0QzPuInG0AFdXjwBNQhyVR/HpDj8daEwwsQ==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-freebsd-arm64/-/koffi-freebsd-arm64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-freebsd-ia32@3.2.1": {
+      "integrity": "sha512-6olHb1Qfgai0jjs6ddlDDD0ZfsCxy7SPi8rMRpuYQWH0qhgtyQu82hw5b1p7z+TJ0zZP3ZeQQ6l+U/MlM1ICHQ==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-freebsd-ia32/-/koffi-freebsd-ia32-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-freebsd-x64@3.2.1": {
+      "integrity": "sha512-Dikhw1ySYNVMkmeFvFVjnU5Wdk6mffNoOjJxm9bTG96vg7OlemylxqdEven47R1YJ3yzNVJn/MlQ207ORWfi2w==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-freebsd-x64/-/koffi-freebsd-x64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-linux-arm64@3.2.1": {
+      "integrity": "sha512-K+cGUL5iBcDqxmsocrjmlASqDf24gc7artbVW3PewG2c9AqwC63lezgwvB85Nx4lZAQjB6zIFHh9A7t1yGbwhw==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-linux-arm64/-/koffi-linux-arm64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-linux-arm@3.2.1": {
+      "integrity": "sha512-OfwUwZylidq95wQKp6ClInULrfB2giu7dqM6Rhe0zAe6lES5I2SXNw15T9+GnRHk3/9hKT2XZ37OZLaKSyWNLA==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-linux-arm/-/koffi-linux-arm-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-linux-ia32@3.2.1": {
+      "integrity": "sha512-rxj6UYjU1qd98gxNQOSCdLpc5cPRi5Giq9rNd3jnGuSNIyMkwa6Dxw4cUjmhIBCYESMJtmNt5NWnJp5u9wTfYQ==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-linux-ia32/-/koffi-linux-ia32-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-linux-loong64@3.2.1": {
+      "integrity": "sha512-aHhnHzkPRmT/IHDlGvESJ/Bs32m8N6UE6Ab6kMeJzgk74IN8af2m/81/wZJtybR1M2UxCV4NmlVNUYQQvSAO3Q==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-linux-loong64/-/koffi-linux-loong64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-linux-riscv64@3.2.1": {
+      "integrity": "sha512-qtQBsjbm3LiirLJvajWmKkNb7ARk7fvJVXdftJ7NtAnF3Xw8EbDvrtvmvtNI1yLPlYcBmlzCCD71hwhWYk0SIA==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-linux-riscv64/-/koffi-linux-riscv64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-linux-x64@3.2.1": {
+      "integrity": "sha512-c7hw7Qs/r5gnFRTQLcbifBwRU7wiocj+2pVuDQ5Ahb3r36SZmupmgYbTWcLvTW+hul1jd7SKRV0d14ZJq/tvSw==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-linux-x64/-/koffi-linux-x64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-openbsd-ia32@3.2.1": {
+      "integrity": "sha512-mmY8fY8LQ/CB52+h3yrMYmVyoxzW3x08S0yI6VNfHWdfU6yJtZkKCbhjmQCYMrWbYKC4gMvwZwCywIGPAkLyeA==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-openbsd-ia32/-/koffi-openbsd-ia32-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-openbsd-x64@3.2.1": {
+      "integrity": "sha512-k4ig6aAPbFSRATOIIOfdf/KtlOGH4SVls6L9fy0QnTxRJYvY2oSltTsQtBDANgEQldlq8Kl5WnpRa1VSibP4Lw==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-openbsd-x64/-/koffi-openbsd-x64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-win32-arm64@3.2.1": {
+      "integrity": "sha512-cTWBJGK//pDMeKQJE/79Aq9MiOAF4H8QyLZHSQ9IWm8czOfwjG4J1AhsQ9DjI9KFOykH77hhnpmQTGVMIubGig==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-win32-arm64/-/koffi-win32-arm64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-win32-ia32@3.2.1": {
+      "integrity": "sha512-Z50EM6TAZ7CFyMmyX6thv8eNpJchqe9eenhibSIy2Eq/FQYF76gU2VK/LEoaF46L8hfC7TpTp9b10MvReHEyFA==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-win32-ia32/-/koffi-win32-ia32-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
+    "@koromix/koffi-win32-x64@3.2.1": {
+      "integrity": "sha512-ZmZNiBO6bkOSh3QNzgfvb1cMY0yMobn6ZQrSMqbAce21qyYL8niIbyipz9N/PIRDciGhsV0wUxnZsxIO+yWsHQ==",
+      "tarball": "https://registry.npmjs.org/@koromix/koffi-win32-x64/-/koffi-win32-x64-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": []
+    },
     "@modelcontextprotocol/sdk@1.30.0": {
       "integrity": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==",
       "tarball": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.30.0.tgz",
@@ -738,6 +864,18 @@
         {
           "path": "LICENSE.md",
           "sha256": "bbe87b573c12bda5baf18742117330efa177e0886b3b0a278dacf8f236e1e129"
+        }
+      ]
+    },
+    "koffi@3.2.1": {
+      "integrity": "sha512-0qE3lZ8jllRqPN4Ob6Ajl7c2bJSJDhQWuKLGP5hIEpHLllJWv1ydHFMhHmHc5p/W9GticKVDbYzZd7TBoQ4CZg==",
+      "tarball": "https://registry.npmjs.org/koffi/-/koffi-3.2.1.tgz",
+      "declaration": "license-string",
+      "declared": "MIT",
+      "license_files": [
+        {
+          "path": "LICENSE.txt",
+          "sha256": "22bcbbbacd739b026a8dc484f62a31484ce4c4e31f3408b60b29b4e41d62b290"
         }
       ]
     },

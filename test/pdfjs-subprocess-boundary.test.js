@@ -421,6 +421,7 @@ parentPort.postMessage({
   id: 1,
   command: "/usr/bin/sips",
   args: ["synthetic"],
+  renderer_label: "macOS",
   timeout_ms: 30000,
 });
 setInterval(() => {}, 1000);
@@ -480,6 +481,7 @@ parentPort.postMessage({
   id: 1,
   command: "/usr/bin/qlmanage",
   args: ["-t", "-s", "512", "-o", ${JSON.stringify(os.tmpdir())}, ${JSON.stringify(outsidePath)}],
+  renderer_label: "macOS",
   timeout_ms: 30000,
 });
 `);

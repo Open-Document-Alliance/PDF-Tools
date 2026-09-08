@@ -40,9 +40,15 @@ jobs:
       - name: Ordinary Node host render
         run: npx vitest run test/render-pdf-page.test.js
 
+      # Loads the committed pdfium.dll for this runner's architecture through
+      # koffi and renders a real page. Skipped everywhere except win32, so
+      # this is the only place this coverage is real.
+      - name: PDFium runtime artifact
+        run: npx vitest run test/pdfium-runtime-artifact.test.js
+
       # The question that matters for Claude Desktop on Windows. An embedded
-      # Electron host has no macOS system renderer, so if the native canvas
-      # block stays in force there is no renderer at all.
+      # Electron host used to have no fallback at all once native canvas was
+      # blocked; it now has the Windows PDFium system renderer.
       - name: Embedded host render probe
         env:
           PDF_TOOLS_EMBEDDED_NATIVE_CANVAS: ${{ inputs.embedded_native_canvas }}
