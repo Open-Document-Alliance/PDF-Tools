@@ -727,14 +727,12 @@ async function runThreadWorker({
         }
         const [
           canonicalOperationDirectory,
-          canonicalDllPath,
           canonicalSourcePath,
           dllStats,
           sourceStats,
           outputStats,
         ] = await Promise.all([
           realpath(operationDirectory),
-          realpath(args[0]),
           realpath(args[1]),
           lstat(args[0]),
           lstat(args[1]),
@@ -744,8 +742,7 @@ async function runThreadWorker({
           }),
         ]);
         if (
-          canonicalDllPath !== expectedDllPath
-          || dllStats.isSymbolicLink()
+          dllStats.isSymbolicLink()
           || !dllStats.isFile()
           || sourceStats.isSymbolicLink()
           || !sourceStats.isFile()

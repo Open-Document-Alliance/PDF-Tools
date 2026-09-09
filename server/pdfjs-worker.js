@@ -2117,6 +2117,14 @@ async function runPdfiumSubprocessRender({ dllPath, sourcePdfPath, widthPx, heig
 }
 
 async function runPdfiumWorkerRender({ dllPath, sourcePdfPath, widthPx, heightPx, outputPngPath }) {
+  // Mirrors the one-system-renderer-at-a-time cap runSystemCommand enforces
+  // for the subprocess path (systemChildren.size in pdfjs-subprocess.js): a
+  // second concurrent PDFium render in the embedded host would otherwise be
+  // unbounded, undermining the same isolation budget the subprocess path
+  // already holds to.
+  if (activeSystemRenderWorkers.size >= 1) {
+    throw resourceLimitError("system_renderer_concurrency_limit");
+  }
   const worker = new Worker(PDFIUM_RENDER_HOST_URL, {
     workerData: { pdf_tools_worker: "pdfium_render", dllPath, heightPx, outputPngPath, sourcePdfPath, widthPx },
   });
