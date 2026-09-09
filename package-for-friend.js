@@ -626,6 +626,7 @@ async function syncSharePackage() {
     dependencies: {
       "@modelcontextprotocol/sdk": rootPackage.dependencies["@modelcontextprotocol/sdk"],
       "@napi-rs/canvas": rootPackage.dependencies["@napi-rs/canvas"],
+      "koffi": rootPackage.dependencies["koffi"],
       "pdf-lib": rootPackage.dependencies["pdf-lib"],
       "pdfjs-dist": rootPackage.dependencies["pdfjs-dist"],
     },
