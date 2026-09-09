@@ -55,6 +55,8 @@ const EXPECTED_SHARE_EXECUTABLES = new Set([
 const ISOLATED_PACKAGER_SCRIPT_SOURCES = Object.freeze([
   "scripts/eval-strict-json.mjs",
   "scripts/npm-license-provenance.mjs",
+  "scripts/pdfium-runtime.mjs",
+  "scripts/pdfium-sbom.mjs",
   "scripts/qpdf-wasm-runtime.mjs",
   "scripts/qpdf-wasm-sbom.mjs",
   "scripts/verified-extraction-proposal.mjs",
