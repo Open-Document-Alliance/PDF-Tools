@@ -376,6 +376,27 @@ function populatePackageBuildRoot(buildRoot) {
     path.join(buildRoot, "vendor", "qpdf-wasm", "runtime"),
     { recursive: true },
   );
+  /*
+   * The PDFium runtime and its provenance, similar to QPDF. The provenance
+   * references license files in vendor/pdfium/licenses/, so those must also
+   * be copied. Only the runtime directory and its provenance are copied,
+   * not vendor/pdfium/sources/ (which holds fetched upstream artifacts).
+   */
+  mkdirSync(path.join(buildRoot, "vendor", "pdfium"), { recursive: true });
+  copyFileSync(
+    path.join(REPO_ROOT, "vendor", "pdfium", "runtime.provenance.json"),
+    path.join(buildRoot, "vendor", "pdfium", "runtime.provenance.json"),
+  );
+  cpSync(
+    path.join(REPO_ROOT, "vendor", "pdfium", "runtime"),
+    path.join(buildRoot, "vendor", "pdfium", "runtime"),
+    { recursive: true },
+  );
+  cpSync(
+    path.join(REPO_ROOT, "vendor", "pdfium", "licenses"),
+    path.join(buildRoot, "vendor", "pdfium", "licenses"),
+    { recursive: true },
+  );
   for (const directory of ["server", "dist-ui", "pdf-toolkit-mcp-share"]) {
     cpSync(path.join(REPO_ROOT, directory), path.join(buildRoot, directory), { recursive: true });
   }
