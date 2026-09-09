@@ -44,9 +44,16 @@ import {
   QPDF_WASM_RUNTIME_FILES,
   verifyQpdfWasmRuntime,
 } from "./qpdf-wasm-runtime.mjs";
+import {
+  PDFIUM_RUNTIME_ASSETS,
+  PDFIUM_RUNTIME_FILES,
+  PDFIUM_RUNTIME_DIRECTORY,
+  verifyPdfiumRuntime,
+} from "./pdfium-runtime.mjs";
 import { generateCycloneDxSbom } from "../package-for-friend.js";
 export { isForbiddenArchivePath } from "./mcpb-packaging-policy.mjs";
 export { QPDF_WASM_RUNTIME_FILES } from "./qpdf-wasm-runtime.mjs";
+export { PDFIUM_RUNTIME_FILES } from "./pdfium-runtime.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -142,6 +149,24 @@ export const NATIVE_TARGETS = [
     packageName: "@napi-rs/canvas-win32-x64-msvc",
     binary: "skia.win32-x64-msvc.node",
     cpu: "x64",
+    os: "win32",
+  },
+];
+
+/*
+ * Platform-specific koffi FFI library packages for Windows. Koffi is loaded
+ * only on Windows by server/pdfium-render-host.mjs to call PDFium's C API.
+ * Only win32 targets receive these; darwin and linux targets do not.
+ */
+export const KOFFI_WINDOWS_TARGETS = [
+  {
+    packageName: "@koromix/koffi-win32-x64",
+    cpu: "x64",
+    os: "win32",
+  },
+  {
+    packageName: "@koromix/koffi-win32-arm64",
+    cpu: "arm64",
     os: "win32",
   },
 ];
@@ -255,6 +280,13 @@ function copyRuntimeSource(stagingDir) {
   for (const relativePath of QPDF_WASM_RUNTIME_FILES) {
     copyRegularFile(relativePath, relativePath, stagingDir);
   }
+  /*
+   * The PDFium Windows runtime is also not first-party text, so it is bound by
+   * the reproducible-build hash contract. Unlike QPDF WASM which ships to all
+   * targets, PDFium is Windows-only, so verification happens at staging time
+   * below rather than during copyRuntimeSource. Verify the checkpoint now.
+   */
+  verifyPdfiumRuntime(REPO_ROOT, "checkout");
   for (const filename of ["icon.png", "LICENSE", "README.md", "package-lock.json"]) {
     copyRegularFile(filename, filename, stagingDir);
   }
@@ -829,6 +861,45 @@ function removeHostSelectedNativePackages(stagingDir) {
   }
 }
 
+/**
+ * Stage PDFium Windows DLLs for a specific platform target. Called per-platform
+ * so only the target's architecture is staged. Platform-conditional: only
+ * win32 targets receive the pdfium.dll binaries.
+ */
+function stagePdfiumDllsForTarget(stagingDir, target) {
+  if (target.os !== "win32") return; // Only Windows targets get PDFium
+  const archDir = target.cpu === "x64" ? "win-x64" : "win-arm64";
+  const dllPath = `${PDFIUM_RUNTIME_DIRECTORY}/${archDir}/pdfium.dll`;
+  copyRegularFile(dllPath, dllPath, stagingDir);
+}
+
+/**
+ * Stage koffi platform-specific bindings for a specific platform target.
+ * Called per-platform so only the target's architecture is staged.
+ * Platform-conditional: only win32 targets receive koffi.
+ */
+function installKoffiForTarget(stagingDir, downloadDir, target) {
+  if (target.os !== "win32") return; // Only Windows targets get koffi
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const lock = JSON.parse(readFileSync(path.join(REPO_ROOT, "package-lock.json"), "utf8"));
+  const koffiEntry = lock.packages[`node_modules/${target.packageName}`];
+  if (!koffiEntry || !koffiEntry.version || !koffiEntry.resolved || !koffiEntry.integrity) {
+    throw new Error(`package-lock.json is missing complete metadata for ${target.packageName}`);
+  }
+  const output = run(
+    npmCommand,
+    ["pack", `${target.packageName}@${koffiEntry.version}`, "--json", "--pack-destination", downloadDir],
+    { capture: true },
+  );
+  const [packed] = JSON.parse(output);
+  if (!packed?.filename || packed.integrity !== koffiEntry.integrity) {
+    throw new Error(`Registry tarball integrity did not match package-lock.json for ${target.packageName}`);
+  }
+  const destination = path.join(stagingDir, "node_modules", ...target.packageName.split("/"));
+  mkdirSync(destination, { recursive: true });
+  run("tar", ["-xzf", path.join(downloadDir, packed.filename), "--strip-components=1", "-C", destination]);
+}
+
 function installLockedNativePackages(stagingDir, downloadDir) {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const packages = lockedNativePackages();
@@ -982,10 +1053,13 @@ function verifyStagedProductionGraph(stagingDir, packages) {
     throw new Error(`Staged QPDF WASM runtime inventory mismatch: ${stagedQpdfWasmFiles.join(", ")}`);
   }
   const stagedVendorFiles = paths.filter(filename => filename.startsWith("vendor/"));
-  if (JSON.stringify([...stagedVendorFiles].sort()) !== JSON.stringify([...QPDF_WASM_RUNTIME_FILES].sort())) {
-    throw new Error(`Staged vendor inventory carries unreviewed files: ${stagedVendorFiles.join(", ")}`);
+  const allowedVendorFiles = new Set([...QPDF_WASM_RUNTIME_FILES, ...PDFIUM_RUNTIME_FILES]);
+  const unexpectedVendorFiles = stagedVendorFiles.filter(filename => !allowedVendorFiles.has(filename));
+  if (unexpectedVendorFiles.length > 0) {
+    throw new Error(`Staged vendor inventory carries unreviewed files: ${unexpectedVendorFiles.join(", ")}`);
   }
   verifyQpdfWasmRuntime(stagingDir, "staged MCPB");
+  verifyPdfiumRuntime(stagingDir, "staged MCPB");
   for (const required of [
     "manifest.json",
     "package.json",
@@ -1014,6 +1088,14 @@ function verifyStagedProductionGraph(stagingDir, packages) {
     const file = expectedByPath.get(binding.path);
     if (!file || file.size !== binding.size_bytes || file.sha256 !== binding.sha256) {
       throw new Error(`Staged MCPB QPDF WASM asset does not match runtime provenance: ${binding.path}`);
+    }
+  }
+  // Verify PDFium runtime assets match provenance (Windows targets only, but all
+  // binaries are staged in the universal MCPB)
+  for (const binding of PDFIUM_RUNTIME_ASSETS) {
+    const file = expectedByPath.get(binding.path);
+    if (!file || file.size !== binding.size_bytes || file.sha256 !== binding.sha256) {
+      throw new Error(`Staged MCPB PDFium asset does not match runtime provenance: ${binding.path}`);
     }
   }
   for (const filename of paths) {
@@ -1071,6 +1153,11 @@ export function prepareCleanStage() {
     removeHostSelectedNativePackages(stagingDir);
     mkdirSync(downloadDir, { recursive: true });
     const packages = installLockedNativePackages(stagingDir, downloadDir);
+    // Stage platform-specific files: PDFium DLLs and koffi packages for Windows targets
+    for (const target of KOFFI_WINDOWS_TARGETS) {
+      stagePdfiumDllsForTarget(stagingDir, target);
+      installKoffiForTarget(stagingDir, downloadDir, target);
+    }
     rmSync(downloadDir, { recursive: true, force: true });
     trimStagedProductionGraph(stagingDir);
     writeStagedSbom(stagingDir);
