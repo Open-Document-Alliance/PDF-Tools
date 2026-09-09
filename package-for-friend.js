@@ -371,7 +371,6 @@ export function generateCycloneDxSbom(lock, sharePackage, options = {}) {
       dependsOn: dependencyPathsForPackage(lock, packagePath).map(packageBomRef),
     })),
     ...QPDF_WASM_SBOM_DEPENDENCIES.map(entry => ({ ref: entry.ref, dependsOn: [...entry.dependsOn] })),
-    ...PDFIUM_SBOM_DEPENDENCIES.map(entry => ({ ref: entry.ref, dependsOn: [...entry.dependsOn] })),
   ];
   /*
    * The identity seed is the reviewed graph plus the artifact inventory the
@@ -416,7 +415,7 @@ export function generateCycloneDxSbom(lock, sharePackage, options = {}) {
        */
       tools: { components: [QPDF_WASM_BUILD_TOOL_COMPONENT] },
     },
-    components: [...components, ...QPDF_WASM_SBOM_COMPONENTS, ...PDFIUM_SBOM_COMPONENTS],
+    components: [...components, ...QPDF_WASM_SBOM_COMPONENTS],
     dependencies,
   };
   validateCycloneDxSbom(sbom, lock, sharePackage, options);
@@ -439,10 +438,11 @@ export function validateCycloneDxSbom(sbom, lock, sharePackage, options = {}) {
     .filter(packagePath => packagePath !== "")
     .sort(compareCodePoints);
   /*
-   * The expected total is the npm graph plus the native graphs (QPDF WASM and PDFium),
-   * each counted from its own pinned record. Neither number is written down.
+   * The expected total is the npm graph plus the QPDF WASM native graph,
+   * each counted from its own pinned record. PDFium is only in the MCPB,
+   * not in the share package. Neither number is written down.
    */
-  const expectedComponentCount = packagePaths.length + QPDF_WASM_SBOM_COMPONENTS.length + PDFIUM_SBOM_COMPONENTS.length;
+  const expectedComponentCount = packagePaths.length + QPDF_WASM_SBOM_COMPONENTS.length;
   if (sbom.components?.length !== expectedComponentCount) {
     throw new Error(`SBOM component coverage mismatch: ${sbom.components?.length} != ${expectedComponentCount}.`);
   }
@@ -457,15 +457,6 @@ export function validateCycloneDxSbom(sbom, lock, sharePackage, options = {}) {
       throw new Error(
         `SBOM native component does not exactly cover ${nativeComponent["bom-ref"]}. `
         + "Regenerate it from vendor/qpdf-wasm/runtime.provenance.json rather than editing it.",
-      );
-    }
-  }
-  for (const nativeComponent of PDFIUM_SBOM_COMPONENTS) {
-    const component = componentsByRef.get(nativeComponent["bom-ref"]);
-    if (!component || !sameJson(component, nativeComponent)) {
-      throw new Error(
-        `SBOM native component does not exactly cover ${nativeComponent["bom-ref"]}. `
-        + "Regenerate it from vendor/pdfium/runtime.provenance.json rather than editing it.",
       );
     }
   }

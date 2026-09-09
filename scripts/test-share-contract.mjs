@@ -106,8 +106,6 @@ function expectFailure(command, args, cwd, pattern, options = {}) {
  * many components the SBOM owes and what each one must claim.
  */
 function expectedNativeSbomShape(packageRoot) {
-  let totalComponents = 0;
-
   // QPDF WASM runtime components
   const qpdfRuntimeDirectory = "vendor/qpdf-wasm/runtime";
   const readQpdfRuntimeJson = relativePath => JSON.parse(readFileSync(
@@ -145,25 +143,13 @@ function expectedNativeSbomShape(packageRoot) {
   if (toolchain.length === 0) {
     throw new Error("Shipped notice manifest describes no toolchain-linked code, which cannot be right");
   }
-  // QPDF WASM: pinned sources + toolchain-linked libraries + 1 runtime component
-  totalComponents += sources.length + toolchain.length + 1;
-
-  // PDFium runtime components (if present)
-  const pdfiumProvenance = JSON.parse(readFileSync(
-    path.join(packageRoot, "vendor", "pdfium", "runtime.provenance.json"),
-    "utf8",
-  ));
-  if (pdfiumProvenance.notices && pdfiumProvenance.notices.components) {
-    // Count: 1 runtime + each bundled component + build recipe
-    // The notices are already grouped: PDFium top-level, bundled components, and build recipe
-    totalComponents += 1 + pdfiumProvenance.notices.components.length;
-  }
-
   return {
     sources,
     toolchain,
-    // Total: QPDF components (sources + toolchain + runtime) + PDFium components (runtime + bundled + build recipe)
-    componentCount: totalComponents,
+    // The pinned sources, the toolchain-linked libraries, and one component
+    // for the runtime artifact they are all compiled into. PDFium is only in
+    // the MCPB, not in the share package.
+    componentCount: sources.length + toolchain.length + 1,
   };
 }
 
@@ -391,27 +377,6 @@ function populatePackageBuildRoot(buildRoot) {
   cpSync(
     path.join(REPO_ROOT, "vendor", "qpdf-wasm", "runtime"),
     path.join(buildRoot, "vendor", "qpdf-wasm", "runtime"),
-    { recursive: true },
-  );
-  /*
-   * The PDFium runtime and its provenance, similar to QPDF. The provenance
-   * references license files in vendor/pdfium/licenses/, so those must also
-   * be copied. Only the runtime directory and its provenance are copied,
-   * not vendor/pdfium/sources/ (which holds fetched upstream artifacts).
-   */
-  mkdirSync(path.join(buildRoot, "vendor", "pdfium"), { recursive: true });
-  copyFileSync(
-    path.join(REPO_ROOT, "vendor", "pdfium", "runtime.provenance.json"),
-    path.join(buildRoot, "vendor", "pdfium", "runtime.provenance.json"),
-  );
-  cpSync(
-    path.join(REPO_ROOT, "vendor", "pdfium", "runtime"),
-    path.join(buildRoot, "vendor", "pdfium", "runtime"),
-    { recursive: true },
-  );
-  cpSync(
-    path.join(REPO_ROOT, "vendor", "pdfium", "licenses"),
-    path.join(buildRoot, "vendor", "pdfium", "licenses"),
     { recursive: true },
   );
   for (const directory of ["server", "dist-ui", "pdf-toolkit-mcp-share"]) {
