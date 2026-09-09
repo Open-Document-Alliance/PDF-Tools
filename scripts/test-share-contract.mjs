@@ -379,6 +379,17 @@ function populatePackageBuildRoot(buildRoot) {
     path.join(buildRoot, "vendor", "qpdf-wasm", "runtime"),
     { recursive: true },
   );
+  /*
+   * The PDFium provenance file is needed because pdfium-runtime.mjs reads it
+   * at module import time. However, PDFium runtime files are not included in
+   * the share package (only in the MCPB for Windows targets), so only the
+   * provenance file is copied, not the runtime directory or licenses.
+   */
+  mkdirSync(path.join(buildRoot, "vendor", "pdfium"), { recursive: true });
+  copyFileSync(
+    path.join(REPO_ROOT, "vendor", "pdfium", "runtime.provenance.json"),
+    path.join(buildRoot, "vendor", "pdfium", "runtime.provenance.json"),
+  );
   for (const directory of ["server", "dist-ui", "pdf-toolkit-mcp-share"]) {
     cpSync(path.join(REPO_ROOT, directory), path.join(buildRoot, directory), { recursive: true });
   }
