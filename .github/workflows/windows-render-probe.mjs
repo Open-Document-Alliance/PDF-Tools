@@ -54,6 +54,15 @@ const results = [
   await probe("embedded host, block in force", {
     PDF_TOOLS_EMBEDDED_NATIVE_CANVAS: "",
   }),
+  // The scenario this bug report was actually about: Claude Desktop's
+  // embedded-host block on native canvas is always in force (the arm above),
+  // but a real user does not set PDF_TOOLS_DISABLE_SYSTEM_RENDERER, so the
+  // Windows PDFium fallback should now be reachable instead of leaving the
+  // renderer entirely unavailable.
+  await probe("embedded host, block in force, system renderer available", {
+    PDF_TOOLS_DISABLE_SYSTEM_RENDERER: "",
+    PDF_TOOLS_EMBEDDED_NATIVE_CANVAS: "",
+  }),
 ];
 if (optIn) {
   results.push(await probe("embedded host, block lifted", {
@@ -85,6 +94,15 @@ const failures = [];
 const blocked = results.find(entry => entry.label.endsWith("block in force"));
 if (!blocked || !blocked.is_error) {
   failures.push("The default did not block native canvas in the embedded host.");
+}
+
+const fallback = results.find(entry => entry.label.endsWith("system renderer available"));
+if (!fallback || fallback.is_error || fallback.renderer !== "windows-pdfium") {
+  failures.push(
+    "The Windows PDFium fallback did not render in the embedded host with the "
+    + `native canvas block in force and the system renderer available (renderer=${fallback?.renderer ?? "(none)"}, `
+    + `is_error=${fallback?.is_error ?? "(unknown)"}).`,
+  );
 }
 
 if (optIn) {

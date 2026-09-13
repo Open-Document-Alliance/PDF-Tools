@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "notices": [
+    {
+      "file": "abseil.txt",
+      "sha256": "f54fff0b905df5b3464527c652a30e903b172d6dcab4d89b5e6f105d5e4a4603",
+      "size_bytes": 11564
+    },
+    {
+      "file": "agg23.txt",
+      "sha256": "c110d3ea2ad77467ce0dcff7d3337e6c8be8049a5103f4b9bd5fd911a77972e5",
+      "size_bytes": 725
+    },
+    {
+      "file": "fast_float.txt",
+      "sha256": "bf1b57355feca8fce77ee95f48002f8d4789fb71b30ec7599c06cda4901fbb2b",
+      "size_bytes": 1106
+    },
+    {
+      "file": "freetype.txt",
+      "sha256": "f4b133e25df1f86ad3ffea453aa0e613f0474f34778dbbb3e437e7b2724937d8",
+      "size_bytes": 6741
+    },
+    {
+      "file": "icu.txt",
+      "sha256": "93679f4389d53b6835d89843f251844fb9bc455b35bab036d3c8e7abe497a47a",
+      "size_bytes": 28286
+    },
+    {
+      "file": "lcms.txt",
+      "sha256": "7312b68c5b25e9bf2b828706fb4e29588f22705112f411fd42e1f7d84c3d139a",
+      "size_bytes": 1353
+    },
+    {
+      "file": "libjpeg_turbo.ijg",
+      "sha256": "db16a04128171879c60708d171b88d97345a2dd20f9bfc173680a4497c73f704",
+      "size_bytes": 13059
+    },
+    {
+      "file": "libjpeg_turbo.md",
+      "sha256": "be2b2b5ab168bce87bc3e31f2a5c5adba4b7f6e9e51d618e958d1d46972ebd95",
+      "size_bytes": 5755
+    },
+    {
+      "file": "libopenjpeg.txt",
+      "sha256": "c5ab0890a737c2dfa7ba675036554f6d17741d98629b0c2a145354d00617e6b2",
+      "size_bytes": 1794
+    },
+    {
+      "file": "libpng.txt",
+      "sha256": "452390433ba0f88aa3e2b122c647741b72a0c117cd6ed7a329b49785aecb5511",
+      "size_bytes": 5479
+    },
+    {
+      "file": "llvm-libc.txt",
+      "sha256": "3b6226c32e168c83b891d8d6f0d3c29c2116dc3ef93dc93c307b54f279ecf383",
+      "size_bytes": 15418
+    },
+    {
+      "file": "pdfium-binaries-build-scripts.txt",
+      "sha256": "493abc10084b58f97dce3fac1654624e1a25788f17180fe8925786c266cd2416",
+      "size_bytes": 1068
+    },
+    {
+      "file": "pdfium.txt",
+      "sha256": "961eacd9633fff6d051db7208b755e9210e30efac7adec3e6a6d52798f0ccf0e",
+      "size_bytes": 12818
+    },
+    {
+      "file": "simdutf.txt",
+      "sha256": "c172a0ba936ff31230febb5dad869e25cb7c1a07480c7a381be8cf011bb52719",
+      "size_bytes": 1077
+    },
+    {
+      "file": "zlib.txt",
+      "sha256": "33fd641c9f3b0e0be64bc78fea9e94807674cdd70c48477599226cb8956565fe",
+      "size_bytes": 1332
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   isMainThread,
   parentPort,
+  Worker,
   workerData,
 } from "node:worker_threads";
 import { PDFDocument } from "pdf-lib";
@@ -53,6 +54,23 @@ const SYSTEM_RENDERER_SHUTDOWN_REASONS = new Set([
   "system_renderer_shutdown",
   "system_renderer_shutdown_terminal",
 ]);
+// Which platform's system renderer a runSystemCommand()/withPrivateSystemRenderWorkspace()
+// call is fronting for, purely to word its generic failure messages correctly.
+// Fixed allow-list: this project's own call sites are the only source, never
+// PDF content or user input.
+const SYSTEM_RENDERER_LABELS = new Set(["macOS", "Windows"]);
+// Mirrors PDFIUM_DLL_PATHS in server/pdfjs-subprocess.js. Duplicated rather
+// than imported to avoid adding a static import edge between this module and
+// its own controller (which already dynamically imports this module).
+const PDFIUM_DLL_PATHS = new Map([
+  ["x64", path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "vendor", "pdfium", "runtime", "win-x64", "pdfium.dll")],
+  ["arm64", path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "vendor", "pdfium", "runtime", "win-arm64", "pdfium.dll")],
+]);
+const PDFIUM_RENDER_HOST_URL = pathToFileURL(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "pdfium-render-host.mjs"),
+);
+const PDFIUM_RENDER_HOST_PATH = fileURLToPath(PDFIUM_RENDER_HOST_URL);
+const activeSystemRenderWorkers = new Set();
 const _require = createRequire(import.meta.url);
 const activeSystemChildren = new Set();
 const activeSystemRenderWorkspaces = new Set();
@@ -1237,7 +1255,7 @@ function installThreadSystemCommandHandler() {
   });
 }
 
-async function runThreadSystemCommand(command, args, timeoutMs) {
+async function runThreadSystemCommand(command, args, timeoutMs, rendererLabel) {
   const id = nextThreadSystemCommandId;
   nextThreadSystemCommandId += 1;
   if (!Number.isSafeInteger(id) || id > 2 ** 31 - 1) {
@@ -1252,6 +1270,7 @@ async function runThreadSystemCommand(command, args, timeoutMs) {
         command,
         args,
         timeout_ms: timeoutMs,
+        renderer_label: rendererLabel,
       });
     } catch (error) {
       threadSystemCommandWaiters.delete(id);
@@ -1266,6 +1285,14 @@ async function terminateActiveSystemChildren() {
     const closed = waitForChildClose(child);
     killSystemChild(child);
     await closed;
+  }));
+  const workers = [...activeSystemRenderWorkers];
+  await Promise.all(workers.map(async worker => {
+    try {
+      await worker.terminate();
+    } catch {
+      // Already exited or terminating; nothing further to do.
+    }
   }));
 }
 
@@ -1323,9 +1350,12 @@ async function awaitSystemRenderWorkspaceCleanup() {
   if (cleanupErrors.length > 0) throw cleanupErrors[0];
 }
 
-export async function withPrivateSystemRenderWorkspace(operation) {
+export async function withPrivateSystemRenderWorkspace(operation, { rendererLabel = "macOS" } = {}) {
   if (typeof operation !== "function") {
     throw new TypeError("system render workspace operation must be a function.");
+  }
+  if (!SYSTEM_RENDERER_LABELS.has(rendererLabel)) {
+    throw new TypeError("system render workspace renderer label is invalid.");
   }
   assertSystemRendererRunning();
   const completeLifecycle = registerSystemRenderWorkspace();
@@ -1343,7 +1373,7 @@ export async function withPrivateSystemRenderWorkspace(operation) {
   } catch (error) {
     renderError = error?.code === PDF_RESOURCE_LIMIT_CODE
       ? error
-      : new Error("The macOS system PDF renderer could not render this page.");
+      : new Error(`The ${rendererLabel} system PDF renderer could not render this page.`);
   }
   let cleanupError = null;
   if (renderDirectory !== null) {
@@ -1524,12 +1554,20 @@ export async function runSystemCommand(command, args, {
   spawnProcess = spawn,
   timeoutMs = SYSTEM_COMMAND_TIMEOUT_MS,
   workingDirectory = process.cwd(),
+  // Only ever set by this project's own renderer call sites, never by PDF
+  // content or user input, so a fixed small allow-list is defence in depth
+  // rather than a trust boundary. Existing callers omit it and keep the
+  // exact same "macOS" wording they always have.
+  rendererLabel = "macOS",
 } = {}) {
   boundedString(command, "system command", 32_768);
   boundedInteger(timeoutMs, "system command timeout", 100, 30_000);
   boundedString(workingDirectory, "system command working directory", 32_768);
   if (!path.isAbsolute(workingDirectory)) {
     throw new TypeError("system command working directory must be absolute.");
+  }
+  if (!SYSTEM_RENDERER_LABELS.has(rendererLabel)) {
+    throw new TypeError("system command renderer label is invalid.");
   }
   if (
     !Array.isArray(args)
@@ -1539,7 +1577,7 @@ export async function runSystemCommand(command, args, {
     throw new TypeError("system command arguments are invalid.");
   }
   if (isPdfjsThreadRuntime()) {
-    return await runThreadSystemCommand(command, args, timeoutMs);
+    return await runThreadSystemCommand(command, args, timeoutMs, rendererLabel);
   }
   await new Promise((resolve, reject) => {
     systemCommandSpawnCount += 1;
@@ -1605,7 +1643,7 @@ export async function runSystemCommand(command, args, {
         // A child that failed on its own still rejects exactly as before.
         finish(systemRenderShutdownStarted
           ? systemRendererShutdownError()
-          : new Error("The macOS system PDF renderer could not render this page."));
+          : new Error(`The ${rendererLabel} system PDF renderer could not render this page.`));
       } else {
         finish(null);
       }
@@ -1864,7 +1902,9 @@ export async function runRendererPolicy(policy, {
 async function renderPage(bytes, password, options) {
   return await runRendererPolicy(options.renderer_policy, {
     nativeRenderer: async () => await nativeRenderPage(bytes, password, options),
-    systemRenderer: async () => await systemRenderPage(bytes, password, options),
+    systemRenderer: async () => (process.platform === "win32"
+      ? await systemRenderPageWindows(bytes, password, options)
+      : await systemRenderPage(bytes, password, options)),
   });
 }
 
@@ -2037,10 +2077,208 @@ async function systemRenderRegion(bytes, password, options) {
   });
 }
 
+// Same detection this host already uses to choose how the outer PDF.js
+// operation itself is isolated (see selectPdfjsIsolationMode in
+// server/pdfjs-subprocess.js). Duplicated locally rather than imported so
+// this module keeps no static dependency on its own controller. Used here to
+// decide how the *inner* PDFium render call is isolated: relaunching
+// process.execPath as a child process is not reliable inside this host (its
+// process.execPath is the Electron/Claude binary, not a plain node.exe), so
+// that case gets a dedicated worker_threads.Worker instead, terminated on the
+// same deadline a subprocess would be killed on.
+function isEmbeddedElectronHost() {
+  const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
+  const executableName = path.basename(process.execPath ?? "");
+  return typeof electronDescriptor?.value === "string"
+    || process.type === "utility"
+    || process.parentPort != null
+    || /(?:^electron$|^claude(?: helper(?: \(plugin\))?)?(?:\.exe)?$)/i.test(executableName);
+}
+
+function pdfiumDllPathForCurrentHost() {
+  const dllPath = PDFIUM_DLL_PATHS.get(process.arch);
+  if (dllPath === undefined) {
+    throw new Error(
+      `The Windows system PDF renderer does not support this host architecture (${process.arch}).`,
+    );
+  }
+  return dllPath;
+}
+
+async function runPdfiumSubprocessRender({ dllPath, sourcePdfPath, widthPx, heightPx, outputPngPath }) {
+  await runSystemCommand(process.execPath, [
+    PDFIUM_RENDER_HOST_PATH,
+    dllPath,
+    sourcePdfPath,
+    String(widthPx),
+    String(heightPx),
+    outputPngPath,
+  ], { rendererLabel: "Windows" });
+}
+
+async function runPdfiumWorkerRender({ dllPath, sourcePdfPath, widthPx, heightPx, outputPngPath }) {
+  // Mirrors the one-system-renderer-at-a-time cap runSystemCommand enforces
+  // for the subprocess path (systemChildren.size in pdfjs-subprocess.js): a
+  // second concurrent PDFium render in the embedded host would otherwise be
+  // unbounded, undermining the same isolation budget the subprocess path
+  // already holds to.
+  if (activeSystemRenderWorkers.size >= 1) {
+    throw resourceLimitError("system_renderer_concurrency_limit");
+  }
+  const worker = new Worker(PDFIUM_RENDER_HOST_URL, {
+    workerData: { pdf_tools_worker: "pdfium_render", dllPath, heightPx, outputPngPath, sourcePdfPath, widthPx },
+  });
+  activeSystemRenderWorkers.add(worker);
+  let timedOut = false;
+  let deadline = null;
+  try {
+    const outcome = await new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (isError, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        if (isError) reject(value);
+        else resolve(value);
+      };
+      worker.once("message", message => finish(false, message));
+      worker.once("error", error => finish(true, error));
+      worker.once("exit", () => finish(true, timedOut
+        ? resourceLimitError("system_renderer_timeout")
+        : new Error("The Windows system PDF renderer could not render this page.")));
+      deadline = setTimeout(() => {
+        timedOut = true;
+        worker.terminate().catch(() => {});
+      }, SYSTEM_COMMAND_TIMEOUT_MS);
+      deadline.unref();
+    });
+    if (outcome?.status !== "ok") {
+      throw new Error(
+        `The Windows system PDF renderer could not render this page.${
+          typeof outcome?.message === "string" ? ` (${outcome.message})` : ""
+        }`,
+      );
+    }
+  } finally {
+    activeSystemRenderWorkers.delete(worker);
+    await worker.terminate().catch(() => {});
+  }
+}
+
+async function systemRenderPageWindows(bytes, password, options) {
+  if (process.platform !== "win32") {
+    throw new Error("The Windows system PDF renderer is unavailable on this platform.");
+  }
+  const dllPath = pdfiumDllPathForCurrentHost();
+  const geometryDocument = await loadPdfLibGeometry(bytes, password);
+  if (options.page > geometryDocument.getPageCount()) {
+    throw new Error(
+      `Page ${options.page} is out of range (1-${geometryDocument.getPageCount()}).`,
+    );
+  }
+  const geometryPage = geometryDocument.getPages()[options.page - 1];
+  const geometry = geometryPage.getSize();
+  const pageGeometry = pageGeometryFromPdfLib(geometryPage);
+  const requestedRegion = options.view_region ?? null;
+  const { pageView, pdfCropBox, totalPages } = await inspectPdfjsPageView(
+    bytes,
+    password,
+    options.page,
+    requestedRegion,
+  );
+  const renderedView = requestedRegion ?? {
+    x: 0,
+    y: 0,
+    width: pageView.width_points,
+    height: pageView.height_points,
+  };
+  const scale = options.scale_override ?? getPageRenderScale({
+    width: renderedView.width,
+    height: renderedView.height,
+    maxDimensionPx: options.max_dimension_px,
+  });
+  const pixels = validateCanvasDimensions(renderedView.width * scale, renderedView.height * scale);
+  return await withPrivateSystemRenderWorkspace(async ({
+    assertSystemRendererRunning,
+    renderDirectory,
+  }) => {
+    const sourcePath = path.join(renderDirectory, "source.pdf");
+    const outputPath = path.join(renderDirectory, "source.pdf.png");
+    await writeSinglePagePdf(bytes, options.page, password, sourcePath, pdfCropBox);
+    assertSystemRendererRunning();
+    const renderArgs = {
+      dllPath,
+      heightPx: pixels.height,
+      outputPngPath: outputPath,
+      sourcePdfPath: sourcePath,
+      widthPx: pixels.width,
+    };
+    if (isEmbeddedElectronHost()) {
+      await runPdfiumWorkerRender(renderArgs);
+    } else {
+      await runPdfiumSubprocessRender(renderArgs);
+    }
+    const buffer = await readFile(outputPath);
+    const dimensions = pngDimensions(buffer);
+    validateCanvasDimensions(dimensions.width, dimensions.height);
+    return pngResult(buffer, {
+      height: dimensions.height,
+      height_points: geometry.height,
+      renderer: "windows-pdfium",
+      page_geometry: pageGeometry,
+      page_view: pageView,
+      requested_region: renderedView,
+      rendered_region: { x: 0, y: 0, width: dimensions.width, height: dimensions.height },
+      raw_pixel_sha256: null,
+      raw_pixel_status: "unavailable",
+      scale,
+      total_pages: totalPages,
+      width: dimensions.width,
+      width_points: geometry.width,
+    });
+  }, { rendererLabel: "Windows" });
+}
+
+async function systemRenderRegionWindows(bytes, password, options) {
+  const page = await systemRenderPageWindows(bytes, password, {
+    page: options.page,
+    max_dimension_px: null,
+    renderer_policy: "system",
+    scale_override: getPageRenderScale({
+      width: options.width,
+      height: options.height,
+      maxDimensionPx: options.max_dimension_px,
+      minScale: 0.1,
+      maxScale: 4,
+    }),
+    view_region: {
+      x: options.x,
+      y: options.y,
+      width: options.width,
+      height: options.height,
+    },
+  });
+  return pngResult(page.binary, {
+    height: page.result.height,
+    page_geometry: page.result.page_geometry,
+    page_view: page.result.page_view,
+    requested_region: page.result.requested_region,
+    rendered_region: page.result.rendered_region,
+    raw_pixel_sha256: null,
+    raw_pixel_status: "unavailable",
+    renderer: "windows-pdfium",
+    scale: page.result.scale,
+    total_pages: page.result.total_pages,
+    width: page.result.width,
+  });
+}
+
 async function renderRegion(bytes, password, options) {
   return await runRendererPolicy(options.renderer_policy, {
     nativeRenderer: async () => await nativeRenderRegion(bytes, password, options),
-    systemRenderer: async () => await systemRenderRegion(bytes, password, options),
+    systemRenderer: async () => (process.platform === "win32"
+      ? await systemRenderRegionWindows(bytes, password, options)
+      : await systemRenderRegion(bytes, password, options)),
   });
 }
 

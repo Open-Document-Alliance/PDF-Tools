@@ -17,6 +17,14 @@ import {
   QPDF_WASM_SBOM_DEPENDENCIES,
 } from "./scripts/qpdf-wasm-sbom.mjs";
 import {
+  PDFIUM_RUNTIME_FILES,
+} from "./scripts/pdfium-runtime.mjs";
+import {
+  PDFIUM_RUNTIME_COMPONENT_BOM_REF,
+  PDFIUM_SBOM_COMPONENTS,
+  PDFIUM_SBOM_DEPENDENCIES,
+} from "./scripts/pdfium-sbom.mjs";
+import {
   deriveNpmComponentLicensing,
   licenseEntryForDeclaredString,
   verifyNpmLicenseProvenanceCoverage,
@@ -26,6 +34,11 @@ export {
   QPDF_WASM_RUNTIME_COMPONENT_BOM_REF,
   QPDF_WASM_SBOM_COMPONENTS,
 } from "./scripts/qpdf-wasm-sbom.mjs";
+export { PDFIUM_RUNTIME_FILES } from "./scripts/pdfium-runtime.mjs";
+export {
+  PDFIUM_RUNTIME_COMPONENT_BOM_REF,
+  PDFIUM_SBOM_COMPONENTS,
+} from "./scripts/pdfium-sbom.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PROJECT_ROOT = path.dirname(SCRIPT_PATH);
@@ -71,8 +84,10 @@ export const SHARE_FILES = [
   "server/pdf-lib-rss-monitor.js",
   "server/pdf-lib-subprocess.js",
   "server/pdf-lib-worker.js",
+  "server/pdfium-render-host.mjs",
   "server/pdfjs-subprocess.js",
   "server/pdfjs-worker.js",
+  "server/png-encoder.js",
   "server/qpdf-decrypt-worker.js",
   "server/qpdf-decrypt.js",
   "server/resource-uri.js",
@@ -423,8 +438,9 @@ export function validateCycloneDxSbom(sbom, lock, sharePackage, options = {}) {
     .filter(packagePath => packagePath !== "")
     .sort(compareCodePoints);
   /*
-   * The expected total is the npm graph plus the native graph, each counted
-   * from its own pinned record. Neither number is written down.
+   * The expected total is the npm graph plus the QPDF WASM native graph,
+   * each counted from its own pinned record. PDFium is only in the MCPB,
+   * not in the share package. Neither number is written down.
    */
   const expectedComponentCount = packagePaths.length + QPDF_WASM_SBOM_COMPONENTS.length;
   if (sbom.components?.length !== expectedComponentCount) {
@@ -624,6 +640,7 @@ async function syncSharePackage() {
     dependencies: {
       "@modelcontextprotocol/sdk": rootPackage.dependencies["@modelcontextprotocol/sdk"],
       "@napi-rs/canvas": rootPackage.dependencies["@napi-rs/canvas"],
+      "koffi": rootPackage.dependencies["koffi"],
       "pdf-lib": rootPackage.dependencies["pdf-lib"],
       "pdfjs-dist": rootPackage.dependencies["pdfjs-dist"],
     },

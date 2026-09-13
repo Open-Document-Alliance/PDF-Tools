@@ -55,6 +55,8 @@ const EXPECTED_SHARE_EXECUTABLES = new Set([
 const ISOLATED_PACKAGER_SCRIPT_SOURCES = Object.freeze([
   "scripts/eval-strict-json.mjs",
   "scripts/npm-license-provenance.mjs",
+  "scripts/pdfium-runtime.mjs",
+  "scripts/pdfium-sbom.mjs",
   "scripts/qpdf-wasm-runtime.mjs",
   "scripts/qpdf-wasm-sbom.mjs",
   "scripts/verified-extraction-proposal.mjs",
@@ -97,19 +99,21 @@ function expectFailure(command, args, cwd, pattern, options = {}) {
 /*
  * A second, independent reading of what the native half of the bill must look
  * like — taken from the files that shipped inside the archive rather than from
- * the generator that wrote the SBOM. `BUILD-INPUTS.json` is the pinned source
- * set; `licenses/manifest.json` is every notice the runtime redistributes.
+ * the generator that wrote the SBOM. For QPDF WASM: `BUILD-INPUTS.json` is the
+ * pinned source set; `licenses/manifest.json` is every notice the runtime
+ * redistributes. For PDFium: `runtime.provenance.json` contains all notices.
  * Between them they say which native code ships, so between them they say how
  * many components the SBOM owes and what each one must claim.
  */
 function expectedNativeSbomShape(packageRoot) {
-  const runtimeDirectory = "vendor/qpdf-wasm/runtime";
-  const readRuntimeJson = relativePath => JSON.parse(readFileSync(
-    path.join(packageRoot, ...`${runtimeDirectory}/${relativePath}`.split("/")),
+  // QPDF WASM runtime components
+  const qpdfRuntimeDirectory = "vendor/qpdf-wasm/runtime";
+  const readQpdfRuntimeJson = relativePath => JSON.parse(readFileSync(
+    path.join(packageRoot, ...`${qpdfRuntimeDirectory}/${relativePath}`.split("/")),
     "utf8",
   ));
-  const buildInputs = readRuntimeJson("BUILD-INPUTS.json");
-  const noticeManifest = readRuntimeJson("licenses/manifest.json");
+  const buildInputs = readQpdfRuntimeJson("BUILD-INPUTS.json");
+  const noticeManifest = readQpdfRuntimeJson("licenses/manifest.json");
   const sourceKeys = new Set(buildInputs.sources.map(source => `${source.name} ${source.version}`));
   const sources = buildInputs.sources.map(source => ({
     name: source.name,
@@ -143,7 +147,8 @@ function expectedNativeSbomShape(packageRoot) {
     sources,
     toolchain,
     // The pinned sources, the toolchain-linked libraries, and one component
-    // for the runtime artifact they are all compiled into.
+    // for the runtime artifact they are all compiled into. PDFium is only in
+    // the MCPB, not in the share package.
     componentCount: sources.length + toolchain.length + 1,
   };
 }
@@ -373,6 +378,17 @@ function populatePackageBuildRoot(buildRoot) {
     path.join(REPO_ROOT, "vendor", "qpdf-wasm", "runtime"),
     path.join(buildRoot, "vendor", "qpdf-wasm", "runtime"),
     { recursive: true },
+  );
+  /*
+   * The PDFium provenance file is needed because pdfium-runtime.mjs reads it
+   * at module import time. However, PDFium runtime files are not included in
+   * the share package (only in the MCPB for Windows targets), so only the
+   * provenance file is copied, not the runtime directory or licenses.
+   */
+  mkdirSync(path.join(buildRoot, "vendor", "pdfium"), { recursive: true });
+  copyFileSync(
+    path.join(REPO_ROOT, "vendor", "pdfium", "runtime.provenance.json"),
+    path.join(buildRoot, "vendor", "pdfium", "runtime.provenance.json"),
   );
   for (const directory of ["server", "dist-ui", "pdf-toolkit-mcp-share"]) {
     cpSync(path.join(REPO_ROOT, directory), path.join(buildRoot, directory), { recursive: true });

@@ -2318,12 +2318,33 @@ async function verifyComparisonSourceUnchanged(resolvedPath, initialSource) {
   };
 }
 
+// win32's system renderer (PDFium) is a vendored file, not a binary every
+// Windows host ships (unlike qlmanage on darwin), so its availability is
+// checked rather than assumed. This only checks the file exists for the
+// current architecture; whether pdfium.dll actually loads and renders is
+// proven when a render is attempted, exactly like a broken qlmanage would
+// surface its own failure on darwin.
+const PDFIUM_DLL_RELATIVE_PATHS = new Map([
+  ["x64", path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "vendor", "pdfium", "runtime", "win-x64", "pdfium.dll")],
+  ["arm64", path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "vendor", "pdfium", "runtime", "win-arm64", "pdfium.dll")],
+]);
+
+function systemRendererAvailableOnThisHost() {
+  if (process.platform === "darwin") return true;
+  if (process.platform === "win32") {
+    const dllPath = PDFIUM_DLL_RELATIVE_PATHS.get(process.arch);
+    return dllPath !== undefined && existsSync(dllPath);
+  }
+  return false;
+}
+
 function pdfjsRendererPolicy() {
   const forced = process.env.PDF_TOOLS_FORCE_SYSTEM_RENDERER === "1";
   const disabled = process.env.PDF_TOOLS_DISABLE_SYSTEM_RENDERER === "1";
-  if (forced && (disabled || process.platform !== "darwin")) return "forced_unavailable";
+  const available = systemRendererAvailableOnThisHost();
+  if (forced && (disabled || !available)) return "forced_unavailable";
   if (forced) return "system";
-  if (disabled || process.platform !== "darwin") return "native";
+  if (disabled || !available) return "native";
   return "native_with_system_fallback";
 }
 

@@ -13,3 +13,11 @@ test/**/*.js text eol=lf
 # in the mirrored share tree alike.
 vendor/qpdf-wasm/runtime/** -text -whitespace
 pdf-toolkit-mcp-share/vendor/qpdf-wasm/runtime/** -text -whitespace
+
+# The vendored PDFium Windows runtime (DLL binaries and the release's own
+# bundled license notices) is likewise byte-exact and bound by
+# vendor/pdfium/runtime.provenance.json and sources.lock.json.
+vendor/pdfium/runtime/** -text -whitespace
+vendor/pdfium/licenses/** -text -whitespace
+pdf-toolkit-mcp-share/vendor/pdfium/runtime/** -text -whitespace
+pdf-toolkit-mcp-share/vendor/pdfium/licenses/** -text -whitespace
