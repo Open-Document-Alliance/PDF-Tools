@@ -49,9 +49,22 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const FULL_SCALE = process.env.DEEP_FUZZ === "1";
 const SCALE = FULL_SCALE ? "full" : "quick";
 
-// Generous enough that a slow machine does not produce a false failure, tight
-// enough that an unbounded parse is still caught rather than waited out.
-const CALL_TIMEOUT_MS = FULL_SCALE ? 30_000 : 15_000;
+// These are harness observation ceilings, not product latency guarantees.
+// read_pdf_content can run two independent 30s PDF.js stages; the other
+// PDF.js reads use one. Each stage has a 1s termination grace. Keep the
+// observer outside those existing bounds so it sees typed resource rejection.
+const CONTROL_TIMEOUT_MS = 35_000;
+const CASE_CLEANUP_MARGIN_MS = 10_000;
+const TOOL_CALL_TIMEOUT_MS = Object.freeze({
+  read_pdf_content: 65_000,
+  get_pdf_info: 35_000,
+  get_page_analysis: 35_000,
+  // PDF-lib's 30s worker deadline excludes parent validation and commit.
+  // 45s is a whole-call harness hang ceiling, not a mutation runtime SLA.
+  read_pdf_fields: 45_000,
+  rotate_pdf_pages: 45_000,
+  split_pdf: 45_000,
+});
 // The largest fixture asks for a 512 MiB inflate. A server that honors it
 // naively lands well above this; one that bounds decoding stays far below.
 const PEAK_RSS_LIMIT_BYTES = 1_536 * 1024 * 1024;
@@ -82,17 +95,10 @@ function readPeakRssBytes(pid) {
   }
 }
 
-// This campaign asserts a per-call wall-clock budget, so it measures the
-// machine as much as the product. On a two-core shared runner the calls land
-// at 15001-15016 ms against a 15000 ms bound: the tools still bound
-// themselves, the host is simply slower than the one the budget was
-// calibrated against. Loosening the budget would blunt the only assertion
-// that catches an unbounded parse, so the campaign stays calibrated to the
-// maintainer's hardware and declares itself skipped elsewhere rather than
-// reporting hardware as a product failure.
-const TIMING_CALIBRATED_HOST_ONLY = process.env.PDF_TOOLS_TIMING_CALIBRATED === "skip";
-
-describe.skipIf(TIMING_CALIBRATED_HOST_ONLY)(`deep malformed campaign (${SCALE} scale)`, () => {
+// A client timeout does not guarantee cancellation of server-side work. The
+// observer must let the bounded parser stages settle before probing liveness;
+// these tests make no claim that cancellation prevents mutations or writes.
+describe(`deep malformed campaign (${SCALE} scale)`, () => {
   let stateRoot;
   let client;
   let transport;
@@ -250,6 +256,7 @@ describe.skipIf(TIMING_CALIBRATED_HOST_ONLY)(`deep malformed campaign (${SCALE} 
 
   for (const fixture of makeDeepMalformedFixtures({ scale: SCALE })) {
     for (const tool of PROBE_TOOLS) {
+      const callTimeoutMs = TOOL_CALL_TIMEOUT_MS[tool.name];
       it(`${tool.name} stays bounded on ${fixture.name}`, async () => {
         const inputPath = path.join(stateRoot, `${fixture.name}.pdf`);
         const outputPath = path.join(stateRoot, `out-${tool.name}-${fixture.name}.pdf`);
@@ -260,7 +267,7 @@ describe.skipIf(TIMING_CALIBRATED_HOST_ONLY)(`deep malformed campaign (${SCALE} 
           await client.callTool(
             { name: tool.name, arguments: tool.args(inputPath, outputPath) },
             undefined,
-            { timeout: CALL_TIMEOUT_MS, maxTotalTimeout: CALL_TIMEOUT_MS },
+            { timeout: callTimeoutMs, maxTotalTimeout: callTimeoutMs },
           );
         } catch (error) {
           // A transport-level rejection is an acceptable fail-closed outcome.
@@ -269,32 +276,49 @@ describe.skipIf(TIMING_CALIBRATED_HOST_ONLY)(`deep malformed campaign (${SCALE} 
         }
         const elapsed = Date.now() - before;
 
-        expect(serverClosedUnexpectedly, "server process died").toBe(false);
-        expect(elapsed, "call exceeded its wall-clock bound").toBeLessThan(CALL_TIMEOUT_MS);
+        // Collect control, source and output evidence even when the primary
+        // observation exceeded its bound. A healthy control cannot erase that
+        // primary failure, and its own full allowance fits the outer timeout.
+        let control;
+        let controlError = null;
+        try {
+          control = await client.callTool(
+            { name: "get_pdf_info", arguments: { pdf_path: controlPdfPath } },
+            undefined,
+            { timeout: CONTROL_TIMEOUT_MS, maxTotalTimeout: CONTROL_TIMEOUT_MS },
+          );
+        } catch (error) {
+          controlError = error;
+        }
+        let sourceBytes = null;
+        let outputError = null;
+        try {
+          sourceBytes = await fs.readFile(inputPath);
+          const written = tool.producesNamedOutput === false
+            ? null
+            : await fs.readFile(outputPath).catch(error => {
+              if (error.code === "ENOENT") return null;
+              throw error;
+            });
+          if (written !== null) {
+            await PDFDocument.load(written, { ignoreEncryption: true });
+          }
+        } catch (error) {
+          outputError = error;
+        }
+
+        expect.soft(serverClosedUnexpectedly, "server process died").toBe(false);
+        expect.soft(controlError, "post-adversary control failed").toBeNull();
+        expect.soft(control, "post-adversary control is absent").toBeDefined();
+        expect.soft(control?.isError, "post-adversary control rejected").not.toBe(true);
+        expect.soft(sourceBytes?.equals(fixture.bytes), "source bytes changed").toBe(true);
+        expect.soft(outputError, "source or output integrity failed").toBeNull();
+        expect.soft(elapsed, "call exceeded its harness observation ceiling")
+          .toBeLessThan(callTimeoutMs);
         if (threw) {
-          expect(String(threw.message ?? threw)).not.toMatch(/timed out|timeout/i);
+          expect.soft(String(threw.message ?? threw)).not.toMatch(/timed out|timeout/i);
         }
-
-        // No partial artifact may survive a rejected operation.
-        const written = tool.producesNamedOutput === false
-          ? null
-          : await fs.readFile(outputPath).catch(() => null);
-        if (written !== null) {
-          // If a tool did produce output it must be a loadable document, not a
-          // truncated husk.
-          await expect(
-            PDFDocument.load(written, { ignoreEncryption: true }),
-          ).resolves.toBeTruthy();
-        }
-
-        // The server must still answer correctly afterwards.
-        const control = await client.callTool(
-          { name: "get_pdf_info", arguments: { pdf_path: controlPdfPath } },
-          undefined,
-          { timeout: CALL_TIMEOUT_MS, maxTotalTimeout: CALL_TIMEOUT_MS },
-        );
-        expect(control.isError).not.toBe(true);
-      }, CALL_TIMEOUT_MS + 20_000);
+      }, callTimeoutMs + CONTROL_TIMEOUT_MS + CASE_CLEANUP_MARGIN_MS);
     }
   }
 
