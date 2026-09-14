@@ -154,7 +154,7 @@ export function packedPackageManifests(extensionDir, relativeRoot = "node_module
  *     dropped used to be marked `optional` beside the five that ship.
  */
 export function validatePackedSbomLicences(sbom, extensionDir) {
-  if (!Array.isArray(sbom?.components) || sbom.components.length < 50) {
+  if (!Array.isArray(sbom?.components) || sbom.components.length === 0) {
     throw new Error("Packed SBOM does not describe a plausible component set");
   }
   const componentsByPath = new Map();
@@ -168,8 +168,12 @@ export function validatePackedSbomLicences(sbom, extensionDir) {
     throw new Error(`Packed SBOM has components with no licence at all: ${silent.map(c => c.name).join(", ")}`);
   }
   const packed = packedPackageManifests(extensionDir);
-  if (packed.size < 50) {
-    throw new Error(`Packed MCPB carries too few packages to check licences against: ${packed.size}`);
+  // SDK 2 removes the monolithic HTTP graph; require the actual runtime
+  // identities instead of a historical minimum package count.
+  for (const dependency of ["@modelcontextprotocol/server", "@modelcontextprotocol/core", "@napi-rs/canvas", "pdf-lib", "pdfjs-dist", "yaml"]) {
+    if (!packed.has(`node_modules/${dependency}`)) {
+      throw new Error(`Required runtime dependency is missing: ${dependency}`);
+    }
   }
   for (const [packagePath, manifest] of packed) {
     const component = componentsByPath.get(packagePath);

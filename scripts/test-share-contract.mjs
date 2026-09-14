@@ -252,8 +252,12 @@ function assertShippedLicencesMatchInstalledTree(sbom, installRoot) {
     if (packagePath) componentsByPath.set(packagePath, component);
   }
   const installed = installedPackageManifests(installRoot);
-  if (installed.size < 50) {
-    throw new Error(`Installed share tree is too small to check licences against: ${installed.size} packages`);
+  // SDK 2 removes the monolithic HTTP graph; require the actual runtime
+  // identities instead of a historical minimum package count.
+  for (const dependency of ["@modelcontextprotocol/server", "@modelcontextprotocol/core", "@napi-rs/canvas", "pdf-lib", "pdfjs-dist", "yaml"]) {
+    if (!installed.has(`node_modules/${dependency}`)) {
+      throw new Error(`Required runtime dependency is missing: ${dependency}`);
+    }
   }
   let checked = 0;
   for (const [packagePath, manifest] of installed) {
