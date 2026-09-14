@@ -43,7 +43,7 @@ const PROVENANCE_FILENAME = "SHARE-PROVENANCE.json";
  * until it is. Omitting one used to ship a bundle whose entry point could not
  * resolve its own imports.
  */
-import { SKILL_FILES } from "./server/skills.js";
+import { SKILL_FILES } from "./server/skill-files.js";
 
 export const SHARE_FILES = [
   ...SKILL_FILES,
@@ -79,6 +79,7 @@ export const SHARE_FILES = [
   "server/qpdf-decrypt-worker.js",
   "server/qpdf-decrypt.js",
   "server/resource-uri.js",
+  "server/skill-files.js",
   "server/skills.js",
   "server/stderr-suppression.js",
   "server/table-proposal-verification.js",

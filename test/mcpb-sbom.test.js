@@ -24,4 +24,3 @@ describe("packed SDK 2 licence inventory", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
-

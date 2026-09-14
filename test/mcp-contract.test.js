@@ -469,6 +469,9 @@ describe("MCPB static declarations", () => {
       "qpdf-decrypt-worker.js",
       "resource-uri.js",
       "stderr-suppression.js",
+      "skill-files.js",
+      "skills.js",
+      "table-proposal-verification.js",
       "verified-extraction-tools.js",
     ]) {
       const source = await fs.readFile(path.join(REPO_ROOT, "server", filename));
@@ -477,7 +480,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(30);
+    expect(mirrored).toHaveLength(31);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",

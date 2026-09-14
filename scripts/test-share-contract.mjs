@@ -30,6 +30,7 @@ import {
   verifyQpdfWasmRuntime,
 } from "./qpdf-wasm-runtime.mjs";
 import { SHARE_MIRRORED_FILES } from "../package-for-friend.js";
+import { SKILL_FILES } from "../server/skill-files.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -350,7 +351,7 @@ function populatePackageBuildRoot(buildRoot) {
       `Isolated package build root omits mirrored script sources: ${missingMirroredScriptSources.join(", ")}`,
     );
   }
-  for (const relativePath of ISOLATED_PACKAGER_SCRIPT_SOURCES) {
+  for (const relativePath of [...ISOLATED_PACKAGER_SCRIPT_SOURCES, ...SKILL_FILES]) {
     const destination = path.join(buildRoot, ...relativePath.split("/"));
     mkdirSync(path.dirname(destination), { recursive: true });
     copyFileSync(

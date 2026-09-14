@@ -48,7 +48,7 @@ import { generateCycloneDxSbom } from "../package-for-friend.js";
 export { isForbiddenArchivePath } from "./mcpb-packaging-policy.mjs";
 export { QPDF_WASM_RUNTIME_FILES } from "./qpdf-wasm-runtime.mjs";
 
-import { SKILL_FILES } from "../server/skills.js";
+import { SKILL_FILES } from "../server/skill-files.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -101,6 +101,7 @@ export const SERVER_FILES = [
   "qpdf-decrypt-worker.js",
   "qpdf-decrypt.js",
   "resource-uri.js",
+  "skill-files.js",
   "skills.js",
   "stderr-suppression.js",
   "table-proposal-verification.js",

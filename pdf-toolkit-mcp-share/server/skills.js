@@ -3,12 +3,8 @@ import { readFileSync } from "node:fs";
 import { parseDocument } from "yaml";
 import { ProtocolError, ProtocolErrorCode } from "@modelcontextprotocol/server";
 
-export const SKILLS_EXTENSION = "io.modelcontextprotocol/skills";
-export const SKILL_ROOT = "plugins/pdf-tools-workflow/skills/pdf-tools-workflow";
-export const SKILL_FILES = Object.freeze([
-  `${SKILL_ROOT}/SKILL.md`,
-  `${SKILL_ROOT}/agents/openai.yaml`,
-]);
+import { SKILL_FILES, SKILL_ROOT } from "./skill-files.js";
+export { SKILL_FILES, SKILLS_EXTENSION } from "./skill-files.js";
 const SKILL_URI = "skill://pdf-tools-workflow/SKILL.md";
 
 // An explicit authored-file allowlist, never a walk of a user PDF directory.
