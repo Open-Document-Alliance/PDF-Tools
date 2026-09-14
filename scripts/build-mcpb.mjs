@@ -850,6 +850,19 @@ function removeHostSelectedNativePackages(stagingDir) {
   }
 }
 
+export function parseNpmPackResult(output, packageName) {
+  const value = JSON.parse(output);
+  const records = Array.isArray(value)
+    ? value
+    : value && typeof value === "object" && Object.keys(value).length === 1 && Object.hasOwn(value, packageName)
+      ? [value[packageName]]
+      : [];
+  if (records.length !== 1 || !records[0] || typeof records[0] !== "object") {
+    throw new Error("npm pack returned an unexpected package inventory");
+  }
+  return records[0];
+}
+
 function installLockedNativePackages(stagingDir, downloadDir) {
   const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const packages = lockedNativePackages();
@@ -859,7 +872,7 @@ function installLockedNativePackages(stagingDir, downloadDir) {
       ["pack", `${target.packageName}@${target.version}`, "--json", "--pack-destination", downloadDir],
       { capture: true },
     );
-    const [packed] = JSON.parse(output);
+    const packed = parseNpmPackResult(output, target.packageName);
     if (!packed?.filename || packed.integrity !== target.integrity) {
       throw new Error(`Registry tarball integrity did not match package-lock.json for ${target.packageName}`);
     }
