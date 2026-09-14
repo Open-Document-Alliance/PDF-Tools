@@ -78,6 +78,7 @@ trap 'cleanup_on_exit' EXIT
 trap 'exit 130' HUP INT TERM
 
 REQUIRED_ITEMS=(
+  "plugins"
     "README.md"
     "SHARE-PROVENANCE.json"
     "SBOM.cdx.json"

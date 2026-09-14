@@ -1,4 +1,4 @@
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { validatePdfLayoutSemantics } from "./layout-extraction.js";
 import { validateMarkdownConversionSemantics } from "./markdown-conversion.js";
 import {

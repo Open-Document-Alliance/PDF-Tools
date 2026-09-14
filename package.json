@@ -51,14 +51,16 @@
     "url": "https://github.com/Open-Document-Alliance/PDF-Tools/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "@napi-rs/canvas": "^0.1.99",
     "pdf-lib": "1.17.1",
-    "pdfjs-dist": "5.4.624"
+    "pdfjs-dist": "5.4.624",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@anthropic-ai/mcpb": "2.1.2",
-    "@modelcontextprotocol/ext-apps": "1.7.4",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "rolldown": "1.1.5",
     "vite": "^8.1.5",
     "vite-plugin-singlefile": "^2.3.3",

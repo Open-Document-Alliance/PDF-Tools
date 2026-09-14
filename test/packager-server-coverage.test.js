@@ -16,6 +16,7 @@
  * connection setup. These assertions make the lists derivable facts rather
  * than remembered ones.
  */
+import { SKILL_FILES } from "../server/skills.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -73,6 +74,7 @@ describe("share packager server coverage", () => {
     // can no longer be archived without being copied or copied without being
     // archived.
     expect(SHARE_MIRRORED_FILES).toEqual([
+      ...SKILL_FILES,
       ...SHARE_SERVER_FILES,
       ...VERIFIED_EXTRACTION_RUNTIME_FILES,
       "dist-ui/index.html",

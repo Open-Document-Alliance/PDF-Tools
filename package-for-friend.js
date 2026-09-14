@@ -43,7 +43,10 @@ const PROVENANCE_FILENAME = "SHARE-PROVENANCE.json";
  * until it is. Omitting one used to ship a bundle whose entry point could not
  * resolve its own imports.
  */
+import { SKILL_FILES } from "./server/skills.js";
+
 export const SHARE_FILES = [
+  ...SKILL_FILES,
   "README.md",
   "configure-cursor.sh",
   "dist-ui/index.html",
@@ -76,6 +79,7 @@ export const SHARE_FILES = [
   "server/qpdf-decrypt-worker.js",
   "server/qpdf-decrypt.js",
   "server/resource-uri.js",
+  "server/skills.js",
   "server/stderr-suppression.js",
   "server/table-proposal-verification.js",
   "server/type3-cm-pk-reference.js",
@@ -103,6 +107,7 @@ export const SHARE_SERVER_FILES = SHARE_FILES.filter(relativePath => relativePat
  * share contract asserts byte parity for exactly these paths.
  */
 export const SHARE_MIRRORED_FILES = [
+  ...SKILL_FILES,
   ...SHARE_SERVER_FILES,
   "scripts/eval-strict-json.mjs",
   "scripts/verified-extraction-proposal.mjs",
@@ -622,7 +627,8 @@ async function syncSharePackage() {
     license: rootPackage.license,
     engines: rootPackage.engines,
     dependencies: {
-      "@modelcontextprotocol/sdk": rootPackage.dependencies["@modelcontextprotocol/sdk"],
+      "@modelcontextprotocol/server": rootPackage.dependencies["@modelcontextprotocol/server"],
+      "yaml": rootPackage.dependencies["yaml"],
       "@napi-rs/canvas": rootPackage.dependencies["@napi-rs/canvas"],
       "pdf-lib": rootPackage.dependencies["pdf-lib"],
       "pdfjs-dist": rootPackage.dependencies["pdfjs-dist"],

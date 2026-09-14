@@ -39,11 +39,12 @@ const CMAP_ORACLE_PROVENANCE = JSON.parse(readFileSync(
   "utf8",
 ));
 const PROTECTED_DIRECT_DEPENDENCIES = {
-  "@modelcontextprotocol/sdk": "1.30.0",
+  "@modelcontextprotocol/server": "2.0.0",
   "@napi-rs/canvas": "0.1.99",
   "pdf-lib": "1.17.1",
   "pdfjs-dist": "5.4.624",
 };
+const PROTECTED_MCP_CORE_VERSION = "2.0.0";
 const EXPECTED_SHARE_EXECUTABLES = new Set([
   "configure-cursor.sh",
   "install-transactional.sh",
@@ -844,24 +845,25 @@ async function main() {
     assertEqual(sha256(readFileSync(archivePath)), archiveSha256, "Direct lock drift overwrote the good ZIP");
 
     const transitiveTamper = JSON.parse(originalShareLockText);
-    transitiveTamper.packages["node_modules/accepts"].integrity = "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    transitiveTamper.packages["node_modules/@modelcontextprotocol/core"].integrity =
+      "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
     writeFileSync(disposableShareLockPath, `${JSON.stringify(transitiveTamper, null, 2)}\n`);
     expectFailure(
       process.execPath,
       ["package-for-friend.js"],
       buildRoot,
-      /record drifted.*node_modules\/accepts/,
+      /record drifted.*node_modules\/@modelcontextprotocol\/core/,
     );
     assertEqual(sha256(readFileSync(archivePath)), archiveSha256, "Transitive lock drift overwrote the good ZIP");
 
     const dependencyEdgeTamper = JSON.parse(originalShareLockText);
-    dependencyEdgeTamper.packages["node_modules/accepts"].dependencies.negotiator = "9.9.9";
+    dependencyEdgeTamper.packages["node_modules/@modelcontextprotocol/core"].dependencies.zod = "9.9.9";
     writeFileSync(disposableShareLockPath, `${JSON.stringify(dependencyEdgeTamper, null, 2)}\n`);
     expectFailure(
       process.execPath,
       ["package-for-friend.js"],
       buildRoot,
-      /record drifted.*node_modules\/accepts/,
+      /record drifted.*node_modules\/@modelcontextprotocol\/core/,
     );
     assertEqual(sha256(readFileSync(archivePath)), archiveSha256, "Dependency-edge drift overwrote the good ZIP");
 
@@ -1046,6 +1048,16 @@ async function main() {
     }
 
     assertEqual(sharePackage.dependencies["pdfjs-dist"], "5.4.624", "pdfjs-dist manifest pin changed");
+    assertEqual(
+      sharePackage.dependencies["@modelcontextprotocol/sdk"],
+      undefined,
+      "Share runtime must not depend on the monolithic SDK",
+    );
+    assertEqual(
+      shareLock.packages["node_modules/@modelcontextprotocol/core"]?.version,
+      PROTECTED_MCP_CORE_VERSION,
+      "Protected locked MCP core changed",
+    );
     for (const [dependencyName, expectedVersion] of Object.entries(PROTECTED_DIRECT_DEPENDENCIES)) {
       assertEqual(
         shareLock.packages[`node_modules/${dependencyName}`]?.version,
@@ -1053,7 +1065,6 @@ async function main() {
         `Protected locked dependency ${dependencyName} changed`,
       );
     }
-
     testTransactionalFailurePaths(sourcePackageRoot, tempRoot);
     testSuccessfulWrapperConfigs(sourcePackageRoot, tempRoot);
     if (process.platform === "win32") {
@@ -1094,6 +1105,15 @@ async function main() {
      * compared without the generator in between.
      */
     const licenceCheck = assertShippedLicencesMatchInstalledTree(sbom, packageRoot);
+    const installedMcpCore = JSON.parse(readFileSync(
+      path.join(packageRoot, "node_modules/@modelcontextprotocol/core/package.json"),
+      "utf8",
+    ));
+    assertEqual(
+      installedMcpCore.version,
+      PROTECTED_MCP_CORE_VERSION,
+      "Installed MCP core drifted from the reviewed lock",
+    );
 
     const client = new Client({ name: "pdf-tools-isolated-share-contract", version: "1.0.0" });
     transport = new StdioClientTransport({

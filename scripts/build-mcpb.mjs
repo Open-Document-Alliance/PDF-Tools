@@ -48,6 +48,8 @@ import { generateCycloneDxSbom } from "../package-for-friend.js";
 export { isForbiddenArchivePath } from "./mcpb-packaging-policy.mjs";
 export { QPDF_WASM_RUNTIME_FILES } from "./qpdf-wasm-runtime.mjs";
 
+import { SKILL_FILES } from "../server/skills.js";
+
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const CMAP_ORACLE_PROVENANCE = JSON.parse(readFileSync(
@@ -59,6 +61,9 @@ const DEFAULT_OUTPUT = path.join(REPO_ROOT, "pdf-toolkit-mcp.mcpb");
 export const SBOM_FILENAME = "SBOM.cdx.json";
 const MCPB_VERSION = "2.1.2";
 const FFLATE_VERSION = "0.8.3";
+const MCP_SERVER_VERSION = "2.0.0";
+const MCP_CORE_VERSION = "2.0.0";
+const MCP_V1_DEV_VERSION = "1.30.0";
 const PROTECTED_PDFJS_VERSION = "5.4.624";
 /*
  * Every module the production archive stages under `server/`. This is an
@@ -96,6 +101,7 @@ export const SERVER_FILES = [
   "qpdf-decrypt-worker.js",
   "qpdf-decrypt.js",
   "resource-uri.js",
+  "skills.js",
   "stderr-suppression.js",
   "table-proposal-verification.js",
   "type3-cm-pk-reference.js",
@@ -104,6 +110,7 @@ export const SERVER_FILES = [
 ];
 export { VERIFIED_EXTRACTION_RUNTIME_FILES } from "./mcpb-packaging-policy.mjs";
 const FIRST_PARTY_TEXT_FILES = [
+  ...SKILL_FILES,
   ...SERVER_FILES.map(filename => `server/${filename}`),
   ...VERIFIED_EXTRACTION_RUNTIME_FILES,
   "dist-ui/index.html",
@@ -237,6 +244,7 @@ function copyRegularFile(sourceRelativePath, destinationRelativePath, stagingDir
 
 function copyRuntimeSource(stagingDir) {
   scanFirstPartyInputs();
+  for (const filename of SKILL_FILES) copyRegularFile(filename, filename, stagingDir);
   for (const filename of SERVER_FILES) copyRegularFile(`server/${filename}`, `server/${filename}`, stagingDir);
   for (const filename of VERIFIED_EXTRACTION_RUNTIME_FILES) {
     copyRegularFile(filename, filename, stagingDir);
@@ -274,6 +282,8 @@ export function verifyLockedTooling(repoRoot = REPO_ROOT) {
   const lock = JSON.parse(readFileSync(path.join(repoRoot, "package-lock.json"), "utf8"));
   const installedMcpb = JSON.parse(readFileSync(path.join(repoRoot, "node_modules/@anthropic-ai/mcpb/package.json"), "utf8"));
   const installedFflate = JSON.parse(readFileSync(path.join(repoRoot, "node_modules/fflate/package.json"), "utf8"));
+  const installedMcpServer = JSON.parse(readFileSync(path.join(repoRoot, "node_modules/@modelcontextprotocol/server/package.json"), "utf8"));
+  const installedMcpCore = JSON.parse(readFileSync(path.join(repoRoot, "node_modules/@modelcontextprotocol/core/package.json"), "utf8"));
   if (lock.packages?.["node_modules/@anthropic-ai/mcpb"]?.version !== MCPB_VERSION || installedMcpb.version !== MCPB_VERSION) {
     throw new Error(`Canonical build requires locked and installed @anthropic-ai/mcpb@${MCPB_VERSION}`);
   }
@@ -286,6 +296,19 @@ export function verifyLockedTooling(repoRoot = REPO_ROOT) {
   }
   if (lock.packages?.[""]?.dependencies?.["pdfjs-dist"] !== PROTECTED_PDFJS_VERSION) {
     throw new Error(`pdfjs-dist must remain exactly ${PROTECTED_PDFJS_VERSION}`);
+  }
+  if (
+    lock.packages?.[""]?.dependencies?.["@modelcontextprotocol/server"] !== MCP_SERVER_VERSION ||
+    lock.packages?.[""]?.devDependencies?.["@modelcontextprotocol/sdk"] !== MCP_V1_DEV_VERSION ||
+    lock.packages?.["node_modules/@modelcontextprotocol/server"]?.version !== MCP_SERVER_VERSION ||
+    lock.packages?.["node_modules/@modelcontextprotocol/core"]?.version !== MCP_CORE_VERSION ||
+    installedMcpServer.version !== MCP_SERVER_VERSION ||
+    installedMcpCore.version !== MCP_CORE_VERSION
+  ) {
+    throw new Error(
+      `Canonical build requires production @modelcontextprotocol/server@${MCP_SERVER_VERSION} ` +
+      `with @modelcontextprotocol/core@${MCP_CORE_VERSION} and dev-only SDK v1@${MCP_V1_DEV_VERSION}`,
+    );
   }
   verifyCanvasLockGraph(lock);
 }
@@ -989,6 +1012,7 @@ function verifyStagedProductionGraph(stagingDir, packages) {
     "package.json",
     SBOM_FILENAME,
     "server/index.js",
+    ...SKILL_FILES,
     ...VERIFIED_EXTRACTION_RUNTIME_FILES,
     "dist-ui/index.html",
     "node_modules/pdfjs-dist/legacy/build/pdf.mjs",
@@ -1050,6 +1074,30 @@ function verifyStagedProductionGraph(stagingDir, packages) {
   const runtimePackage = JSON.parse(readFileSync(path.join(stagingDir, "package.json"), "utf8"));
   if (runtimePackage.dependencies?.["pdfjs-dist"] !== PROTECTED_PDFJS_VERSION) {
     throw new Error(`Staged pdfjs-dist must remain exactly ${PROTECTED_PDFJS_VERSION}`);
+  }
+  if (
+    runtimePackage.dependencies?.["@modelcontextprotocol/server"] !== MCP_SERVER_VERSION ||
+    runtimePackage.dependencies?.["@modelcontextprotocol/sdk"] !== undefined
+  ) {
+    throw new Error(
+      `Staged MCPB must use @modelcontextprotocol/server@${MCP_SERVER_VERSION} without the monolithic SDK`,
+    );
+  }
+  const stagedMcpServer = JSON.parse(readFileSync(
+    path.join(stagingDir, "node_modules/@modelcontextprotocol/server/package.json"),
+    "utf8",
+  ));
+  const stagedMcpCore = JSON.parse(readFileSync(
+    path.join(stagingDir, "node_modules/@modelcontextprotocol/core/package.json"),
+    "utf8",
+  ));
+  if (
+    stagedMcpServer.version !== MCP_SERVER_VERSION ||
+    stagedMcpCore.version !== MCP_CORE_VERSION
+  ) {
+    throw new Error(
+      `Staged MCPB requires exact server/core ${MCP_SERVER_VERSION}/${MCP_CORE_VERSION}`,
+    );
   }
   return { expected, packagedNativeAssetPaths };
 }

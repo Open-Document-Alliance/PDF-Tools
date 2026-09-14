@@ -477,8 +477,10 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(29);
+    expect(mirrored).toHaveLength(30);
     for (const relativePath of [
+      "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
+      "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",
       "scripts/eval-strict-json.mjs",
       "scripts/verified-extraction-proposal.mjs",
       "scripts/verified-extraction-workspace.mjs",
@@ -864,18 +866,30 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
 
     const missingUri = pathToPdfResourceUri(path.join(stateRoot, "missing.pdf"));
     const missing = await captureMcpError(() => client.readResource({ uri: missingUri }));
-    expect(missing).toMatchObject({ code: -32002 });
+    expect(missing).toMatchObject({
+      code: -32602,
+      message: expect.stringContaining("PDF resource not found"),
+      data: { uri: missingUri },
+    });
 
     const directoryPath = path.join(stateRoot, "not-a-pdf-file");
     await fs.mkdir(directoryPath);
     const unavailable = await captureMcpError(() => client.readResource({
       uri: pathToPdfResourceUri(directoryPath),
     }));
-    expect(unavailable).toMatchObject({ code: -32002 });
+    expect(unavailable).toMatchObject({
+      code: -32602,
+      message: expect.stringContaining("PDF resource not found"),
+      data: { uri: pathToPdfResourceUri(directoryPath) },
+    });
 
     const disallowedUri = pathToPdfResourceUri(path.join(path.parse(REPO_ROOT).root, "not-allowed.pdf"));
     const disallowed = await captureMcpError(() => client.readResource({ uri: disallowedUri }));
-    expect(disallowed).toMatchObject({ code: -32002 });
+    expect(disallowed).toMatchObject({
+      code: -32602,
+      message: expect.stringContaining("PDF resource not found"),
+      data: { uri: disallowedUri },
+    });
   });
 
   it("marks tool execution failures with isError", async () => {

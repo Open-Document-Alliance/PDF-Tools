@@ -1,8 +1,6 @@
 # MCP discovery contract
 
-PDF Tools targets MCP `2025-11-25` through the stable TypeScript SDK 1.x and
-MCPB manifest format `0.3`. The server intentionally exposes the same protocol
-surfaces from the source checkout, the packed MCPB, and the share package.
+PDF Tools serves MCP `2025-11-25` and `2026-07-28` through the stable TypeScript SDK 2.0.0 and MCPB manifest format `0.3`. The official `serveStdio` entry selects the protocol era from the opening exchange and pins it for the connection. Modern connections use `server/discover` and per-request metadata; legacy hosts keep the `initialize` lifecycle. Both eras expose the same tools and prompts. Source, MCPB, and share builds use the same runtime. SDK 1.30.0 remains a development dependency for legacy clients and the Apps 1.7.5 viewer build.
 
 Primary references:
 
@@ -11,6 +9,14 @@ Primary references:
 - [MCP resources](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
 - [MCP tools](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
 - [MCPB manifest 0.3](https://github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md)
+
+## Native Skills
+
+Modern connections declare `io.modelcontextprotocol/skills: {}` alongside `resources: {}` and implement `skills/list`, `skills/get`, and standard `resources/read`. The entry URI is `skill://pdf-tools-workflow/SKILL.md`. Its complete file manifest contains the authored workflow and `agents/openai.yaml`, with SHA-256 digests and byte lengths computed from the exact served bytes. Frontmatter is parsed as YAML without dropping author fields. Each connection reads one immutable snapshot. A read transports instructions; host skill activation, consent, and verification remain host responsibilities.
+
+The file list is an explicit bundled allowlist, independent of user PDF folders. URI lookup is exact: unknown paths, traversal spellings, query strings, and fragments fail with invalid params. Discovery issues no cursors and rejects supplied cursors. Skill discovery and reads use private, zero-TTL cache policy. Optional directory reading and change notifications are not declared. Legacy sessions retain their existing resource catalog and plugin installation fallback without advertising this modern extension.
+
+Both packaging paths include the exact authored files and verify source/share parity. Native host support still requires qualification against the exact MCPB; successful automated stdio tests do not establish desktop activation or rendering. See the [accepted Skills specification](https://github.com/modelcontextprotocol/ext-skills/blob/main/specification/stable/skills.mdx).
 
 ## Advertised surfaces
 
@@ -363,7 +369,7 @@ Windows-drive, UNC, Unicode, and RFC 3986 reserved characters without allowing
 URI query/fragment ambiguity. `resources/read` re-applies the allowlist before
 returning the PDF as an `application/pdf` blob. Schema-valid string URIs that
 do not match a supported resource form return `-32602`; missing or
-expected-permission-unavailable resources return `-32002`. Inputs rejected by
+expected-permission-unavailable resources return `-32602`. Inputs rejected by
 the SDK before the handler runs can use the SDK's own protocol-error mapping.
 Genuine filesystem/runtime faults remain `-32603` instead of being mislabeled
 as a missing resource.

@@ -25,6 +25,7 @@ const FORBIDDEN_ARCHIVE_PREFIXES = Object.freeze([
   "node_modules/vitest/",
   "node_modules/@vitest/",
   "node_modules/@modelcontextprotocol/ext-apps/",
+  "node_modules/@modelcontextprotocol/sdk/",
   "node_modules/@esbuild/",
   "node_modules/@rollup/",
   "node_modules/rollup/",

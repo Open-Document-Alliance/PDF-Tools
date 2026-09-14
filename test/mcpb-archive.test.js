@@ -327,6 +327,8 @@ describe("canonical MCPB archive", () => {
   it("fails closed when the installed canonical tooling drifts from the lock", () => {
     const root = temporaryRoot();
     mkdirSync(path.join(root, "node_modules", "@anthropic-ai", "mcpb"), { recursive: true });
+    mkdirSync(path.join(root, "node_modules", "@modelcontextprotocol", "core"), { recursive: true });
+    mkdirSync(path.join(root, "node_modules", "@modelcontextprotocol", "server"), { recursive: true });
     mkdirSync(path.join(root, "node_modules", "fflate"), { recursive: true });
     writeFileSync(
       path.join(root, "package-lock.json"),
@@ -337,9 +339,28 @@ describe("canonical MCPB archive", () => {
       dependencies: { fflate: "^0.8.2" },
     }));
     const fflatePackage = path.join(root, "node_modules", "fflate", "package.json");
+    const mcpCorePackage = path.join(
+      root,
+      "node_modules",
+      "@modelcontextprotocol",
+      "core",
+      "package.json",
+    );
+    const mcpServerPackage = path.join(
+      root,
+      "node_modules",
+      "@modelcontextprotocol",
+      "server",
+      "package.json",
+    );
     writeFileSync(fflatePackage, JSON.stringify({ version: "0.8.3" }));
+    writeFileSync(mcpCorePackage, JSON.stringify({ version: "2.0.0" }));
+    writeFileSync(mcpServerPackage, JSON.stringify({ version: "2.0.0" }));
     expect(() => verifyLockedTooling(root)).not.toThrow();
     writeFileSync(fflatePackage, JSON.stringify({ version: "0.8.4" }));
     expect(() => verifyLockedTooling(root)).toThrow(/fflate@0\.8\.3/);
+    writeFileSync(fflatePackage, JSON.stringify({ version: "0.8.3" }));
+    writeFileSync(mcpCorePackage, JSON.stringify({ version: "2.0.1" }));
+    expect(() => verifyLockedTooling(root)).toThrow(/server@2\.0\.0.*core@2\.0\.0/);
   });
 });

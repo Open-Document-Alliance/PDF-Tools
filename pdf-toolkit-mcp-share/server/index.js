@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-  ListPromptsRequestSchema,
-  GetPromptRequestSchema,
-  ErrorCode,
-  McpError,
-} from "@modelcontextprotocol/sdk/types.js";
+  ProtocolError as McpError,
+  ProtocolErrorCode as ErrorCode,
+  ResourceNotFoundError,
+  Server,
+} from "@modelcontextprotocol/server";
+import { loadSkills, skillParams, SKILLS_EXTENSION } from "./skills.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import {
   PDFArray,
   PDFCatalog,
@@ -45,6 +41,7 @@ import {
   pdfResourceUriToPath,
 } from "./resource-uri.js";
 import {
+  TOOL_OUTPUT_SCHEMAS,
   createTypedToolError,
   validateStructuredToolResult,
   withToolOutputSchema,
@@ -1509,7 +1506,6 @@ function parseListOffset(rawOffset) {
 // and every ZWJ emoji sequence are refused. Fixing that means narrowing this
 // range, not widening it, and needs its own change with its own evidence.
 const PROMPT_ARGUMENT_UNSAFE_CONTROLS = /[\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/u;
-const RESOURCE_NOT_FOUND_ERROR_CODE = -32002;
 
 function validatedPromptArguments(prompt, suppliedArguments = {}) {
   const expectedArguments = new Set(prompt.arguments);
@@ -1611,20 +1607,6 @@ function rejectUnissuedCursor(request, method) {
     );
   }
 }
-
-const server = new Server(
-  {
-    name: "pdf-tools",
-    version: "0.13.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
-      prompts: {},
-    },
-  }
-);
 
 // Default directories - use environment variables from manifest or fallback to defaults
 // Defensive env read — if Claude Desktop couldn't substitute a user_config
@@ -3572,7 +3554,7 @@ function passwordlessReadError(error) {
 }
 
 // List available tools
-server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+async function listTools(request) {
   rejectUnissuedCursor(request, "tools/list");
   return {
     tools: [
@@ -5025,7 +5007,7 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
       ...VERIFIED_EXTRACTION_TOOL_DEFINITIONS,
     ].map(withToolOutputSchema),
   };
-});
+}
 
 // Handle tool calls
 async function handleToolCall(request) {
@@ -8164,12 +8146,12 @@ async function handleToolCall(request) {
   }
 }
 
-server.setRequestHandler(CallToolRequestSchema, async (request) =>
-  validateStructuredToolResult(request.params.name, await handleToolCall(request))
-);
+async function callTool(request) {
+  return validateStructuredToolResult(request.params.name, await handleToolCall(request));
+}
 
 // Resource handlers for PDFs
-server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+async function listResources(request) {
   rejectUnissuedCursor(request, "resources/list");
   console.error(`[Resources] ListResourcesRequest received`);
   return {
@@ -8181,9 +8163,9 @@ server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
       }
     ]
   };
-});
+}
 
-server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+async function readResource(request) {
   const { uri } = request.params;
   console.error(`[Resources] ReadResourceRequest for URI: ${uri}`);
 
@@ -8221,7 +8203,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     }
     resolvedPath = resolvePath(pdfPath);
   } catch {
-    throw new McpError(RESOURCE_NOT_FOUND_ERROR_CODE, "PDF resource not found", { uri });
+    throw new ResourceNotFoundError(uri, "PDF resource not found");
   }
   console.error(`[Resources] Reading PDF from path: ${pdfPath} -> ${resolvedPath}`);
   
@@ -8246,13 +8228,13 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   } catch (error) {
     console.error(`[Resources] Error reading PDF: ${error.message}`);
     if (isUnavailableResourceError(error)) {
-      throw new McpError(RESOURCE_NOT_FOUND_ERROR_CODE, "PDF resource not found", { uri });
+      throw new ResourceNotFoundError(uri, "PDF resource not found");
     }
     throw error;
   }
-});
+}
 
-server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+async function listPrompts(request) {
   rejectUnissuedCursor(request, "prompts/list");
   return {
     prompts: PROMPT_TEMPLATES.map(prompt => ({
@@ -8263,9 +8245,9 @@ server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
       } : {}),
     })),
   };
-});
+}
 
-server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+async function getPrompt(request) {
   const prompt = PROMPT_TEMPLATES.find(candidate => candidate.name === request.params.name);
   if (!prompt) {
     throw new McpError(ErrorCode.InvalidParams, `Unknown prompt: ${request.params.name}`);
@@ -8281,7 +8263,48 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
       },
     }],
   };
-});
+}
+
+function buildPdfToolsServer({ era }) {
+  const skills = era === "modern" ? loadSkills() : null;
+  const server = new Server(
+    {
+      name: "pdf-tools",
+      version: "0.13.0",
+    },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+        prompts: {},
+        ...(skills ? { extensions: { [SKILLS_EXTENSION]: {} } } : {}),
+      },
+    },
+  );
+
+  server.setRequestHandler("tools/list", listTools);
+  server.setRequestHandler("tools/call", async (request) =>
+    server.projectCallToolResult(
+      await callTool(request),
+      TOOL_OUTPUT_SCHEMAS[request.params.name],
+    ));
+  server.setRequestHandler("resources/list", async request => {
+    const result = await listResources(request);
+    if (skills) result.resources.push(...skills.resources());
+    return result;
+  });
+  server.setRequestHandler("resources/read", request => {
+    if (skills && request.params.uri.startsWith("skill:")) return skills.read(request.params.uri);
+    return readResource(request);
+  });
+  if (skills) {
+    server.setRequestHandler("skills/list", { params: skillParams("list") }, () => skills.list());
+    server.setRequestHandler("skills/get", { params: skillParams("get") }, params => skills.get(params.uri));
+  }
+  server.setRequestHandler("prompts/list", listPrompts);
+  server.setRequestHandler("prompts/get", getPrompt);
+  return server;
+}
 
 // Initialize and start the server
 async function main() {
@@ -8315,9 +8338,15 @@ async function main() {
     // Old directory doesn't exist — nothing to migrate
   }
 
-  // Start the server
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // Start one era-pinned server instance per stdio connection. The factory is
+  // side-effect free because a modern discovery probe may be discarded before
+  // a legacy instance is pinned.
+  serveStdio(buildPdfToolsServer, {
+    legacy: "serve",
+    onerror(error) {
+      console.error(`[PDF Tools] MCP transport error: ${error.message}`);
+    },
+  });
 
   console.error("PDF Tools MCP server running...");
 }

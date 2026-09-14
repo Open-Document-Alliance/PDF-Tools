@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import {
   TOOL_OUTPUT_SCHEMAS,
   TOOL_ERROR_OUTPUT_SCHEMAS,

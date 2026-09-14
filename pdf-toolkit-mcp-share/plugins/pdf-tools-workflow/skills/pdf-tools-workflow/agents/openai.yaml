@@ -1,0 +1,4 @@
+interface:
+  display_name: "PDF Tools Workflow"
+  short_description: "Evidence-first workflows for PDF Tools"
+  default_prompt: "Use $pdf-tools-workflow to inspect, compare, plan, authorize, transform, validate, and return these PDFs safely."
