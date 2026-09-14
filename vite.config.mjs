@@ -37,6 +37,8 @@ export default defineConfig(({ command, mode }) => ({
         extends: true,
         test: {
           name: "ordinary",
+          maxWorkers: 1,
+          fileParallelism: false,
           root: ".",
           exclude: [
             ...configDefaults.exclude,
