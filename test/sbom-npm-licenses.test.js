@@ -62,6 +62,10 @@ const sharePackage = JSON.parse(
 );
 const provenance = npmLicenseProvenance();
 const spdx = spdxLicenseList();
+const REQUIRED_RUNTIME_PACKAGES = [
+  "@modelcontextprotocol/server", "@modelcontextprotocol/core",
+  "@napi-rs/canvas", "pdf-lib", "pdfjs-dist", "yaml",
+];
 const sbom = generateCycloneDxSbom(shareLock, sharePackage);
 
 /** The production graph: what is inside a shipped artifact, from the lock. */
@@ -113,7 +117,8 @@ describe("every locked package owes licence evidence, and the lock says which", 
     const expected = new Set(productionEntries
       .map(([packagePath, lockedPackage]) =>
         npmLicenseKey(packageNameFromLockPath(packagePath), lockedPackage.version)));
-    expect(expected.size).toBeGreaterThan(50);
+    expect(productionEntries.map(([packagePath]) => packageNameFromLockPath(packagePath)))
+      .toEqual(expect.arrayContaining(REQUIRED_RUNTIME_PACKAGES));
     expect([...Object.keys(provenance.packages)].sort()).toEqual([...expected].sort());
   });
 
@@ -150,7 +155,8 @@ describe("the committed record agrees with the code installed on this machine", 
     !existsSync(path.join(REPO_ROOT, ...packagePath.split("/"), "package.json")));
 
   it("re-derives what every installed package declares, and finds the record already says it", () => {
-    expect(installable.length).toBeGreaterThan(50);
+    expect(installable.map(([packagePath]) => packageNameFromLockPath(packagePath)))
+      .toEqual(expect.arrayContaining(REQUIRED_RUNTIME_PACKAGES));
     let checked = 0;
     for (const [packagePath, lockedPackage] of installable) {
       const manifestPath = path.join(REPO_ROOT, ...packagePath.split("/"), "package.json");
@@ -194,7 +200,10 @@ describe("the committed record agrees with the code installed on this machine", 
         checked += 1;
       }
     }
-    expect(checked).toBeGreaterThan(50);
+    // Every recorded licence file for an installable package must be read;
+    // dependency pruning must not turn this into an arbitrary size threshold.
+    expect(checked).toBe(installable.reduce((total, [packagePath, lockedPackage]) =>
+      total + evidenceFor(packagePath, lockedPackage).license_files.length, 0));
   });
 });
 
@@ -422,10 +431,10 @@ describe("a dependency cannot change without the licence evidence following", ()
     // wherever it does it is a source this record did not read. Editing the
     // record to say something else has to fail against it.
     const sdkKey = npmLicenseKey(
-      "@modelcontextprotocol/sdk",
-      shareLock.packages["node_modules/@modelcontextprotocol/sdk"].version,
+      "@modelcontextprotocol/server",
+      shareLock.packages["node_modules/@modelcontextprotocol/server"].version,
     );
-    expect(shareLock.packages["node_modules/@modelcontextprotocol/sdk"].license).toBeTruthy();
+    expect(shareLock.packages["node_modules/@modelcontextprotocol/server"].license).toBeTruthy();
     const tampered = structuredClone(provenance);
     tampered.packages[sdkKey].declared = "Apache-2.0";
     expect(() => verifyNpmLicenseProvenanceCoverage(shareLock, tampered))

@@ -37,11 +37,11 @@ async function nestedSystemWorker() {
   const rendererInfoPath = path.join(root, "renderer.json");
   await fs.writeFile(rendererPath, `
 import fs from "node:fs";
+process.on("SIGTERM", () => {});
 fs.writeFileSync(process.argv[2], JSON.stringify({
   pid: process.pid,
   cwd: process.cwd(),
 }));
-process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
 `, { mode: 0o600 });
   const moduleUrl = pathToFileURL(
@@ -614,19 +614,27 @@ process.stdout.write(${JSON.stringify(success())});
   it("reaps a nested system renderer during parent deadline escalation", async () => {
     if (process.platform === "win32") return;
     const { rendererInfoPath, workerPath } = await nestedSystemWorker();
-    await expect(runPdfjsSubprocess(request(), {
-      timeoutMs: 500,
+    // Allow worker imports and the nested Node process to start, then prove
+    // the stubborn renderer is alive before the real parent deadline fires.
+    const operation = runPdfjsSubprocess(request(), {
+      timeoutMs: 5_000,
       workerPath,
-    })).rejects.toMatchObject({
-      code: PDF_RESOURCE_LIMIT_CODE,
-      reason: "wall_timeout",
-    });
-    const renderer = JSON.parse(await fs.readFile(rendererInfoPath, "utf8"));
-    expect(() => process.kill(renderer.pid, 0)).toThrow(
-      expect.objectContaining({ code: "ESRCH" }),
-    );
-    await expect(fs.access(renderer.cwd)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+    }).then(value => ({ value }), error => ({ error }));
+    try {
+      const renderer = JSON.parse(await waitForFile(rendererInfoPath, 2_000));
+      expect(() => process.kill(renderer.pid, 0)).not.toThrow();
+      expect(await operation).toMatchObject({
+        error: { code: PDF_RESOURCE_LIMIT_CODE, reason: "wall_timeout" },
+      });
+      expect(() => process.kill(renderer.pid, 0)).toThrow(
+        expect.objectContaining({ code: "ESRCH" }),
+      );
+      await expect(fs.access(renderer.cwd)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      // A failed readiness assertion must not race afterEach's directory cleanup.
+      await operation;
+    }
+  }, 10_000);
 
   it("reaps a nested system renderer during graceful server shutdown", async () => {
     if (process.platform === "win32") return;

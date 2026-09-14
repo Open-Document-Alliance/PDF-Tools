@@ -49,7 +49,8 @@ export default defineConfig(({ command, mode }) => ({
           ],
           pool: "forks",
           isolate: true,
-          sequence: { groupOrder: 0 },
+          // Vitest reserves zero for its trailing single-worker group.
+          sequence: { groupOrder: 1 },
         },
       },
       {
@@ -69,7 +70,7 @@ export default defineConfig(({ command, mode }) => ({
           isolate: true,
           fileParallelism: false,
           maxWorkers: 1,
-          sequence: { groupOrder: 1 },
+          sequence: { groupOrder: 2 },
         },
       },
       {
@@ -86,7 +87,7 @@ export default defineConfig(({ command, mode }) => ({
           isolate: true,
           fileParallelism: false,
           maxWorkers: 1,
-          sequence: { groupOrder: 2 },
+          sequence: { groupOrder: 3 },
         },
       },
       {
@@ -107,7 +108,7 @@ export default defineConfig(({ command, mode }) => ({
           isolate: true,
           fileParallelism: false,
           maxWorkers: 1,
-          sequence: { groupOrder: 3 },
+          sequence: { groupOrder: 4 },
         },
       },
     ],

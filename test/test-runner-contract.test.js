@@ -198,7 +198,7 @@ function localImportTargets({
   return targetsForFile;
 }
 
-async function localImportGraph(sourceFiles) {
+function localImportGraph(sourceFiles, evidenceByFile) {
   const graph = new Map(sourceFiles.map(file => [file, new Set()]));
   const sourceFileSet = new Set(sourceFiles);
   const nonExecutableReferences = new Set(
@@ -206,8 +206,7 @@ async function localImportGraph(sourceFiles) {
       `${entry.file}\0${entry.target}`),
   );
   for (const file of sourceFiles) {
-    const source = await fs.readFile(path.join(repoRoot, file), "utf8");
-    const evidence = extractModuleLoadEvidence(source, { filename: file });
+    const evidence = evidenceByFile.get(file);
     graph.set(file, localImportTargets({
       evidence,
       file,
@@ -400,7 +399,14 @@ describe("aggregate test-runner contract", () => {
     await visit(path.join(repoRoot, "test"));
 
     const allSourceFiles = await findJavaScriptSourceFiles(repoRoot);
-    const graph = await localImportGraph(allSourceFiles);
+    // One fresh parse per source for this test: graph and computed-load checks
+    // must inspect the same bytes without retaining a cross-test snapshot.
+    const evidenceByFile = new Map();
+    for (const file of allSourceFiles) {
+      const source = await fs.readFile(path.join(repoRoot, file), "utf8");
+      evidenceByFile.set(file, extractModuleLoadEvidence(source, { filename: file }));
+    }
+    const graph = localImportGraph(allSourceFiles, evidenceByFile);
     const binderFiles = REAL_CHECKOUT_SOURCE_IDENTITY_BINDERS.map(entry => entry.file);
     const closureFiles = [
       ...binderFiles,
@@ -475,8 +481,7 @@ describe("aggregate test-runner contract", () => {
 
     const discoveredComputedLoads = [];
     for (const file of allSourceFiles) {
-      const source = await fs.readFile(path.join(repoRoot, file), "utf8");
-      const computed = extractModuleLoadEvidence(source, { filename: file })
+      const computed = evidenceByFile.get(file)
         .moduleLoads.filter(entry => entry.literal === null);
       if (computed.length > 0) {
         discoveredComputedLoads.push({
@@ -559,7 +564,7 @@ describe("aggregate test-runner contract", () => {
     expect(byName.get("ordinary")).toMatchObject({
       pool: "forks",
       isolate: true,
-      sequence: { groupOrder: 0 },
+      sequence: { groupOrder: 1 },
     });
     expect(byName.get("ordinary")?.exclude).toEqual([
       ...configDefaults.exclude,
@@ -574,7 +579,7 @@ describe("aggregate test-runner contract", () => {
       isolate: true,
       fileParallelism: false,
       maxWorkers: 1,
-      sequence: { groupOrder: 1 },
+      sequence: { groupOrder: 2 },
     });
     expect(byName.get("source-identity")).toMatchObject({
       include: SOURCE_IDENTITY_TEST_FILES,
@@ -582,7 +587,7 @@ describe("aggregate test-runner contract", () => {
       isolate: true,
       fileParallelism: false,
       maxWorkers: 1,
-      sequence: { groupOrder: 2 },
+      sequence: { groupOrder: 3 },
     });
     // Resource-sensitive native and embedded-host suites must have the host to
     // themselves: exclusive worker, no file parallelism, and the last group so
@@ -593,7 +598,7 @@ describe("aggregate test-runner contract", () => {
       isolate: true,
       fileParallelism: false,
       maxWorkers: 1,
-      sequence: { groupOrder: 3 },
+      sequence: { groupOrder: 4 },
     });
     const orders = projects.map(project => project.test?.sequence?.groupOrder);
     expect(new Set(orders).size).toBe(orders.length);
