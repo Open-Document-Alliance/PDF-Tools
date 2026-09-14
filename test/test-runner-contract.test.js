@@ -25,10 +25,12 @@ import {
 import { parseNodeTestArguments } from "../scripts/run-node-test-suites.mjs";
 import {
   CHECKOUT_LOCAL_MUTATING_TEST_SUITES,
+  DIRECT_CHECKOUT_LOCAL_SCRATCH_ALLOCATORS,
   NON_EXECUTABLE_SOURCE_IDENTITY_REFERENCES,
   REAL_CHECKOUT_SOURCE_IDENTITY_BINDERS,
   REVIEWED_COMPUTED_MODULE_LOADS,
   SERIAL_NATIVE_TEST_FILES,
+  SERIAL_NATIVE_TEST_SUITES,
   SERIAL_RESOURCE_TEST_FILES,
   SERIAL_RESOURCE_TEST_SUITES,
   SOURCE_IDENTITY_TEST_FILES,
@@ -76,6 +78,107 @@ async function findNodeTestFiles(directory = path.join(repoRoot, "test")) {
     matches.push(path.relative(repoRoot, absolutePath).split(path.sep).join("/"));
   }
   return matches.sort();
+}
+
+const TEST_FILE_PATTERN = /\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/;
+
+/*
+ * Vitest globs `**\/*.{test,spec}.?(c|m)[jt]s?(x)` from the project root and
+ * drops `**\/node_modules/**` and `**\/.git/**`. This walk reproduces exactly
+ * that, from the repository root rather than from `test/`, so the partition
+ * check below sees every file Vitest itself would see. Build output is
+ * deliberately still walked: a suite dropped into `dist-ui` or `coverage` is a
+ * file Vitest would try to run, so it is a file this contract has to account
+ * for.
+ *
+ * The one exception is the checkout-local scratch prefix from
+ * DIRECT_CHECKOUT_LOCAL_SCRATCH_ALLOCATORS. Those roots exist only while a
+ * suite is running, so Vitest's own glob - taken once at startup - never sees
+ * them, and walking one that a sibling is deleting is how this becomes a
+ * mysterious ENOENT instead of a partition report.
+ */
+const CHECKOUT_LOCAL_SCRATCH_PREFIX = ".test-tmp-";
+
+async function findRepositoryTestFiles(directory = repoRoot) {
+  const matches = [];
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return matches;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      if (entry.name.startsWith(CHECKOUT_LOCAL_SCRATCH_PREFIX)) continue;
+      matches.push(...await findRepositoryTestFiles(path.join(directory, entry.name)));
+      continue;
+    }
+    if (!entry.isFile() || !TEST_FILE_PATTERN.test(entry.name)) continue;
+    matches.push(
+      path.relative(repoRoot, path.join(directory, entry.name)).split(path.sep).join("/"),
+    );
+  }
+  return matches.sort();
+}
+
+const VITEST_DEFAULT_EXCLUDES = new Set(configDefaults.exclude);
+const GLOB_METACHARACTERS = /[*?[\]{}()!]/;
+
+/*
+ * Vitest's own defaults are dropped rather than matched: both of them exclude a
+ * directory the walk above never enters, so they can only ever remove nothing.
+ * Everything else has to be a literal repository-relative path, which is what
+ * the registries in scripts/test-suite-classification.mjs are made of. A
+ * pattern that is neither fails here loudly instead of being silently resolved
+ * to the empty set, which would make the partition check pass by claiming
+ * nothing.
+ */
+function literalPatterns(patterns, label) {
+  const literals = [];
+  for (const pattern of patterns) {
+    if (VITEST_DEFAULT_EXCLUDES.has(pattern)) continue;
+    if (GLOB_METACHARACTERS.test(pattern)) {
+      throw new Error(`${label} is not a literal repository path: ${pattern}`);
+    }
+    literals.push(pattern);
+  }
+  return literals;
+}
+
+/*
+ * Resolves which project would actually claim each discovered suite, from the
+ * built config on one side and the filesystem on the other. Neither side is the
+ * registry the config imported, so unlike comparing `exclude` with the arrays
+ * that built it, this can disagree with the configuration.
+ *
+ * Returns the claiming project names per discovered file, plus every `include`
+ * entry that names no file on disk. That second list is the quiet failure: a
+ * renamed suite still listed in a registry is excluded from `ordinary` and then
+ * matched by nothing, so it runs in no project at all and reports no error.
+ */
+function resolveProjectClaims(projects, discovered) {
+  const claims = new Map(discovered.map(file => [file, []]));
+  const unmatchedIncludes = [];
+  for (const project of projects) {
+    const name = project.test?.name;
+    const excluded = new Set(
+      literalPatterns(project.test?.exclude ?? [], `project ${name} exclude`),
+    );
+    const included = project.test?.include === undefined
+      ? discovered
+      : literalPatterns(project.test.include, `project ${name} include`);
+    for (const file of included) {
+      if (!claims.has(file)) {
+        unmatchedIncludes.push({ project: name, file });
+        continue;
+      }
+      if (excluded.has(file)) continue;
+      claims.get(file).push(name);
+    }
+  }
+  return { claims, unmatchedIncludes };
 }
 
 const sourceExtensions = Object.freeze([
@@ -566,13 +669,14 @@ describe("aggregate test-runner contract", () => {
       isolate: true,
       sequence: { groupOrder: 1 },
     });
-    expect(byName.get("ordinary")?.exclude).toEqual([
-      ...configDefaults.exclude,
-      ...NODE_TEST_FILES,
-      ...SOURCE_IDENTITY_TEST_FILES,
-      ...SERIAL_RESOURCE_TEST_FILES,
-      ...SERIAL_NATIVE_TEST_FILES,
-    ]);
+    // `ordinary` is the catch-all: it declares no include of its own, so it
+    // claims every suite the exclusive projects do not. What its exclude list
+    // actually achieves is checked against the filesystem in the partition test
+    // below, not by restating the arrays the config imported to build it.
+    expect(byName.get("ordinary")?.include).toBeUndefined();
+    expect(projects.every(project =>
+      (project.test?.exclude ?? []).slice(0, configDefaults.exclude.length)
+        .join("\n") === configDefaults.exclude.join("\n"))).toBe(true);
     expect(byName.get("serial-resource")).toMatchObject({
       include: SERIAL_RESOURCE_TEST_FILES,
       pool: "forks",
@@ -624,10 +728,116 @@ describe("aggregate test-runner contract", () => {
     expect(new Set(SERIAL_RESOURCE_TEST_FILES).size).toBe(
       SERIAL_RESOURCE_TEST_FILES.length,
     );
-    expect(SERIAL_RESOURCE_TEST_FILES.every(file =>
-      !SOURCE_IDENTITY_TEST_FILES.includes(file)
-      && !SERIAL_NATIVE_TEST_FILES.includes(file)
-      && !NODE_TEST_FILES.includes(file))).toBe(true);
+    // Every registry needs an oracle that is not itself. SERIAL_RESOURCE has the
+    // literal list above and SOURCE_IDENTITY is derived from the import graph in
+    // the closure test; SERIAL_NATIVE had neither, so `include:
+    // SERIAL_NATIVE_TEST_FILES` above was checking the config against a value
+    // nothing else constrained.
+    expect(Object.isFrozen(SERIAL_NATIVE_TEST_SUITES)).toBe(true);
+    expect(Object.isFrozen(SERIAL_NATIVE_TEST_FILES)).toBe(true);
+    expect(SERIAL_NATIVE_TEST_FILES).toEqual([
+      "test/pdfjs-subprocess-boundary.test.js",
+      "test/eval/docling-macos-supervisor.test.js",
+    ]);
+    expect(SERIAL_NATIVE_TEST_SUITES.every(suite =>
+      Object.isFrozen(suite) && suite.reason.length > 0)).toBe(true);
+    expect(new Set(SERIAL_NATIVE_TEST_FILES).size).toBe(
+      SERIAL_NATIVE_TEST_FILES.length,
+    );
+
+    // Pairwise, in both directions. The previous version checked only what
+    // SERIAL_RESOURCE overlapped, so a file listed in both SOURCE_IDENTITY and
+    // SERIAL_NATIVE - which two projects would then both include - passed.
+    const registries = Object.entries({
+      NODE_TEST_FILES,
+      SOURCE_IDENTITY_TEST_FILES,
+      SERIAL_RESOURCE_TEST_FILES,
+      SERIAL_NATIVE_TEST_FILES,
+    });
+    const overlaps = [];
+    for (const [leftName, left] of registries) {
+      for (const [rightName, right] of registries) {
+        if (leftName >= rightName) continue;
+        for (const file of left) {
+          if (right.includes(file)) overlaps.push(`${leftName}+${rightName}: ${file}`);
+        }
+      }
+    }
+    expect(overlaps).toEqual([]);
+  });
+
+  it("assigns every discovered Vitest suite to exactly one project", async () => {
+    const config = viteConfigFactory({ command: "build", mode: "test" });
+    const projects = config.test.projects ?? [];
+    const discovered = await findRepositoryTestFiles();
+    const nativeFiles = new Set(NODE_TEST_FILES);
+    const { claims, unmatchedIncludes } = resolveProjectClaims(projects, discovered);
+
+    // The scratch prefix the walk skips has to be the prefix the allocators
+    // actually use, or the walk is skipping nothing and tolerating everything.
+    expect(DIRECT_CHECKOUT_LOCAL_SCRATCH_ALLOCATORS.length).toBeGreaterThan(0);
+    expect(DIRECT_CHECKOUT_LOCAL_SCRATCH_ALLOCATORS.every(allocator =>
+      allocator.prefix.startsWith(CHECKOUT_LOCAL_SCRATCH_PREFIX))).toBe(true);
+
+    // A registry entry naming no file on disk: the suite is excluded from
+    // `ordinary` and included by nothing, so it runs nowhere and says nothing.
+    expect(unmatchedIncludes).toEqual([]);
+
+    const misPartitioned = discovered
+      .filter(file => !nativeFiles.has(file))
+      .map(file => ({ file, projects: claims.get(file) }))
+      .filter(entry => entry.projects.length !== 1);
+    expect(misPartitioned).toEqual([]);
+
+    // node:test suites belong to the native runner and must be claimed by no
+    // Vitest project. Dropping NODE_TEST_FILES from any project's exclude shows
+    // up here rather than as a Vitest run of a node:test file.
+    expect(discovered.filter(file =>
+      nativeFiles.has(file) && claims.get(file).length > 0)).toEqual([]);
+    expect(discovered.filter(file => nativeFiles.has(file)).sort())
+      .toEqual([...NODE_TEST_FILES].sort());
+
+    // No project may be empty: an exclusive project that claims nothing is a
+    // partition that has quietly stopped existing.
+    const claimedByProject = new Map(projects.map(project => [project.test?.name, 0]));
+    for (const names of claims.values()) {
+      for (const name of names) claimedByProject.set(name, claimedByProject.get(name) + 1);
+    }
+    expect([...claimedByProject].filter(([, count]) => count === 0)).toEqual([]);
+    expect(claimedByProject.get("ordinary")).toBe(
+      discovered.length
+      - NODE_TEST_FILES.length
+      - SOURCE_IDENTITY_TEST_FILES.length
+      - SERIAL_RESOURCE_TEST_FILES.length
+      - SERIAL_NATIVE_TEST_FILES.length,
+    );
+
+    // The resolver has to be able to say no, or the three assertions above are
+    // just as vacuous as the exclude comparison they replaced. Same resolver,
+    // same real config, one suite moved into a second project's include and one
+    // include entry renamed - both must be reported.
+    const [movedSuite] = discovered.filter(file =>
+      claims.get(file).length === 1 && claims.get(file)[0] === "ordinary");
+    expect(movedSuite).toBeTruthy();
+    const withDoubleClaim = projects.map(project => (project.test?.name === "serial-native"
+      ? { ...project, test: { ...project.test, include: [...project.test.include, movedSuite] } }
+      : project));
+    expect(resolveProjectClaims(withDoubleClaim, discovered).claims.get(movedSuite))
+      .toEqual(["ordinary", "serial-native"]);
+    const withRenamedEntry = projects.map(project => (project.test?.name === "serial-native"
+      ? {
+          ...project,
+          test: {
+            ...project.test,
+            include: project.test.include.map(file => `${file}.renamed`),
+          },
+        }
+      : project));
+    expect(resolveProjectClaims(withRenamedEntry, discovered).unmatchedIncludes)
+      .toEqual(SERIAL_NATIVE_TEST_FILES.map(file => ({
+        project: "serial-native",
+        file: `${file}.renamed`,
+      })));
   });
 
   it("exposes explicit aggregate and native runner scripts", async () => {
