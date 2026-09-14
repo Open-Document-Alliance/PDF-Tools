@@ -640,15 +640,12 @@ async function runIsolatedToolCorpus({ root, tool, fixtures }) {
   }
 }
 
-// One serial loop over every fixture, tool and target mode, which makes this
-// a throughput measurement of the host rather than of the product. It runs
-// well inside the 180 s per-test bound on the maintainer's machine and blows
-// through it on a two-core shared runner. Raising the bound to fit the
-// slowest plausible host would stop it catching a genuine hang, so it stays
-// calibrated and declares itself skipped elsewhere.
-const TIMING_CALIBRATED_HOST_ONLY = process.env.PDF_TOOLS_TIMING_CALIBRATED === "skip";
+// Keep every corpus case on every host. Each tool call retains its five-second
+// containment deadline; test boundaries report the failing tool or fixture
+// instead of timing out one giant host-throughput loop and leaving it running.
+const MALFORMED_FIXTURES = await makeMalformedFixtures();
 
-describe.skipIf(TIMING_CALIBRATED_HOST_ONLY).each(RUNTIMES)("$name malformed PDF containment", ({ root }) => {
+describe.each(RUNTIMES)("$name malformed PDF containment", ({ root }) => {
   let client;
   let transport;
   let stateRoot;
@@ -667,7 +664,7 @@ describe.skipIf(TIMING_CALIBRATED_HOST_ONLY).each(RUNTIMES)("$name malformed PDF
 
   beforeAll(async () => {
     stateRoot = await createTestTempDirectory(REPO_ROOT, "malformed-pdfs");
-    fixtures = await makeMalformedFixtures();
+    fixtures = MALFORMED_FIXTURES;
     csvPath = path.join(stateRoot, "fuzz-row.csv");
     await fs.writeFile(csvPath, "filename,unused\nbulk-fuzz,value\n", { mode: 0o600 });
 
@@ -884,15 +881,12 @@ describe.skipIf(TIMING_CALIBRATED_HOST_ONLY).each(RUNTIMES)("$name malformed PDF
     );
   });
 
-  it("isolates every tool corpus in a fresh bounded server subprocess", async () => {
-    for (const tool of MUTATING_PDF_TOOLS) {
-      await runIsolatedToolCorpus({ root, tool, fixtures });
-    }
-  }, 180_000);
+  it.each(MUTATING_PDF_TOOLS)("isolates $name corpus in a fresh bounded server subprocess", async tool => {
+    await runIsolatedToolCorpus({ root, tool, fixtures });
+  }, 60_000);
 
-  it("returns clean errors, stays alive, and leaves no partial outputs", async () => {
-    for (const fixture of fixtures) {
-      for (const tool of MUTATING_PDF_TOOLS) {
+  describe.each(MALFORMED_FIXTURES)("$name mutation containment", fixture => {
+    it.each(MUTATING_PDF_TOOLS)("rejects $name with absent and preexisting targets", async tool => {
         for (const targetMode of ["absent", "preexisting"]) {
           const caseDirectory = path.join(
             stateRoot,
@@ -953,8 +947,9 @@ describe.skipIf(TIMING_CALIBRATED_HOST_ONLY).each(RUNTIMES)("$name malformed PDF
           expect(serverErrors, `${fixture.name}/${tool.name} transport errors`).toEqual([]);
           expect(transport.pid, `${fixture.name}/${tool.name} stable server pid`).toBe(serverPid);
         }
-      }
+    }, 15_000);
 
+    it("preserves secondary-input, directory, same-file and active-document state", async () => {
       const mergeCaseDirectory = path.join(
         stateRoot,
         "cases",
@@ -1158,9 +1153,8 @@ describe.skipIf(TIMING_CALIBRATED_HOST_ONLY).each(RUNTIMES)("$name malformed PDF
         )).tools.length,
         `${fixture.name} liveness probe`,
       ).toBeGreaterThan(0);
-    }
-
     expect(Buffer.byteLength(stderrText, "utf8")).toBeLessThanOrEqual(1_000_000);
     expect(stderrText).not.toMatch(/fatal error|uncaught|unhandled rejection/i);
-  }, 180_000);
+    }, 60_000);
+  });
 });

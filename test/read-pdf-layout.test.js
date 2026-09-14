@@ -2024,7 +2024,7 @@ describe("read_pdf_layout MCP tool", () => {
       let result = null;
       let error = null;
       try {
-        result = await dedicatedClient.callTool({ name: "read_pdf_layout", arguments: arguments_ });
+        result = await dedicatedClient.callTool({ name: "read_pdf_layout", arguments: arguments_ }, undefined, { timeout: 5_000, maxTotalTimeout: 5_000 });
       } catch (caught) {
         error = caught;
       }
@@ -2136,7 +2136,8 @@ describe("read_pdf_layout MCP tool", () => {
         expect(JSON.stringify(value), `${surface} exposed a test password`).not.toContain(password);
       }
     }
-  });
+  // Four individually bounded password calls plus startup and full stderr drain.
+  }, 30_000);
 });
 
 describe("Extraction IR hostile reconstruction", () => {

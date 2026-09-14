@@ -1141,6 +1141,9 @@ describe("durable Lumin Sign v1 operation lifecycle", () => {
     });
   });
 
+  // These atomic retention/race scenarios deliberately perform 64–70 durable
+  // polls (including filesystem syncs), measured at 6.5–7.6 s on darwin/x64.
+  // Their aggregate ceiling does not change any provider request deadline.
   it("retains the audit origin and newest 63 polls without removing artifact observations", async () => {
     await withLifecycleState(async ({ stateRoot }) => {
       const { authoritySha256: authorityDigest } = await createDurableOperation(stateRoot);
@@ -1183,7 +1186,7 @@ describe("durable Lumin Sign v1 operation lifecycle", () => {
         `artifact-merged-${artifact.observation.observation_sha256}.v1.json`,
       );
     });
-  });
+  }, 20_000);
 
   it("concurrent polling converges on the same bounded history", async () => {
     await withLifecycleState(async ({ stateRoot }) => {
@@ -1240,7 +1243,7 @@ describe("durable Lumin Sign v1 operation lifecycle", () => {
       });
       expect((await fs.readdir(observationsPath)).sort()).toEqual(namesBefore);
     });
-  });
+  }, 20_000);
 
   it("allows an older published poll to finish after concurrent checks prune its receipt", async () => {
     await withLifecycleState(async ({ stateRoot }) => {
@@ -1294,7 +1297,7 @@ describe("durable Lumin Sign v1 operation lifecycle", () => {
         linkSpy.mockRestore();
       }
     });
-  });
+  }, 20_000);
 
   it("allows a duplicate poll to finish when cleanup wins its collision readback", async () => {
     await withLifecycleState(async ({ stateRoot }) => {
@@ -1345,7 +1348,7 @@ describe("durable Lumin Sign v1 operation lifecycle", () => {
         linkSpy.mockRestore();
       }
     });
-  });
+  }, 20_000);
 
   it.each(["invalid content", "invalid name", "unsafe mode", "symlink"])(
     "rejects retained poll history with %s before another provider read", async kind => {

@@ -37,6 +37,7 @@ import {
   SYNTHETIC_SOURCE_IDENTITY_IMPORTERS,
 } from "../scripts/test-suite-classification.mjs";
 import {
+  runControlledTestProcess,
   terminateWindowsTree,
   windowsTaskkillPath,
 } from "../scripts/test-process-control.mjs";
@@ -1007,6 +1008,76 @@ describe("aggregate test-runner contract", () => {
     expect(hungChild.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
+  it.skipIf(process.platform === "win32").each([0, 7, "SIGKILL"])(
+    "reaps inherited-stdio descendants when their runner exits with %s",
+    async outcome => {
+      const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "runner-exit-"));
+      const pidFile = path.join(root, "ownership.json");
+      const runnerCode = `
+        const { spawn } = require("node:child_process");
+        const fs = require("node:fs");
+        const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM", () => {}); process.send("ready"); setInterval(() => {}, 1000)'],
+          { stdio: ["ignore", "inherit", "inherit", "ipc"] });
+        child.once("message", () => {
+          fs.writeFileSync(${JSON.stringify(pidFile)}, JSON.stringify({ runner: process.pid, descendant: child.pid }));
+          ${outcome === "SIGKILL" ? 'process.kill(process.pid, "SIGKILL")' : `process.exit(${outcome})`};
+        });
+      `;
+      let ownership;
+      try {
+        const result = await runControlledTestProcess({
+          command: process.execPath, args: ["-e", runnerCode], cwd: repoRoot,
+          standardInputOutput: "pipe", label: "descendant-exit-fixture",
+        });
+        ownership = JSON.parse(await fs.readFile(pidFile, "utf8"));
+        expect(result).toBe(outcome === "SIGKILL" ? 1 : outcome);
+        await waitForProcessToDisappear(ownership.descendant);
+      } finally {
+        ownership ??= await fs.readFile(pidFile, "utf8").then(JSON.parse).catch(() => null);
+        if (ownership) {
+          try { process.kill(-ownership.runner, "SIGKILL"); } catch {}
+        }
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    }, 10_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "cleans a started native runner when startup fails before reading its fixture PID",
+    async () => {
+      const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "runner-startup-failure-"));
+      const pidFile = path.join(root, "fixture.pid");
+      const helper = spawn(process.execPath, [
+        path.join(repoRoot, "test/fixtures/run-node-test-suites-signal-helper.mjs"),
+      ], { cwd: repoRoot, env: { ...process.env, PDF_TOOLS_NODE_RUNNER_FIXTURE_PID_FILE: pidFile },
+        stdio: ["ignore", "ignore", "ignore", "ipc"] });
+      const closed = new Promise(resolve => helper.once("close", (code, signal) => resolve({ code, signal })));
+      let timer;
+      try {
+        await Promise.race([
+          new Promise(resolve => helper.once("message", resolve)),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("helper did not start")), 5_000); }),
+        ]);
+        // Simulate the failed startup/readback path: no fixture PID has been
+        // read, so only its supervisor knows the detached group's ownership.
+      } finally {
+        clearTimeout(timer);
+        helper.kill("SIGTERM");
+        try {
+          const exit = await Promise.race([closed, new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("startup failure cleanup did not close")), 5_000);
+          })]);
+          expect(exit).toEqual({ code: 143, signal: null });
+          const fixturePid = await fs.readFile(pidFile, "utf8").then(Number).catch(() => null);
+          if (fixturePid !== null) await waitForProcessToDisappear(fixturePid);
+        } finally {
+          clearTimeout(timer);
+          await fs.rm(root, { recursive: true, force: true });
+        }
+      }
+    }, 15_000,
+  );
+
   it.skipIf(process.platform === "win32")(
     "forwards cancellation and reaps the complete POSIX test process group",
     async () => {
@@ -1047,7 +1118,20 @@ describe("aggregate test-runner contract", () => {
         expect(exit).toEqual({ code: 143, signal: null });
         await waitForProcessToDisappear(fixturePid);
       } finally {
-        if (helper.exitCode === null && helper.signalCode === null) helper.kill("SIGKILL");
+        // Even when the startup receipt was never read, let the helper forward
+        // cancellation to the detached native-runner group it owns.
+        if (helper.exitCode === null && helper.signalCode === null) {
+          const closed = new Promise(resolve => helper.once("close", resolve));
+          helper.kill("SIGTERM");
+          let timer;
+          try {
+            await Promise.race([closed, new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error("helper cleanup did not close")), 5_000);
+            })]);
+          } finally {
+            clearTimeout(timer);
+          }
+        }
         if (fixturePid !== null) {
           try {
             process.kill(fixturePid, "SIGKILL");

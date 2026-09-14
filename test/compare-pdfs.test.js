@@ -96,8 +96,7 @@ describe("compare_pdfs deterministic product", () => {
     }));
   });
 
-  it("discriminates all seven public synthetic comparison roles", async () => {
-    for (const [role, [afterName, expectedKinds]] of Object.entries(PAIRS)) {
+  it.each(Object.entries(PAIRS))("discriminates the public synthetic %s comparison role", async (role, [afterName, expectedKinds]) => {
       const result = await client.callTool({
         name: "compare_pdfs",
         arguments: {
@@ -159,8 +158,7 @@ describe("compare_pdfs deterministic product", () => {
           external_persistence_writes: 0,
         });
       }
-    }
-  }, 60_000);
+  }, 30_000);
 
   it("retains independent page and same-page visual changes alongside semantic text changes", async () => {
     async function makeMixedChangePdf(fileName, balance, rectangleColor, rectanglePage = 2) {
@@ -288,7 +286,7 @@ describe("compare_pdfs deterministic product", () => {
     });
     expect(repeated.structuredContent.comparison_sha256)
       .toBe(result.structuredContent.comparison_sha256);
-  });
+  }, 15_000);
 
   it("fails whole-document comparison instead of comparing prefixes", async () => {
     const result = await client.callTool({

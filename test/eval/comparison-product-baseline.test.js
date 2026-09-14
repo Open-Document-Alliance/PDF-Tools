@@ -1,33 +1,60 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { loadComparisonManifest, resolveComparisonDocumentPath } from "./comparison-manifest.js";
 import { buildProductPrimitiveReport } from "./comparison-product-baseline.js";
-import { buildControllerObservationRegistry } from "./comparison-observation-registry.js";
+import { buildControllerObservationRegistry, registerControllerObservationRecords } from "./comparison-observation-registry.js";
 import { scoreComparisonReport, validateComparisonReport } from "./comparison-scorer.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const MANIFEST_PATH = path.join(REPO_ROOT, "test", "fixtures", "eval", "comparison", "manifest.v1.json");
 
+const manifest = await loadComparisonManifest(MANIFEST_PATH);
+const documents = new Map(manifest.documents.map(document => [document.id, document]));
+const pairs = manifest.pairs.map(pair => ({
+  pairId: pair.id,
+  beforePath: resolveComparisonDocumentPath(MANIFEST_PATH, documents.get(pair.before_document_id)),
+  afterPath: resolveComparisonDocumentPath(MANIFEST_PATH, documents.get(pair.after_document_id)),
+  beforeSha256: documents.get(pair.before_document_id).sha256,
+  afterSha256: documents.get(pair.after_document_id).sha256,
+}));
+
 describe("current PDF Tools compare_pdfs baseline", () => {
-  // Hang ceiling, not a performance SLO: the fixed corpus makes 42 compare_pdfs calls plus bounded worker operations.
-  it("records the seven-channel product contract without promoting calibration to a benchmark claim", async () => {
-    const manifest = await loadComparisonManifest(MANIFEST_PATH);
-    const documents = new Map(manifest.documents.map(document => [document.id, document]));
+  const pairReports = new Map();
+  // All 42 original calls remain: one warmup and five measured repetitions per
+  // pair. Give each pair its own bounded case and process so a corpus-wide
+  // throughput deadline cannot abandon work and race the next test's cleanup.
+  it.each(pairs)("records six deterministic comparisons for $pairId", async pair => {
     const report = await buildProductPrimitiveReport({
       benchmarkId: manifest.benchmark_id,
       benchmarkVersion: manifest.benchmark_version,
       renderer: manifest.canonical_renderer,
       repositoryRoot: REPO_ROOT,
       host: "local-test-host-stdio",
-      pairs: manifest.pairs.map(pair => ({
-        pairId: pair.id,
-        beforePath: resolveComparisonDocumentPath(MANIFEST_PATH, documents.get(pair.before_document_id)),
-        afterPath: resolveComparisonDocumentPath(MANIFEST_PATH, documents.get(pair.after_document_id)),
-        beforeSha256: documents.get(pair.before_document_id).sha256,
-        afterSha256: documents.get(pair.after_document_id).sha256,
-      })),
+      pairs: [pair],
     });
+    const pairManifest = { ...manifest, pairs: manifest.pairs.filter(item => item.id === pair.pairId) };
+    expect(validateComparisonReport(pairManifest, report)).toEqual([]);
+    expect(report.pairs).toHaveLength(1);
+    expect(report.pairs[0].tool_calls).toBe(6);
+    expect(report.pairs[0].iteration_costs).toHaveLength(5);
+    pairReports.set(pair.pairId, report);
+  }, 120_000);
+
+  it("records the seven-channel product contract without promoting calibration to a benchmark claim", () => {
+    expect([...pairReports.keys()].sort()).toEqual(pairs.map(pair => pair.pairId).sort());
+    const reports = pairs.map(pair => pairReports.get(pair.pairId));
+    const report = structuredClone(reports[0]);
+    report.pairs = reports.flatMap(item => item.pairs);
+    // Recombine the independently retained controller evidence, never invent
+    // evidence from scorer truth. Account for the seven actual server runs.
+    report.engine.external_processes = reports.reduce((sum, item) => sum + item.engine.external_processes, 0);
+    report.isolation.allowed_directory_evidence_sha256 = createHash("sha256")
+      .update(pairs.flatMap(pair => [pair.beforeSha256, pair.afterSha256]).sort().join("|"))
+      .digest("hex");
+    registerControllerObservationRecords(report, reports.flatMap(item =>
+      buildControllerObservationRegistry(item).pairs.flatMap(pair => pair.retained_raw_results)));
     expect(validateComparisonReport(manifest, report)).toEqual([]);
     const scored = scoreComparisonReport(manifest, report, buildControllerObservationRegistry(report));
     expect(scored.valid).toBe(true);
@@ -53,5 +80,5 @@ describe("current PDF Tools compare_pdfs baseline", () => {
     expect(report.engine.network_requests).toBe(0);
     expect(report.benchmark_claim_ready).toBe(false);
     expect(report.platform.host).toBe("local-test-host-stdio");
-  }, 240_000);
+  });
 });

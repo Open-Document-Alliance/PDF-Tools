@@ -129,6 +129,12 @@ export function runControlledTestProcess({
     let escalationTimer = null;
     let settled = false;
     let windowsTermination = null;
+    let posixKillSent = false;
+    const killOwnedPosixGroup = () => {
+      if (posixKillSent) return;
+      signalPosixGroup(child, "SIGKILL");
+      posixKillSent = true;
+    };
     const signalHandlers = new Map();
 
     const cleanup = () => {
@@ -148,7 +154,7 @@ export function runControlledTestProcess({
         if (platform === "win32") {
           killDirectChild(child);
         } else {
-          signalPosixGroup(child, "SIGKILL");
+          killOwnedPosixGroup();
         }
         return;
       }
@@ -175,7 +181,7 @@ export function runControlledTestProcess({
       signalPosixGroup(child, signal);
       escalationTimer = setTimeout(() => {
         console.error(`[${label}] escalating cancellation to SIGKILL`);
-        signalPosixGroup(child, "SIGKILL");
+        killOwnedPosixGroup();
       }, escalationMs);
     };
 
@@ -189,6 +195,15 @@ export function runControlledTestProcess({
       console.error(`[${label}] failed to start: ${error.message}`);
       settle(1);
     });
+    // The group is owned by this runner even when its leader exits without a
+    // forwarded signal. Reap leftovers on exit, before inherited stdio held by
+    // a grandchild can delay close and contaminate the next test partition.
+    child.once("exit", () => {
+      if (platform !== "win32") {
+        if (escalationTimer) clearTimeout(escalationTimer);
+        killOwnedPosixGroup();
+      }
+    });
     child.once("close", async (code, signal) => {
       if (forwardedSignal) {
         if (platform === "win32") {
@@ -198,8 +213,6 @@ export function runControlledTestProcess({
             settle(1);
             return;
           }
-        } else {
-          signalPosixGroup(child, "SIGKILL");
         }
         settle(signalExitCodes[forwardedSignal]);
         return;
