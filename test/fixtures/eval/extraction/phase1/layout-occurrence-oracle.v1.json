@@ -85,20 +85,20 @@
     {
       "role": "output_schemas_module",
       "path": "server/output-schemas.js",
-      "bytes": 72524,
-      "sha256": "dae2e2d3ac168c3be5f3ad1f72a6dce6cb9db0a3649b7f906ea2d8922386b1a0"
+      "bytes": 72527,
+      "sha256": "f3c45671c7da55a98551e2bdddb0bb9538651245ed7aca8c614c43c119ac2130"
     },
     {
       "role": "package_json",
       "path": "package.json",
-      "bytes": 3034,
-      "sha256": "9587168464f8f3fe6e6c4c601f19f0c906e55217d4fef069427b5b0e768e752b"
+      "bytes": 3099,
+      "sha256": "691f8fd9a47be64ec7e3b8dca9e3e5b0a523181c07f28b50db58810e61dcbb31"
     },
     {
       "role": "package_lock",
       "path": "package-lock.json",
-      "bytes": 119053,
-      "sha256": "80c8345e6bb5696167a7141ff7662c21259e1af7d2f90a03e3a53ace01505021"
+      "bytes": 122228,
+      "sha256": "fd3d517cabab83e3e85f41a6176dcce7eaa728970834a2bad7aff2eb639d1e97"
     },
     {
       "role": "pdf_comparison_module",
@@ -131,7 +131,7 @@
       "sha256": "ef40501b2afbe4cd2adfa80480344783bbec1a00e8e9850086a5d044231d1f53"
     }
   ],
-  "validator_source_set_sha256": "98e57166bd20cc226c4ccc8eaf25b456ec5eae4b0b8bd61d3ffd58be4ec22b3a",
+  "validator_source_set_sha256": "e6a99f3770a9230edb130ae007dd0ca616525560e5ad78dff2a06f450587fd89",
   "pdfjs_version": "5.4.624",
   "generation_contract": {
     "source_path": "source.pdf",
