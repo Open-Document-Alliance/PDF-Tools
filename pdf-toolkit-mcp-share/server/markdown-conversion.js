@@ -6,7 +6,7 @@ import {
 
 const RENDERER = Object.freeze({
   name: "pdf-tools.layout-markdown-renderer",
-  version: "1.20.0",
+  version: "1.20.1",
 });
 const SUPPORTED_LAYOUT_IR_VERSION = "1.6.0";
 
@@ -85,7 +85,7 @@ const GAP_CODES = new Set([
 
 const LIMITATIONS = Object.freeze([
   "Headings are emitted only from consistent enlarged font metrics, centered English-language source structure with section spacing, or numbered or lettered research-paper structure at an established body margin with spacing plus font, size, or exact small-caps evidence. Wrapped heading lines are joined only from matching font and height, a very small vertical gap, and bounded alignment. Narrow vertical labels and ambiguous, very short, or unsupported heading styles remain body text.",
-  "Page furniture is removed only from an extreme top or bottom margin band when a compact line of at most 120 Unicode characters is separated from the body and is either an explicit page-number or provenance pattern, or repeats in the same band on at least two selected pages after bounded digit normalization. Detected headings, their geometric continuations, and source-evidenced table-region lines, including abandoned table regions, are never removed. Every removal is reported by a typed page gap and counted by kind; callers can disable removal to preserve every source line.",
+  "Page furniture is removed only from an extreme top or bottom margin band when a compact line of at most 120 Unicode characters is separated from the body and is either an explicit page-number or provenance pattern, or repeats in the same band on at least two selected pages after bounded digit normalization. Multiple lines matching the bare-page-number pattern in the same page band are ambiguous and retained, even if they repeat across pages or compact mode is enabled. Detected headings, their geometric continuations, and source-evidenced table-region lines, including abandoned table regions, are never removed. Every removal is reported by a typed page gap and counted by kind; callers can disable this furniture-removal pass. Optional compact normalization is separate.",
   "A geometrically overlapping initial capital may be joined to its following uppercase word remainder. Line-end hyphens are preserved because source geometry cannot reliably distinguish a split word from an intentional compound. The source Extraction IR retains the original lines.",
   "A missing space after a separate source text item that is exactly the mathematical operator log is restored only in a short, compact left-to-right math run when a single-letter variable from a different source font resource follows on the same baseline with a small positive geometric gap and independent local math-layout evidence. A missing prose-to-variable space is restored only when a multiword prose item, a separate uppercase letter from a different source font resource, and continuing prose from the original prose font share one baseline with distinct positive boundary gaps, and the same letter/font pair occurs in a nearby compact equation on the same page and column. An inline single-digit stacked fraction is rendered only when consecutive same-font source items, explicit source whitespace, smaller exactly aligned numerator and denominator digits, ordinary prose on both sides, and exactly one thin matching solid-mask bar agree. A small version-pinned registry may recover a legacy Computer Modern Type-3 character only after an exact official-metric family match, exact target and witness glyph-program matches, and a complete operator/text sequence binding. Two witnesses are required unless the source font subset cannot supply them, in which case the entry must declare that font's complete enrolled footprint and every code in it must be present and match. General equations, other fraction bars, unregistered raster variants, and other damaged mathematical glyphs remain source reading-order text rather than being guessed.",
   "A glyph run the source painted smaller and displaced from the baseline of the text it is attached to is written as Unicode superscript characters when it was raised and Unicode subscript characters when it was lowered. This records how the page is set and nothing more: a page raises a mathematical exponent and a footnote reference in exactly the same way, so this does not distinguish the two, does not assert that a raised digit is a power, and does not assert that a lowered one is an index. A displaced run is written only when every one of its characters has a real Unicode form in that direction and the whole run is present on one line, so a run stays flat entire rather than being written in part. Unicode subscript coverage is much thinner than superscript coverage, with no capital letters and only some lowercase ones, so many lowered runs stay flat for that reason alone. A stacked fraction numerator is raised by the same amount but stands clear of the text before it, and is left alone. Where the source set a displaced run without changing font and without leaving any of its base's advance unused, the text layer reports it as part of the base run and no displacement survives to be read, so that run stays flat too and is indistinguishable here from text the page never displaced. A line whose source items cannot all be located within its own extracted text, and a line the stacked-fraction projection rebuilt, keep the text they had rather than being partly rewritten.",
@@ -518,7 +518,26 @@ function normalizedPageFurnitureKey(text) {
     .trim();
 }
 
+function ambiguousBarePageNumberIds(page) {
+  // Blank form grids need not qualify as reconstructed tables. Several bare
+  // numbers in one margin band can be cell labels, not pagination. Count all
+  // source lines before eligibility filters so a protected label still makes
+  // its neighbour ambiguous, and exclude them before cross-page repetition.
+  const bareNumberCounts = new Map();
+  for (const line of page.lines) {
+    const band = pageFurnitureBand(page, line);
+    if (band !== null && PAGE_FURNITURE_BARE_PAGE_NUMBER.test(line.text.trim())) {
+      bareNumberCounts.set(band, (bareNumberCounts.get(band) ?? 0) + 1);
+    }
+  }
+  return new Set(page.lines.filter(line => (
+    bareNumberCounts.get(pageFurnitureBand(page, line)) > 1
+    && PAGE_FURNITURE_BARE_PAGE_NUMBER.test(line.text.trim())
+  )).map(line => line.id));
+}
+
 function pageFurnitureCandidates(page) {
+  const ambiguousNumberIds = ambiguousBarePageNumberIds(page);
   const headings = headingLevels(page);
   const headingContinuations = headingContinuationIds(page, headings);
   const analysis = segmentPageLines(page);
@@ -552,6 +571,7 @@ function pageFurnitureCandidates(page) {
     if (band === null || headings.has(line.id) || headingContinuations.has(line.id)
       || tableLineIds.has(line.id)) return [];
     const text = line.text.trim();
+    if (ambiguousNumberIds.has(line.id)) return [];
     // Long legal/provenance sentences can still be semantically referenced by
     // the document body. Keep them: this lane removes compact furniture, not
     // arbitrary margin paragraphs.
@@ -2804,10 +2824,12 @@ function normalizePlainLines(entries, {
   page,
   pageBoundaryBefore,
   pageBoundaryAfter,
+  protectedPageNumberIds,
 }) {
   const normalizations = emptyNormalizations();
   const pageNumberCandidates = entries.map(entry => (
-    entry.normalizable && isPageNumberLine(entry.sourceText)
+    entry.normalizable && !protectedPageNumberIds.has(entry.line?.id)
+      && isPageNumberLine(entry.sourceText)
   ));
   const removed = new Set();
 
@@ -3129,7 +3151,10 @@ function renderPage(page, {
   });
   const entries = joinParagraphContinuity(joinHeadingContinuations(records));
   const normalized = compact
-    ? normalizePlainLines(entries, { page: page.page, pageBoundaryBefore, pageBoundaryAfter })
+    ? normalizePlainLines(entries, {
+      page: page.page, pageBoundaryBefore, pageBoundaryAfter,
+      protectedPageNumberIds: ambiguousBarePageNumberIds(page),
+    })
     : { lines: entries.map(entry => entry.text), normalizations: emptyNormalizations() };
   recordPageFurnitureNormalizations(normalized.normalizations, page.page, pageFurniture);
   const lines = normalized.lines;

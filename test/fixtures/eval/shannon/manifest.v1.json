@@ -22,7 +22,7 @@
     "pdf_tools": {
       "slot": "control.current_product.v0",
       "renderer_name": "pdf-tools.layout-markdown-renderer",
-      "renderer_version": "1.20.0",
+      "renderer_version": "1.20.1",
       "parser_name": "pdfjs-dist",
       "parser_version": "5.4.624"
     },

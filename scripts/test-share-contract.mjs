@@ -1218,7 +1218,7 @@ async function main() {
       arguments: { pdf_path: fixturePath, max_markdown_bytes: 200000 },
     });
     if (markdown.isError
-      || markdown.structuredContent?.renderer?.version !== "1.20.0"
+      || markdown.structuredContent?.renderer?.version !== "1.20.1"
       || markdown.structuredContent?.markdown_bytes !== Buffer.byteLength(markdown.structuredContent?.markdown || "", "utf8")
       || markdown.structuredContent?.markdown_sha256 !== sha256(Buffer.from(markdown.structuredContent?.markdown || "", "utf8"))) {
       throw new Error("Share convert_pdf_to_markdown contract smoke failed");
