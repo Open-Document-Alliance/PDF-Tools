@@ -55,8 +55,8 @@
     {
       "role": "layout_extraction_module",
       "path": "server/layout-extraction.js",
-      "bytes": 276050,
-      "sha256": "9efd13d42aa5dbfb9d106207cddf288daf2efc21bbf1628373be26f9c4a1d7a9"
+      "bytes": 277436,
+      "sha256": "40e559465467e7d12278d8281b14c48a1689573360111e8fed355f26b19ede75"
     },
     {
       "role": "type3_cm_reference_module",
@@ -131,7 +131,7 @@
       "sha256": "ef40501b2afbe4cd2adfa80480344783bbec1a00e8e9850086a5d044231d1f53"
     }
   ],
-  "validator_source_set_sha256": "120e25fc97a8f11639f0eefabdd779704583ebc34937a470321966514ab3b482",
+  "validator_source_set_sha256": "d015df457ab9b4ea4127fd8ad0beaf48e46ab1159e9779f4d487cbc7b084a417",
   "pdfjs_version": "5.4.624",
   "generation_contract": {
     "source_path": "source.pdf",
