@@ -390,11 +390,11 @@ describe("layout Markdown renderer", () => {
     // Then c5f8738869464d87e3add9d8e6907f83537485d8abea97da12cce9de4baa1489,
     // before renderer 1.19.0 added typed page-furniture removal.
     // This non-math fixture keeps its body and gaps; the renderer identity moves.
-    // Renderer 1.20.1 changes only renderer identity and the furniture
-    // limitation on this non-numeric fixture. Body and gap assertions below
+    // Renderer 1.21.0 changes only renderer identity and the table
+    // limitation on this non-table fixture. Body and gap assertions below
     // remain the independent unchanged content control.
     expect(createHash("sha256").update(serialized).digest("hex"))
-      .toBe("95d7bb890967638e9eed65a0aa43b976e9d44efc324eeea7994503500ea77b27");
+      .toBe("f17072d9e05bb25bbaf908580ca734ba23ce42192eb36fa04004bb51e628f9fc");
     const body = result.markdown.split("\n\n## Conversion gaps\n\n", 1)[0];
     expect(JSON.stringify({
       body,
@@ -402,7 +402,7 @@ describe("layout Markdown renderer", () => {
     })).toBe(NON_RECT_EXPECTED);
     expect(result.renderer).toEqual({
       name: "pdf-tools.layout-markdown-renderer",
-      version: "1.20.1",
+      version: "1.21.0",
     });
     expect(result.gaps[0].message).toMatch(/beyond reconstructed ruled or bounded solid-mask table grids/);
     expect(result.limitations.some(value => value.includes("clean ruled-rectangle grid evidence"))).toBe(true);

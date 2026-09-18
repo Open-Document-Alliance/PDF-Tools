@@ -91,7 +91,7 @@ try {
     });
     const value = result.structuredContent;
     assert(!result.isError && value, `Installed conversion failed for pages ${startPage}-${endPage}`);
-    assert(value.renderer?.version === "1.20.1", "Installed Markdown renderer version differs");
+    assert(value.renderer?.version === "1.21.0", "Installed Markdown renderer version differs");
     assert(value.provenance?.layout?.parser_version === "5.4.624", "Installed PDF parser version differs");
     assert(value.provenance?.source?.sha256 === sourceSha256, "Installed conversion source identity differs");
     assert(value.provenance?.layout?.page_range?.start_page === startPage, "Installed conversion start page differs");

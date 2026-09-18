@@ -1255,3 +1255,22 @@ ChatGPT, and future MCP Apps are distinct distribution and trust boundaries.
 Evaluate them as separate products or adapters with explicit file-transfer,
 authentication, storage, consent, and mutation semantics. Do not imply that a
 local MCPB works in a cloud surface merely because both speak MCP.
+# Captioned segmented-rule table regression (September 2026)
+
+The Markdown renderer has a bounded path for tables with a segmented header
+underline rather than vertical grid rules. It requires an explicit `TABLE`
+caption, a complete top rule, separate header underline segments and a complete
+bottom rule. The underline segments must provide contiguous column intervals;
+every retained text item must fit exactly one interval, and competing internal
+rules, overlapping rows, spanning headers and incomplete data rows reject.
+Multiline header fragments retain their line breaks. Short source labels in the
+first column remain literal rows with empty presentation slots. These are not
+inferred group hierarchies, inherited values or filled-in missing data.
+
+Continuation pages are handled independently and require their own complete
+header evidence. This is not cross-page table stitching, arbitrary borderless
+table recognition, OCR, or proof of semantic extraction quality. Other vector,
+link and text coverage gaps remain reported even when a table is reconstructed.
+`test/segmented-rule-table.test.js` uses generated, non-government PDFs and
+tests broken or missing rules, misleading headers, crossing/missing cells,
+standalone numeric records, unbound labels and literal Markdown escaping.
