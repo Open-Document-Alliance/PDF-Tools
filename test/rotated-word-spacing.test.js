@@ -21,7 +21,7 @@ const parser = {
   getDocument: options => pdfjsLib.getDocument({ ...options, standardFontDataUrl }),
 };
 
-async function splitRunPdf({ rotation, offset, gap }) {
+async function splitRunPdf({ rotation, offset, gap, short }) {
   const document = await PDFDocument.create();
   const regular = await document.embedFont(StandardFonts.Helvetica);
   const bold = await document.embedFont(StandardFonts.HelveticaBold);
@@ -32,9 +32,11 @@ async function splitRunPdf({ rotation, offset, gap }) {
     page.setCropBox(30, 40, 550, 700);
     page.node.set(PDFName.of("UserUnit"), PDFNumber.of(2));
   }
-  page.drawText("Alpha", { x: 80, y: 650, size: 12, font: regular });
-  page.drawText("Beta", {
-    x: 80 + regular.widthOfTextAtSize("Alpha", 12) + gap,
+  const first = short ? "." : "Alpha";
+  const second = short ? "." : "Beta";
+  page.drawText(first, { x: 80, y: 650, size: 12, font: regular });
+  page.drawText(second, {
+    x: 80 + regular.widthOfTextAtSize(first, 12) + gap,
     y: 650,
     size: 12,
     font: bold,
@@ -43,12 +45,12 @@ async function splitRunPdf({ rotation, offset, gap }) {
 }
 
 const cases = [0, 90, 180, 270].flatMap(rotation => [false, true].flatMap(offset =>
-  [4, 0, -1].map(gap => ({ rotation, offset, gap })),
+  [false, true].flatMap(short => [short ? 2.5 : 4, 0, -1].map(gap => ({ rotation, offset, gap, short }))),
 ));
 
 describe("source-backed word spacing under page rotation", () => {
-  it.each(cases)("preserves split runs at $rotation degrees, offset=$offset, gap=$gap", async ({ rotation, offset, gap }) => {
-    const bytes = await splitRunPdf({ rotation, offset, gap });
+  it.each(cases)("preserves split runs at $rotation degrees, offset=$offset, gap=$gap, short=$short", async ({ rotation, offset, gap, short }) => {
+    const bytes = await splitRunPdf({ rotation, offset, gap, short });
     const options = {
       pdfjsLib: parser,
       pdfBytes: bytes,
@@ -63,14 +65,16 @@ describe("source-backed word spacing under page rotation", () => {
     await sourceLayout.validatePdfLayoutSourceEvidence(source, { pdfjsLib: parser, sourceBytes: bytes });
     const page = source.pages[0];
     expect(page.geometry).toMatchObject({ display_rotation: rotation, user_unit: offset ? 2 : 1 });
-    expect(page.raw_items.filter(item => !item.is_whitespace).map(item => item.text)).toEqual(["Alpha", "Beta"]);
+    expect(page.raw_items.filter(item => !item.is_whitespace).map(item => item.text)).toEqual(short ? [".", "."] : ["Alpha", "Beta"]);
     if (gap > 0) expect(page.raw_items.some(item => item.text === " ")).toBe(true);
-    // Quarter turns retain the existing conservative source-line fallback.
-    // This fix does not infer rotated paragraphs or invent a word boundary
-    // between touching/overlapping runs on a shared reconstructed baseline.
-    const expected = rotation === 90 || rotation === 270
-      ? "Alpha\nBeta"
-      : gap > 0 ? "Alpha Beta" : "AlphaBeta";
+    // Line grouping is unchanged. Long quarter-turned runs stay on separate
+    // source-order lines; short ones can already share a line and must retain
+    // their positive gaps too. Touching/overlapping runs gain no separator.
+    const expected = short
+      ? gap > 0 ? ". ." : ".."
+      : rotation === 90 || rotation === 270
+        ? "Alpha\nBeta"
+        : gap > 0 ? "Alpha Beta" : "AlphaBeta";
     expect(page.flow_text).toBe(expected);
     const rendered = sourceMarkdown(source, { includePageBoundaries: false });
     expect(shareMarkdown(share, { includePageBoundaries: false })).toEqual(rendered);
