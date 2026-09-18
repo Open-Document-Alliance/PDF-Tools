@@ -126,6 +126,59 @@ function body(prefix = "Body") {
 }
 
 describe("evidence-bounded page furniture removal", () => {
+  it.each(["footer", "header"])("retains competing bare numbers in the %s across repeated pages", async band => {
+    const top = band === "footer" ? 712 : 22;
+    const pages = [1, 2].map(() => ({ items: [
+      ...body(),
+      textItem("4", { top, left: 50, width: 8, fontSize: 9 }),
+      textItem("5", { top: top + 24, left: 50, width: 8, fontSize: 9 }),
+      textItem("9", { top: top + 1, left: 350, width: 8, fontSize: 9 }),
+      textItem("10", { top: top + 25, left: 350, width: 12, fontSize: 9 }),
+    ] }));
+    const layout = await syntheticLayout(pages);
+    for (const compact of [false, true]) {
+      for (const removePageFurniture of [false, true]) {
+        const result = renderPdfLayoutToMarkdown(layout, { includePageBoundaries: false, compact, removePageFurniture });
+        for (const value of ["4", "5", "9", "10"]) {
+          expect(result.markdown.split("\n").filter(line => line === value)).toHaveLength(2);
+        }
+        expect(result.normalizations.page_number_lines_removed).toBe(0);
+        expect(result.normalizations.running_header_lines_removed).toBe(0);
+        expect(result.normalizations.running_footer_lines_removed).toBe(0);
+        expect(validateMarkdownConversionSemantics(structuredClone(result), { layout })).toEqual(result);
+      }
+    }
+  });
+
+  it("counts a protected oversized label when deciding if its neighbour is ambiguous", async () => {
+    const layout = await syntheticLayout([{ items: [
+      ...body(),
+      textItem("IV", { top: 710, fontSize: 24 }),
+      textItem("V", { top: 742, fontSize: 9 }),
+      textItem("VI", { top: 764, fontSize: 9 }),
+    ] }]);
+    const result = renderPdfLayoutToMarkdown(layout, { includePageBoundaries: false, compact: true });
+    expect(result.markdown).toContain("IV");
+    expect(result.markdown).toMatch(/^VI$/mu);
+    expect(result.normalizations.page_number_lines_removed).toBe(0);
+  });
+
+  it("retains an ordinary isolated bare page number removal and a labelled footer alongside ambiguous numbers", async () => {
+    const layout = await syntheticLayout([{ items: [
+      textItem("7", { top: 22, fontSize: 9 }),
+      ...body(),
+      textItem("4", { top: 710, fontSize: 9 }),
+      textItem("5", { top: 735, fontSize: 9 }),
+      textItem("Page 7 of 12", { top: 765, fontSize: 9 }),
+    ] }]);
+    const result = renderPdfLayoutToMarkdown(layout, { includePageBoundaries: false });
+    expect(result.markdown).toMatch(/^4$/mu);
+    expect(result.markdown).toMatch(/^5$/mu);
+    expect(result.markdown).not.toMatch(/^7$/mu);
+    expect(result.markdown).not.toContain("Page 7 of 12");
+    expect(result.normalizations.page_number_lines_removed).toBe(2);
+  });
+
   it("removes explicit page/provenance furniture by default and reports every kind", async () => {
     const layout = await syntheticLayout([{
       items: [
