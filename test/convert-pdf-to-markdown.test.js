@@ -305,7 +305,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
     expect(first.isError).not.toBe(true);
     expect(second.structuredContent).toEqual(first.structuredContent);
     expect(first.structuredContent).toMatchObject({
-      renderer: { name: "pdf-tools.layout-markdown-renderer", version: "1.20.1" },
+      renderer: { name: "pdf-tools.layout-markdown-renderer", version: "1.21.0" },
       conversion_status: "complete",
       saved_output: null,
       provenance: {

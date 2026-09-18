@@ -6,7 +6,7 @@ import {
 
 const RENDERER = Object.freeze({
   name: "pdf-tools.layout-markdown-renderer",
-  version: "1.20.1",
+  version: "1.21.0",
 });
 const SUPPORTED_LAYOUT_IR_VERSION = "1.6.0";
 
@@ -91,7 +91,7 @@ const LIMITATIONS = Object.freeze([
   "A glyph run the source painted smaller and displaced from the baseline of the text it is attached to is written as Unicode superscript characters when it was raised and Unicode subscript characters when it was lowered. This records how the page is set and nothing more: a page raises a mathematical exponent and a footnote reference in exactly the same way, so this does not distinguish the two, does not assert that a raised digit is a power, and does not assert that a lowered one is an index. A displaced run is written only when every one of its characters has a real Unicode form in that direction and the whole run is present on one line, so a run stays flat entire rather than being written in part. Unicode subscript coverage is much thinner than superscript coverage, with no capital letters and only some lowercase ones, so many lowered runs stay flat for that reason alone. A stacked fraction numerator is raised by the same amount but stands clear of the text before it, and is left alone. Where the source set a displaced run without changing font and without leaving any of its base's advance unused, the text layer reports it as part of the base run and no displacement survives to be read, so that run stays flat too and is indistinguishable here from text the page never displaced. A line whose source items cannot all be located within its own extracted text, and a line the stacked-fraction projection rebuilt, keep the text they had rather than being partly rewritten.",
   "Lists are emitted only for literal bullet glyphs or decimal markers present in the source text.",
   "Links are emitted only for source-validated http or https annotation targets that map to exactly one contiguous run of text on one line. Internal destinations, actions, other schemes, ambiguous or partially covered labels, and links inside reconstructed tables remain escaped text reported as a conversion gap, and URL-looking source text is escaped to resist host autolinking.",
-  "Tables are reconstructed directly only from complete text-item column geometry, clean ruled-rectangle grid evidence, or one unambiguous complete closed grid of bounded axis-aligned solid-mask rectangles. Every text item must fit exactly one cell, aligned partial dividers that evidence merged or spanning topology are rejected, and the first row must carry real header evidence because Markdown imposes header semantics. On an opt-in abstention path, a caller may submit item-to-cell assignments to the read-only verifier; accepted cell content is rebuilt only from a fresh source parse and the grid must agree with all available source-replayed ruling geometry. This proves source-backed content and consistency, not unique topology; ambiguous or unsupported geometry remains rejected. GFM cannot encode row or column spans, so accepted spans retain their authority in structured cells while Markdown places source text once at the anchor and leaves continuation slots empty. Incomplete grids and damaged mathematical glyphs are not interpreted; other ambiguous content remains escaped reading-order text with a conversion gap. Cell artwork is omitted and reported as a vector-content gap; only independently qualified exact legacy glyph variants are recovered.",
+  "Tables are reconstructed directly only from complete text-item column geometry, clean ruled-rectangle grid evidence, one unambiguous complete closed grid of bounded axis-aligned solid-mask rectangles, or a bounded captioned segmented-rule table. The segmented-rule path requires a TABLE caption, complete top and bottom rules, a separate header band whose contiguous underline segments define the columns, and all source text fitting those intervals without competing rules. Header fragments remain explicit line breaks. Short standalone first-column labels stay literal rows with empty presentation slots; no group hierarchy, inherited value, merged cell, or blank data value is inferred. Each continuation page must supply its own complete header evidence; tables are not joined across pages. Every text item must fit exactly one cell, aligned partial dividers that evidence merged or spanning topology are rejected, and the first row must carry real header evidence because Markdown imposes header semantics. On an opt-in abstention path, a caller may submit item-to-cell assignments to the read-only verifier; accepted cell content is rebuilt only from a fresh source parse and the grid must agree with all available source-replayed ruling geometry. This proves source-backed content and consistency, not unique topology; ambiguous or unsupported geometry remains rejected. GFM cannot encode row or column spans, so accepted spans retain their authority in structured cells while Markdown places source text once at the anchor and leaves continuation slots empty. Incomplete grids and damaged mathematical glyphs are not interpreted; other ambiguous content remains escaped reading-order text with a conversion gap. Cell artwork is omitted and reported as a vector-content gap; only independently qualified exact legacy glyph variants are recovered.",
   "Vector paint operations beyond any reconstructed ruled or solid-mask table grid are not interpreted.",
   "OCR is not performed. Image-only text and text that exists only inside page images are omitted and reported as conversion gaps.",
   "Unsafe control characters and malformed UTF-16 surrogates are replaced with the Unicode replacement character and reported as conversion gaps.",
@@ -2454,6 +2454,150 @@ function ruledGridSegment(page) {
   };
 }
 
+// Some statistical tables have no vertical rules: a segmented header underline
+// supplies column intervals, with full-width rules above the header and below
+// the body. Do not infer intervals from word spacing or resource font names.
+// This deliberately handles one bounded, captioned table per page. Continued
+// pages need their own complete header evidence; no state crosses page bounds.
+function segmentedRuleTable(page, rows) {
+  const evidence = page.ruling_segments;
+  if (evidence?.status !== "available" || evidence.truncated
+    || page.truncation?.truncated || page.ruled_rects?.status !== "available"
+    || page.painted_rectangles?.status !== "available" || page.painted_rectangles.truncated
+    || evidence.items.length > MAX_TABLE_PROPOSAL_RULING_SEGMENTS) return null;
+  const epsilon = 0.05;
+  const bands = [];
+  for (const rule of evidence.items.filter(rule => rule.orientation === "horizontal")
+    .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1)) {
+    let band = bands.find(band => Math.abs(band.y - rule.y1) <= epsilon);
+    if (!band) { band = { y: rule.y1, rules: [] }; bands.push(band); }
+    band.rules.push(rule);
+  }
+  const joined = bands.flatMap(band => {
+    const sorted = band.rules.toSorted((a, b) => a.x1 - b.x1);
+    if (sorted.some((rule, index) => rule.x2 - rule.x1 < 6
+      || (index > 0 && Math.abs(rule.x1 - sorted[index - 1].x2) > epsilon))) return [];
+    return [{ ...band, rules: sorted, left: sorted[0].x1, right: sorted.at(-1).x2 }];
+  });
+  const candidates = [];
+  for (const middle of joined) {
+    if (middle.rules.length < 2 || middle.rules.length > RULED_TABLE_MAX_COLUMNS) continue;
+    const aligned = joined.filter(band => Math.abs(band.left - middle.left) <= 1
+      && Math.abs(band.right - middle.right) <= 1);
+    if (aligned.length !== 3 || aligned[1] !== middle) continue;
+    const [top, , bottom] = aligned;
+    if (middle.y - top.y > 120 || bottom.y - middle.y < 12) continue;
+    const captions = rows.filter(({ line }) => /^TABLE\b/u.test(line.text.trim())
+      && line.y + line.height <= top.y && top.y - line.y - line.height <= 32
+      && line.x >= middle.left - 1 && line.x + line.width <= middle.right + 1);
+    if (captions.length !== 1) continue;
+    const allowedRules = new Set(aligned.flatMap(band => band.rules));
+    const box = { x: middle.left, y: top.y, width: middle.right - middle.left, height: bottom.y - top.y };
+    if (evidence.items.some(rule => !allowedRules.has(rule) && rulingSegmentOverlapsRegion(rule, box))) continue;
+    if ((page.ruled_rects?.items ?? []).some(rect => rectsOverlap(rect, box))
+      || (page.painted_rectangles?.items ?? []).some(rect => rect.bbox && rectsOverlap(rect.bbox, box))) continue;
+    candidates.push({ top, middle, bottom });
+  }
+  if (candidates.length !== 1) return null;
+  const { top, middle, bottom } = candidates[0];
+  const columns = middle.rules;
+  const columnFor = item => {
+    if (!item.geometry_valid || !item.bbox || item.direction !== "ltr"
+      || Math.abs(item.raw_transform[1]) > epsilon || Math.abs(item.raw_transform[2]) > epsilon) return -1;
+    const matches = columns.flatMap((column, index) => item.bbox.x >= column.x1 - epsilon
+      && item.bbox.x + item.bbox.width <= column.x2 + epsilon ? [index] : []);
+    return matches.length === 1 ? matches[0] : -1;
+  };
+  const tableRows = rows.filter(({ line }) => line.y < bottom.y && line.y + line.height > top.y
+    && line.x < middle.right && line.x + line.width > middle.left);
+  if (tableRows.length < 3 || tableRows.length > 200) return null;
+  const selected = new Set(tableRows.map(row => row.line.id));
+  const indices = rows.flatMap((row, index) => selected.has(row.line.id) ? [index] : []);
+  if (indices.at(-1) - indices[0] + 1 !== indices.length) return null;
+  const header = columns.map(() => []);
+  const headerBottom = columns.map(() => -Infinity);
+  const headerStructural = new Set();
+  const body = [];
+  const retained = new Set();
+  const pageItems = paintedItems(page);
+  let completeRows = 0;
+  let consecutiveLabels = 0;
+  let bodyBottom = middle.y;
+  for (const row of tableRows.toSorted((a, b) => a.line.y - b.line.y || a.line.x - b.line.x)) {
+    const { line, cells } = row;
+    const isHeader = line.y >= top.y - epsilon && line.y + line.height <= middle.y + epsilon;
+    const isBody = line.y >= middle.y - epsilon && line.y + line.height <= bottom.y + epsilon;
+    if ((!isHeader && !isBody) || cells.length === 0) return null;
+    const offsets = itemOffsets(line, cells);
+    if (!offsets) return null;
+    const script = scriptLineProjection(line, cells, pageItems);
+    const text = script.text ?? line.text;
+    const groups = [];
+    const structuralColumns = new Set();
+    let previous = -1;
+    for (let index = 0; index < cells.length; index += 1) {
+      const item = cells[index];
+      const column = columnFor(item);
+      if (column < 0 || column < previous || retained.has(item.id)) return null;
+      retained.add(item.id);
+      if (!isCollapsedWhitespaceRecovery(item)) structuralColumns.add(column);
+      if (column !== previous) groups.push({ column, start: index, end: index });
+      else groups.at(-1).end = index;
+      previous = column;
+    }
+    const values = columns.map(() => "");
+    for (const group of groups) {
+      const items = cells.slice(group.start, group.end + 1);
+      if (items.some((item, index) => items.slice(index + 1).some(other => (
+        Math.min(item.bbox.x + item.bbox.width, other.bbox.x + other.bbox.width)
+          - Math.max(item.bbox.x, other.bbox.x) > epsilon
+        && Math.min(item.bbox.y + item.bbox.height, other.bbox.y + other.bbox.height)
+          - Math.max(item.bbox.y, other.bbox.y) > epsilon
+      )))) return null;
+      const value = text.slice(offsets[group.start].start, offsets[group.end].end).trim();
+      if (!value || /[\r\n]/u.test(value)) return null;
+      if (isHeader) {
+        if (line.y < headerBottom[group.column] - epsilon) return null;
+        headerBottom[group.column] = line.y + line.height;
+        header[group.column].push(value);
+        if (structuralColumns.has(group.column)) headerStructural.add(group.column);
+      }
+      else values[group.column] = value;
+    }
+    if (isBody) {
+      if (line.y < bodyBottom - epsilon) return null;
+      bodyBottom = line.y + line.height;
+      if (groups.length === columns.length && structuralColumns.size === columns.length) {
+        completeRows += 1;
+        consecutiveLabels = 0;
+      }
+      else {
+        // Keep a short first-column label in its original row. Empty GFM slots
+        // express source whitespace, not inferred group inheritance or spans.
+        if (groups.length !== 1 || groups[0].column !== 0 || values[0].length > 80
+          || !(/[\p{L}]/u.test(values[0]) || /^(?:\d+\s*[−–-]\s*\d+|[≤≥<>]\s*\d+)$/u.test(values[0]))
+          || ++consecutiveLabels > 2) return null;
+      }
+      body.push(values);
+    }
+  }
+  if (completeRows < 2 || consecutiveLabels !== 0 || headerStructural.size !== columns.length
+    || body.length > RULED_TABLE_MAX_ROWS
+    || (body.length + 1) * columns.length > RULED_TABLE_MAX_CELLS
+    || header.some(cell => cell.length === 0 || cell.length > 8
+      || !/\p{L}/u.test(cell.join(" ")) || cell.join(" ").length > 300)) return null;
+  // Account for all visible items inside the ruled envelope, including items
+  // that the reading-order builder could not attach to a source line.
+  for (const item of page.raw_items) {
+    if (item.text_kind !== "non_whitespace") continue;
+    if (!item.geometry_valid || !item.bbox) return null;
+    if (rectsOverlap(item.bbox, { x: middle.left, y: top.y,
+      width: middle.right - middle.left, height: bottom.y - top.y }) && !retained.has(item.id)) return null;
+  }
+  return { kind: "table", rows: tableRows, grid: [header, ...body],
+    coveredLineIds: selected, insertionIndex: indices[0] };
+}
+
 function segmentTextRows(page, rows, itemById, ruledClusters) {
   const pageItems = paintedItems(page);
   const segments = [];
@@ -2523,6 +2667,7 @@ function segmentPageLines(page) {
   const ruledRects = preprocessRuledRects(page);
   const ruledClusters = ruledRects ? clusterRuledRects(ruledRects) : [];
   const ruled = ruledGridSegment(page);
+  if (!ruled.segment) ruled.segment = segmentedRuleTable(page, rows);
   if (!ruled.segment) {
     const text = segmentTextRows(page, rows, itemById, ruledClusters);
     return {

@@ -188,11 +188,11 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // configuration from account signup; start/finish return a next_step string.
 // Tool names, input schemas, send confirmation and transport remain unchanged.
 // Previously fd4b388bf9f7e45a4cbffea05a15ecc99c739c1486bdfa2b7b91e7ec3bbc6216.
-// 2026-09-18: Markdown renderer output identity becomes 1.20.1. Reversing
+// 2026-09-18: Markdown renderer output identity becomes 1.21.0. Reversing
 // only that version const in live tools/list reproduces the previous digest
-// c3a5e232adbad9bc08060530fa800dfa11217df7231553f93d25561a3e5f5ad4.
+// 2cb992abdc6aef91a8b610544d6edafb0d93637e89eeea2c4cd0a66c9ee89bf1.
 // No tool names, input schemas, annotations or other output fields change.
-const TOOL_CONTRACT_SHA256 = "2cb992abdc6aef91a8b610544d6edafb0d93637e89eeea2c4cd0a66c9ee89bf1";
+const TOOL_CONTRACT_SHA256 = "1be7e32a616bf23a4bcf4b064eaad15bcf094c807088ac5f0074369bdb66c716";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
