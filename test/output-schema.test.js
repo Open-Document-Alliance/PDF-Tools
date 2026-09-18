@@ -462,6 +462,8 @@ describe("live output schema contract", () => {
         read_pages_without_text: [1],
         pages_with_suspected_text_integrity: [],
         page_read_error: { page: 2, code: "PDFJS_PAGE_READ_FAILED" },
+        pages_with_invisible_text: [],
+        pages_with_unavailable_text_visibility: [],
       },
     };
     expect(validateStructuredToolResult("read_pdf_content", result)).toBe(result);
@@ -477,6 +479,8 @@ describe("live output schema contract", () => {
         read_pages_without_text: [1],
         pages_with_suspected_text_integrity: [],
         page_read_error: null,
+        pages_with_invisible_text: [],
+        pages_with_unavailable_text_visibility: [],
       },
     };
     expect(validateStructuredToolResult("read_pdf_content", result)).toBe(result);

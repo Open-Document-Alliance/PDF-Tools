@@ -447,7 +447,15 @@ const luminSigningError = object({
     code: { type: "string", pattern: "^LUMIN_[A-Z0-9_]+$" },
   }),
 });
+const textVisibility = object({
+  status: enumString(["available", "unavailable"]),
+  invisible_text_show_count: nullable(integer),
+  other_text_show_count: nullable(integer),
+});
+const invisibleTextPages = arrayOf(object({ page: integer, ...textVisibility.properties }));
 const contentWorkerFailure = object({
+  pages_with_invisible_text: invisibleTextPages,
+  pages_with_unavailable_text_visibility: integerArray,
   status: { const: "failed" },
   error: object({
     error_schema_version: { const: 1 },
@@ -465,6 +473,8 @@ const contentWorkerFailure = object({
   page_read_error: pageReadError,
 });
 const contentResourceLimitError = object({
+  pages_with_invisible_text: invisibleTextPages,
+  pages_with_unavailable_text_visibility: integerArray,
   status: { const: "failed" },
   error: object({
     error_schema_version: { const: 1 },
@@ -611,6 +621,8 @@ const validationFailure = object({
   requiredness_unknown_count: { type: "null" },
 });
 const contentProperties = {
+  pages_with_invisible_text: invisibleTextPages,
+  pages_with_unavailable_text_visibility: integerArray,
   pdf_path: string,
   file_name: string,
   total_pages: integer,
@@ -619,7 +631,7 @@ const contentProperties = {
   text_truncated: boolean,
   text_found: boolean,
   content_available: boolean,
-  extraction_status: enumString(["complete", "partial"]),
+  extraction_status: { ...enumString(["complete", "partial"]), description: "Text-layer read coverage, not OCR correctness or agreement with the visible page." },
   page_previews: arrayOf(pageTextPreview),
   page_read_error: pageReadError,
   read_pages_without_text: { ...integerArray, description: "Pages actually read in this call whose normalized text layer is empty." },
@@ -630,7 +642,7 @@ const contentProperties = {
       count: { type: "integer", minimum: 1 },
     })),
   })),
-  routing_guidance: nullable({ type: "string", description: "Fixed guidance to use render_pdf_page for pages without text, scoped to this call." }),
+  routing_guidance: nullable({ type: "string", description: "Fixed visual-verification guidance for textless, suspect, invisible, or visibility-unavailable text within the read scope." }),
   preview_truncated: boolean,
   extraction_mode: enumString(["text", "image-fallback"]),
   error_codes: stringArray,
@@ -668,6 +680,7 @@ const layoutTextIntegrity = object({
   })),
 });
 const pageAnalysis = object({
+  text_visibility: textVisibility,
   page: integer,
   width: integer,
   height: integer,
@@ -708,6 +721,8 @@ const layoutItemSpace = object({
   reference_box: { const: "pdfjs_display_viewport" },
 });
 const routingReason = enumString([
+  "invisible_text_layer",
+  "text_visibility_unavailable",
   "no_text_layer",
   "image_dominated",
   "vector_only_text",

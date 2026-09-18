@@ -3993,10 +3993,61 @@ export const PAGE_CLASSIFICATION_REASONS = Object.freeze([
   "image_dominated",
   "vector_only_text",
   "suspected_text_integrity",
+  "invisible_text_layer",
+  "text_visibility_unavailable",
   "analysis_unavailable",
 ]);
 
 const ROUTING_TEXT_LENGTH = Symbol("routingTextLength");
+
+// This observes PDF text-paint instructions, not OCR accuracy, language, or
+// whether arbitrary content is visible after clipping/overpainting. Mode 3
+// explicitly suppresses text painting. An invisible layer may be perfectly
+// accurate, but extracting it does not verify it against the visible page.
+export function measureTextVisibility(pdfjsLib, operators) {
+  const unavailable = { status: "unavailable", invisible_text_show_count: null, other_text_show_count: null };
+  const OPS = pdfjsLib?.OPS;
+  if (!OPS || !Number.isInteger(OPS.setTextRenderingMode)
+      || !Number.isInteger(OPS.showText) || !Number.isInteger(OPS.save)
+      || !Number.isInteger(OPS.restore) || !Array.isArray(operators?.fnArray)
+      || !Array.isArray(operators?.argsArray)
+      || operators.fnArray.length !== operators.argsArray.length) return unavailable;
+  let mode = 0;
+  let invisible = 0;
+  let other = 0;
+  const stack = [];
+  for (let index = 0; index < operators.fnArray.length; index += 1) {
+    const fn = operators.fnArray[index];
+    const args = operators.argsArray[index];
+    if (fn === OPS.save || fn === OPS.paintFormXObjectBegin) {
+      stack.push(mode);
+    } else if (fn === OPS.restore || fn === OPS.paintFormXObjectEnd) {
+      if (stack.length === 0) return unavailable;
+      mode = stack.pop();
+    } else if (fn === OPS.beginAnnotation || fn === OPS.endAnnotation
+        || fn === OPS.beginGroup || fn === OPS.endGroup) {
+      // Annotation and transparency-group setup is renderer-specific; do not
+      // let an untracked state restoration become false visibility evidence.
+      return unavailable;
+    } else if (fn === OPS.beginMarkedContentProps) {
+      // Optional-content visibility changes form state semantics in PDF.js.
+      // Do not infer the selected layer configuration from operator bytes.
+      if (!Array.isArray(args) || typeof args[0] !== "string" || args[0] === "OC") return unavailable;
+    } else if (fn === OPS.setTextRenderingMode) {
+      if (!Array.isArray(args) || args.length !== 1 || !Number.isInteger(args[0])
+          || args[0] < 0 || args[0] > 7) return unavailable;
+      mode = args[0];
+    } else if (fn === OPS.showText) {
+      if (!Array.isArray(args) || !Array.isArray(args[0])) return unavailable;
+      if (args[0].some(glyph => typeof glyph?.unicode === "string" && glyph.unicode.trim().length > 0)) {
+        if (mode === 3) invisible += 1;
+        else other += 1;
+      }
+    }
+  }
+  if (stack.length > 0) return unavailable;
+  return { status: "available", invisible_text_show_count: invisible, other_text_show_count: other };
+}
 
 // Ported from firecrawl/pdf-inspector (MIT): src/text_quality.rs. Keep this
 // synchronized with layout-extraction.js because get_page_analysis and
@@ -4129,6 +4180,7 @@ function initialPageAnalysis(page, index) {
     blank_status: "unknown",
     analysis_error_codes: [],
     text_integrity: { status: "unavailable", signals: [] },
+    text_visibility: measureTextVisibility(null, null),
     analysis_provenance: {
       dimensions: "pdf-lib",
       text: null,
@@ -4190,6 +4242,13 @@ export function classifyPageRouting(page, {
   }
   if (page.text_integrity?.status === "suspect") {
     reasons.push("suspected_text_integrity");
+  }
+  if (textLength > 0 && page.text_visibility?.status === "available"
+      && page.text_visibility.invisible_text_show_count > 0) {
+    reasons.push("invisible_text_layer");
+  }
+  if (textLength > 0 && page.text_visibility?.status === "unavailable") {
+    reasons.push("text_visibility_unavailable");
   }
   return { text_bearing: textBearing, reasons };
 }
@@ -4467,6 +4526,7 @@ export async function analyzePdfPages({
               throw new Error("PDF.js content operators unavailable");
             }
             const ops = await pdfjsPage.getOperatorList();
+            pageResult.text_visibility = measureTextVisibility(pdfjsLib, ops);
             const measurements = countOperatorMeasurements(pdfjsLib, ops, imageOps, graphicsOps);
             pageResult.image_op_count = measurements.imageOpCount;
             pageResult.path_op_count = measurements.pathOpCount;
