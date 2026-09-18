@@ -2440,6 +2440,23 @@ describe("Extraction IR hostile reconstruction", () => {
     expect(ambiguous.result.pages[0].reading_order.strategy).not.toBe("two_column_left_to_right");
   });
 
+  it.each(["ltr", "rtl"])("projects inverted %s run gaps without requiring a whitespace item", async lineDirection => {
+    for (const gap of [10, 0, -1]) {
+      // Page-space advances point left. RTL reverses which run edge borders
+      // the next run, independently of the viewport's coordinate direction.
+      const firstX = 200;
+      const secondX = lineDirection === "rtl" ? firstX + 40 + gap : firstX - 40 - gap;
+      const { result } = await runFake([{ items: [
+        textItem({ text: "A", x: firstX, top: 20, width: 40, direction: lineDirection,
+          hasEOL: false, transform: [-12, 0, 0, -12, firstX, 760] }),
+        textItem({ text: "B", x: secondX, top: 20, width: 40, direction: lineDirection,
+          hasEOL: true, transform: [-12, 0, 0, -12, secondX, 760] }),
+      ] }]);
+      expect(result.pages[0].raw_items.map(item => item.text)).toEqual(["A", "B"]);
+      expect(result.pages[0].flow_text).toBe(gap > 0 ? "A B" : "AB");
+    }
+  });
+
   it("does not bridge equal-baseline column gutters and makes source fallback truly source segmented", async () => {
     const equalBaseline = [];
     for (const top of [100, 130, 160]) {

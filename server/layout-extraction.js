@@ -2722,14 +2722,42 @@ function direction(value) {
   return ["ltr", "rtl", "ttb"].includes(value) ? value : "unknown";
 }
 
+function itemAdvanceGap(previous, item, lineDirection) {
+  const previousStart = previous.quad?.[0];
+  const previousEnd = previous.quad?.[1];
+  const itemStart = item.quad?.[0];
+  const itemEnd = item.quad?.[1];
+  if ([previousStart, previousEnd, itemStart, itemEnd]
+    .every(point => Number.isFinite(point?.x) && Number.isFinite(point?.y))) {
+    const dx = previousEnd.x - previousStart.x;
+    const dy = previousEnd.y - previousStart.y;
+    const length = Math.hypot(dx, dy);
+    const itemDx = itemEnd.x - itemStart.x;
+    const itemDy = itemEnd.y - itemStart.y;
+    const itemLength = Math.hypot(itemDx, itemDy);
+    // The quad's anchor-to-terminal edge follows the text advance after
+    // CropBox, UserUnit, and rotation. Bounding-box x gaps lose that direction
+    // on a 180-degree page and concatenate distinct source runs. Project only
+    // co-directed advances; keep the existing fallback for degenerate or
+    // differently oriented runs and leave line grouping/source order unchanged.
+    if (length > 0 && itemLength > 0
+      && (dx * itemDx + dy * itemDy) / (length * itemLength) >= 0.999) {
+      const from = lineDirection === "rtl" ? itemEnd : previousEnd;
+      const to = lineDirection === "rtl" ? previousStart : itemStart;
+      return ((to.x - from.x) * dx + (to.y - from.y) * dy) / length;
+    }
+  }
+  return lineDirection === "rtl"
+    ? previous.x - (item.x + item.width)
+    : item.x - (previous.x + previous.width);
+}
+
 function lineText(items, lineDirection) {
   let text = "";
   let previous = null;
   for (const item of items) {
     if (previous) {
-      const gap = lineDirection === "rtl"
-        ? previous.x - (item.x + item.width)
-        : item.x - (previous.x + previous.width);
+      const gap = itemAdvanceGap(previous, item, lineDirection);
       const operatorRecoveredBoundary = [previous, item].some(value => value.glyph_recoveries
         ?.some(recovery => recovery.binding_kind === "collapsed_whitespace_item"));
       const spaceThreshold = operatorRecoveredBoundary
