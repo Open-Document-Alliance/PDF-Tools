@@ -192,7 +192,11 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // only that version const in live tools/list reproduces the previous digest
 // 2cb992abdc6aef91a8b610544d6edafb0d93637e89eeea2c4cd0a66c9ee89bf1.
 // No tool names, input schemas, annotations or other output fields change.
-const TOOL_CONTRACT_SHA256 = "1be7e32a616bf23a4bcf4b064eaad15bcf094c807088ac5f0074369bdb66c716";
+// 2026-09-18 (scan routing): additive text-visibility fields, routing reasons
+// and read-coverage descriptions replace the previous fingerprint
+// 1be7e32a616bf23a4bcf4b064eaad15bcf094c807088ac5f0074369bdb66c716.
+// Names, input schemas and effect annotations remain unchanged.
+const TOOL_CONTRACT_SHA256 = "38efffcecdfd667010d18267de70c92cb89671b27a74c2edd4fb00f024cd1e88";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

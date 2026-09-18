@@ -131,6 +131,10 @@ function fakePdfjs(pageBehaviors, { documentFailure = false } = {}) {
     paintImageMaskXObject: 3,
     fill: 4,
     constructPath: 5,
+    setTextRenderingMode: 6,
+    showText: 7,
+    save: 8,
+    restore: 9,
   };
   const document = {
     async getPage(pageNumber) {

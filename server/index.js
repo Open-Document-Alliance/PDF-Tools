@@ -122,7 +122,7 @@ import {
 } from "./lumin-signing-tools.js";
 
 export const READ_CONTENT_ROUTING_GUIDANCE =
-  "Pages without extractable text or with suspect text integrity were successfully read in this call. Use render_pdf_page for visual inspection of those pages; the page routing fields are limited to successfully-read pages, and pages outside this read scope or stopped at a page-read error are not classified by this result.";
+  "Use render_pdf_page to inspect pages flagged as textless, suspect, or containing invisible text. Invisible text may be accurate, but its agreement with the visible page has not been verified. Unavailable visibility measurements do not establish that text is visible. Routing fields cover only successfully-read pages; unread pages are not classified. No OCR or visual transcription was performed.";
 
 /**
  * Keep Markdown routing in one mapping function so later text-integrity
@@ -5683,6 +5683,8 @@ async function handleToolCall(request) {
         const MAX_CHARS = 50000;
         let readPagesWithoutText = [];
         let pagesWithSuspectedTextIntegrity = [];
+        let readPagesWithInvisibleText = [];
+        let readPagesWithUnavailableTextVisibility = [];
         let readPagesReadCount = 0;
         let readPageReadError = null;
 
@@ -5703,6 +5705,10 @@ async function handleToolCall(request) {
           const pagesRead = result.pages_read;
           const pagesWithoutText = result.pages_without_text ?? [];
           const pagesWithIntegrity = result.pages_with_suspected_text_integrity ?? [];
+          const pagesWithInvisibleText = result.pages_with_invisible_text ?? [];
+          const pagesWithUnavailableTextVisibility = result.pages_with_unavailable_text_visibility ?? [];
+          readPagesWithInvisibleText = pagesWithInvisibleText;
+          readPagesWithUnavailableTextVisibility = pagesWithUnavailableTextVisibility;
           readPagesWithoutText = pagesWithoutText;
           pagesWithSuspectedTextIntegrity = pagesWithIntegrity;
           const pageReadError = result.page_read_error ?? null;
@@ -5710,11 +5716,12 @@ async function handleToolCall(request) {
           readPageReadError = pageReadError;
           const pageReadErrorCodes = pageReadError ? [pageReadError.code] : [];
           const routingGuidance = pagesWithoutText.length > 0 || pagesWithIntegrity.length > 0
+            || pagesWithInvisibleText.length > 0 || pagesWithUnavailableTextVisibility.length > 0
             ? READ_CONTENT_ROUTING_GUIDANCE
             : null;
 
           // Prepare the response
-          let response = `PDF Content Extracted Successfully!\n\n`;
+          let response = `PDF text layer read. Visual correspondence has not been verified.\n\n`;
           response += `File: ${fileName}\n`;
           response += `Size: ${fileSizeKB} KB\n`;
           response += `Pages: ${pageCount}`;
@@ -5797,6 +5804,8 @@ async function handleToolCall(request) {
                   page_read_error: pageReadError,
                   read_pages_without_text: pagesWithoutText,
                   pages_with_suspected_text_integrity: pagesWithIntegrity,
+                  pages_with_invisible_text: pagesWithInvisibleText,
+                  pages_with_unavailable_text_visibility: pagesWithUnavailableTextVisibility,
                   routing_guidance: routingGuidance,
                   error_codes: pageReadErrorCodes,
                   retry_guidance:
@@ -5816,6 +5825,8 @@ async function handleToolCall(request) {
                     pages_read: readPagesReadCount,
                     read_pages_without_text: readPagesWithoutText,
                     pages_with_suspected_text_integrity: pagesWithSuspectedTextIntegrity,
+                    pages_with_invisible_text: readPagesWithInvisibleText,
+                    pages_with_unavailable_text_visibility: readPagesWithUnavailableTextVisibility,
                     page_read_error: readPageReadError,
                   },
                 });
@@ -5845,6 +5856,8 @@ async function handleToolCall(request) {
                   page_read_error: pageReadError,
                   read_pages_without_text: pagesWithoutText,
                   pages_with_suspected_text_integrity: pagesWithIntegrity,
+                  pages_with_invisible_text: pagesWithInvisibleText,
+                  pages_with_unavailable_text_visibility: pagesWithUnavailableTextVisibility,
                   routing_guidance: routingGuidance,
                   error_codes: ["NO_EXTRACTABLE_TEXT", "IMAGE_FALLBACK_FAILED", ...pageReadErrorCodes],
                   retry_guidance:
@@ -5877,6 +5890,8 @@ async function handleToolCall(request) {
               page_read_error: pageReadError,
               read_pages_without_text: pagesWithoutText,
               pages_with_suspected_text_integrity: pagesWithIntegrity,
+              pages_with_invisible_text: pagesWithInvisibleText,
+              pages_with_unavailable_text_visibility: pagesWithUnavailableTextVisibility,
               routing_guidance: routingGuidance,
               error_codes: pageReadErrorCodes,
               retry_guidance: extractionPartial
@@ -5895,6 +5910,8 @@ async function handleToolCall(request) {
                 pages_read: readPagesReadCount,
                 read_pages_without_text: readPagesWithoutText,
                 pages_with_suspected_text_integrity: pagesWithSuspectedTextIntegrity,
+                pages_with_invisible_text: readPagesWithInvisibleText,
+                pages_with_unavailable_text_visibility: readPagesWithUnavailableTextVisibility,
                 page_read_error: readPageReadError,
               },
             });
@@ -5915,6 +5932,8 @@ async function handleToolCall(request) {
               pages_read: readPagesReadCount,
               read_pages_without_text: readPagesWithoutText,
               pages_with_suspected_text_integrity: pagesWithSuspectedTextIntegrity,
+              pages_with_invisible_text: readPagesWithInvisibleText,
+              pages_with_unavailable_text_visibility: readPagesWithUnavailableTextVisibility,
               page_read_error: readPageReadError,
             },
           });

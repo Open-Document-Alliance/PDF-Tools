@@ -15,6 +15,7 @@ import { PDFDocument } from "pdf-lib";
 import {
   analyzePdfPages,
   deriveTextIntegrityForRouting,
+  measureTextVisibility,
   detectSignatureZones,
   getPageBoxGeometry,
   getPageRenderScale,
@@ -696,7 +697,7 @@ async function withPdfjsDocument(bytes, password, action, { render = false } = {
   }
 }
 
-export async function readContentFromDocument(document, options) {
+export async function readContentFromDocument(document, options, pdfjs = null) {
   const pagesRead = options.max_pages === null
     ? document.numPages
     : Math.min(options.max_pages, document.numPages);
@@ -708,6 +709,8 @@ export async function readContentFromDocument(document, options) {
   const pagePreviews = [];
   const pagesWithoutText = [];
   const pagesWithSuspectedTextIntegrity = [];
+  const pagesWithInvisibleText = [];
+  const pagesWithUnavailableTextVisibility = [];
   let pagesReadSuccessfully = 0;
   let pageReadError = null;
   for (let pageNumber = 1; pageNumber <= pagesRead; pageNumber += 1) {
@@ -730,6 +733,16 @@ export async function readContentFromDocument(document, options) {
       sourceLength += rawText.length;
       if (prefix.length < 50_000) prefix += rawText.slice(0, 50_000 - prefix.length);
       const hasText = rawText.trim().length > 0;
+      if (hasText) {
+        let visibility = measureTextVisibility(null, null);
+        try {
+          visibility = measureTextVisibility(pdfjs, await page.getOperatorList());
+        } catch { /* Preserve extracted text; unavailable is not a clean bill of health. */ }
+        if (visibility.status === "unavailable") pagesWithUnavailableTextVisibility.push(pageNumber);
+        else if (visibility.invisible_text_show_count > 0) {
+          pagesWithInvisibleText.push({ page: pageNumber, ...visibility });
+        }
+      }
       if (hasText) textFound = true;
       else pagesWithoutText.push(pageNumber);
 
@@ -764,6 +777,8 @@ export async function readContentFromDocument(document, options) {
     page_previews: pagePreviews,
     pages_without_text: pagesWithoutText,
     pages_with_suspected_text_integrity: pagesWithSuspectedTextIntegrity,
+    pages_with_invisible_text: pagesWithInvisibleText,
+    pages_with_unavailable_text_visibility: pagesWithUnavailableTextVisibility,
     page_read_error: pageReadError,
     pages_read: pagesReadSuccessfully,
     preview_truncated: previewTruncated,
@@ -775,8 +790,8 @@ export async function readContentFromDocument(document, options) {
 }
 
 async function readContent(bytes, password, options) {
-  return await withPdfjsDocument(bytes, password, document =>
-    readContentFromDocument(document, options));
+  return await withPdfjsDocument(bytes, password, (document, pdfjs) =>
+    readContentFromDocument(document, options, pdfjs));
 }
 
 async function readPages(bytes, password, options) {

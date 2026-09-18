@@ -1274,3 +1274,35 @@ link and text coverage gaps remain reported even when a table is reconstructed.
 `test/segmented-rule-table.test.js` uses generated, non-government PDFs and
 tests broken or missing rules, misleading headers, crossing/missing cells,
 standalone numeric records, unbound labels and literal Markdown escaping.
+
+## Invisible text-layer routing
+
+`read_pdf_content` and `get_page_analysis` observe explicit PDF.js text
+rendering mode 3 (invisible). Text-show counts distinguish invisible from other
+rendering modes; "other" does not assert visibility after clipping, opacity or
+overpainting. Counts describe the top-level normalized PDF.js text-show list,
+not nested Type-3 glyph programs or final pixels. The observer tracks graphics
+save/restore and form boundaries;
+unsupported annotation/transparency-group/optional-content state and malformed measurements are
+unavailable, never inferred zeros. This is independent of the existing Unicode
+text-integrity signals and does not judge language or OCR correctness.
+
+The reader preserves exact extracted text, reports `pages_with_invisible_text`
+and `pages_with_unavailable_text_visibility`, and recommends `render_pdf_page`
+for visual verification. Page analysis exposes `text_visibility` and the
+`invisible_text_layer` or `text_visibility_unavailable` routing reason. An accurate searchable scan can receive
+the same guidance: hidden text is not intrinsically corrupt. Read completeness
+means the requested text-layer read finished, not that its words match the
+visible page. No OCR, automatic image transcription or replacement text is
+performed. Markdown's existing image/OCR gaps remain unchanged; its extraction
+IR does not yet carry this additional operator-state observation.
+
+`test/invisible-text-routing.test.js` protects multilingual/native text,
+mixed hidden/other text, state restoration, clipping-only mode, unavailable
+operators and retention across later page failures, including a generated
+searchable-image PDF. A separately retained public Apollo flight-plan diagnostic
+motivated this change: both PDFKit and PDF.js extracted text that missed eight
+visible literal anchors, and independent operators proved its text layer
+invisible. It is a development regression, not an unseen benchmark or evidence
+of improved transcription accuracy. The historical cause of that layer's bad
+text remains unknown.

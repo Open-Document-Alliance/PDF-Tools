@@ -891,17 +891,71 @@ describe("transactional verified extraction workspace", () => {
     })).resolves.toMatchObject({ state: "abandoned_initialization" });
   });
 
-  it("admits exactly one concurrent creator and leaves the loser explicitly recoverable", async () => {
+  it.each(["completed", "genesis-held"])("keeps a prepared concurrent loser recoverable with winner %s", async winnerPhase => {
     await fs.mkdir(rootPath, { mode: 0o700 });
     const workspaceId = "concurrent-pointer";
     const transactionIds = ["a".repeat(32), "b".repeat(32)];
-    const outcomes = await Promise.allSettled(transactionIds.map(transactionId => (
-      create({ workspaceId, transactionId })
-    )));
+    let releaseLoser;
+    let reachedLoser;
+    let releaseWinner;
+    let reachedWinner;
+    const loserBarrier = new Promise(resolve => { releaseLoser = resolve; });
+    const loserReady = new Promise(resolve => { reachedLoser = resolve; });
+    const winnerBarrier = new Promise(resolve => { releaseWinner = resolve; });
+    const winnerReady = new Promise(resolve => { reachedWinner = resolve; });
+    const settle = promise => promise.then(
+      value => ({ status: "fulfilled", value }),
+      reason => ({ status: "rejected", reason }),
+    );
+    const loserOutcome = settle(create({
+      workspaceId,
+      transactionId: transactionIds[0],
+      faultInjector: async phase => {
+        if (phase === "before_workspace_publish") {
+          reachedLoser();
+          await loserBarrier;
+        }
+      },
+    }));
+    await Promise.race([loserReady, loserOutcome.then(() => {
+      throw new Error("Loser ended before its publication barrier");
+    })]);
+    const winnerOutcome = settle(create({
+      workspaceId,
+      transactionId: transactionIds[1],
+      faultInjector: async phase => {
+        if (winnerPhase === "genesis-held" && phase === "after_claim") {
+          reachedWinner();
+          await winnerBarrier;
+        }
+      },
+    }));
+    let outcomes;
+    try {
+      if (winnerPhase === "genesis-held") {
+        await Promise.race([winnerReady, winnerOutcome.then(() => {
+          throw new Error("Winner ended before its genesis barrier");
+        })]);
+      } else {
+        expect(await winnerOutcome).toMatchObject({ status: "fulfilled" });
+      }
+      releaseLoser();
+      const loser = await loserOutcome;
+      expect(loser.status).toBe("rejected");
+      if (winnerPhase === "completed") {
+        expect(loser.reason).toMatchObject({ code: "EEXIST" });
+      } else {
+        // Writer authority and deletion intent share the same exclusive path.
+        expect(loser.reason.message).toBe("Invalid extraction workspace: workspace deletion intent already exists");
+      }
+    } finally {
+      releaseLoser();
+      releaseWinner();
+      outcomes = await Promise.all([loserOutcome, winnerOutcome]);
+    }
     expect(outcomes.filter(item => item.status === "fulfilled")).toHaveLength(1);
     const rejected = outcomes.filter(item => item.status === "rejected");
     expect(rejected).toHaveLength(1);
-    expect(rejected[0].reason).toMatchObject({ code: "EEXIST" });
 
     const { pointer } = await workspaceFromRoot(rootPath);
     const privateDirectories = (await fs.readdir(rootPath))
@@ -928,6 +982,43 @@ describe("transactional verified extraction workspace", () => {
       rootPath,
       workspaceId,
       expectedWorkspaceIdentitySha256: pointer.workspace_identity_sha256,
+    })).resolves.toMatchObject({ state: "complete" });
+  });
+
+  it("rejects an early concurrent creator without scratch while genesis writer authority is held", async () => {
+    await fs.mkdir(rootPath, { mode: 0o700 });
+    const workspaceId = "early-concurrent-pointer";
+    let releaseWinner;
+    let reachedWinner;
+    const barrier = new Promise(resolve => { releaseWinner = resolve; });
+    const ready = new Promise(resolve => { reachedWinner = resolve; });
+    const winner = create({
+      workspaceId,
+      transactionId: "b".repeat(32),
+      faultInjector: async phase => {
+        if (phase === "after_claim") {
+          reachedWinner();
+          await barrier;
+        }
+      },
+    });
+    let completed;
+    try {
+      await Promise.race([ready, winner.then(() => {
+        throw new Error("Winner ended before its genesis barrier");
+      })]);
+      const before = (await fs.readdir(rootPath)).sort();
+      await expect(create({ workspaceId, transactionId: "a".repeat(32) }))
+        .rejects.toThrow("Invalid extraction workspace: workspace deletion intent already exists");
+      expect((await fs.readdir(rootPath)).sort()).toEqual(before);
+    } finally {
+      releaseWinner();
+      completed = await winner;
+    }
+    await expect(inspectExtractionWorkspace({
+      rootPath,
+      workspaceId,
+      expectedWorkspaceIdentitySha256: completed.workspace_identity_sha256,
     })).resolves.toMatchObject({ state: "complete" });
   });
 
