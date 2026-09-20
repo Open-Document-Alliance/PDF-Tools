@@ -306,7 +306,10 @@ export async function callTool(name, args = {}) {
       // validateSigningIntent speaks for itself and says nothing about content.
       return refusal("INTENT_INVALID", error.message);
     }
-    // Never surface a raw parser error: it can echo document content.
+    // Never surface a raw parser error: it can echo document content. The log
+    // line carries the error class and its top frame only, for the same reason.
+    const frame = String(error?.stack ?? "").split("\n")[1]?.trim() ?? "no frame";
+    process.stderr.write(`tool ${name} failed: ${error?.name ?? "Error"} at ${frame}\n`);
     return refusal("INTERNAL_ERROR", "That document could not be processed.");
   }
 }

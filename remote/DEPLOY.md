@@ -53,6 +53,22 @@ allocation, documentation that matches, and a reproducible deploy.
 - Fill in the endpoint URL in `remote-mcp.md`, which is the documentation URL
   the submission form asks for.
 
+## Three things this deployment had to learn
+
+1. **Named method exports, not a default export.** A `default` export in `api/`
+   is given the Node `(req, res)` signature and its return value is ignored, so
+   a handler returning a `Response` hangs until the function times out. `api/mcp.js`
+   exports `POST`, which selects the Web `fetch` style.
+2. **The repository looks like a Jekyll site.** `_config.yml` makes Vercel run
+   `jekyll build`, which fails. `vercel.json` sets `framework: null`, an empty
+   build command, and serves `public/` so the repository's own files are never
+   published.
+3. **File tracing drops what PDF.js loads dynamically.** Without
+   `includeFiles`, `@napi-rs/canvas` is missing and zone detection throws, and
+   with the canvas alone but not `pdfjs-dist`'s `standard_fonts` and `cmaps`,
+   text extraction silently finds nothing. Both are pinned by
+   `functions["api/mcp.js"].includeFiles`.
+
 ## Notes
 
 - No environment variables. The service has no secrets, because it has no

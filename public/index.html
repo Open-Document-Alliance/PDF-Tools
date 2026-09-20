@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PDF Tools Remote MCP</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { color-scheme: light dark; --fg: #1a1a1a; --bg: #ffffff; --muted: #595959; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #ececec; --bg: #141414; --muted: #a6a6a6; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 ui-sans-serif, system-ui, sans-serif; }
+  main { max-width: 34rem; margin: 0 auto; padding: 4rem 1rem; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+  p.muted { color: var(--muted); }
+  a { color: inherit; }
+</style>
+<main>
+  <h1>PDF Tools Remote MCP</h1>
+  <p>An MCP endpoint for reading, filling, signing and flattening PDF forms. It is meant for AI agents, not for browsing.</p>
+  <p>Endpoint: <code>/mcp</code>, Streamable HTTP, no authentication.</p>
+  <p>Nothing is stored. Each call carries its own document, the work happens in memory, and the result comes back in the response.</p>
+  <p class="muted">Open source, MIT licensed, by <a href="https://www.opendocuments.ai/">Open Document Alliance</a>. Source and documentation: <a href="https://github.com/Open-Document-Alliance/PDF-Tools">github.com/Open-Document-Alliance/PDF-Tools</a>. <a href="https://www.opendocuments.ai/privacy-policy">Privacy</a> and <a href="https://www.opendocuments.ai/terms-of-service">terms</a>.</p>
+</main>
