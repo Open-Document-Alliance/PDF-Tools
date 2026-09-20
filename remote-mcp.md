@@ -91,6 +91,12 @@ The endpoint is unauthenticated and free. Please keep automated use
 proportionate. Persistent abuse is answered with rate limits, and if that proves
 insufficient the service will require a key.
 
+## Terms and privacy
+
+The [privacy policy](https://www.opendocuments.ai/privacy-policy) and
+[terms of service](https://www.opendocuments.ai/terms-of-service) of Open
+Document Alliance LLC govern this endpoint.
+
 ## Source and contact
 
 The server is open source, MIT licensed, in
