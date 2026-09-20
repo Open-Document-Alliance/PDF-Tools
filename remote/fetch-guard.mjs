@@ -50,9 +50,15 @@ function isBlockedAddress(address, family) {
 }
 
 async function assertPublicHost(hostname) {
-  const literal = isIP(hostname);
+  // `URL` keeps the brackets on an IPv6 literal, and `isIP` does not accept
+  // them, so an unstripped `[::1]` would fall through to a DNS lookup and be
+  // refused as an unresolvable name rather than as the loopback address it is.
+  const candidate = hostname.startsWith("[") && hostname.endsWith("]")
+    ? hostname.slice(1, -1)
+    : hostname;
+  const literal = isIP(candidate);
   if (literal) {
-    if (isBlockedAddress(hostname, literal)) {
+    if (isBlockedAddress(candidate, literal)) {
       throw new FetchRefused("PRIVATE_ADDRESS", "That address is not reachable from this service.");
     }
     return;

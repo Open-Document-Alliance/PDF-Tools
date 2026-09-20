@@ -288,38 +288,50 @@ export const INSTRUCTIONS =
   "Signatures are visible stamps, not cryptographic signatures, and need the person's own words confirming intent. " +
   "Encrypted PDFs are refused here; the PDF Tools desktop extension handles those on the person's own machine.";
 
-export function createRemoteServer() {
-  const server = new Server(
-    { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
-  );
+/**
+ * Dispatch one tool call and convert refusals into typed, content-free tool
+ * errors. Exported so tests exercise exactly what the transport reaches, rather
+ * than reaching into the server's private handler table.
+ */
+export async function callTool(name, args = {}) {
+  const tool = TOOLS.find((candidate) => candidate.name === name);
+  if (!tool) return refusal("UNKNOWN_TOOL", `There is no tool named ${name}.`);
+  try {
+    return await tool.handler(args);
+  } catch (error) {
+    if (error instanceof ToolRefusal || error instanceof FetchRefused) {
+      return refusal(error.code, error.message);
+    }
+    if (error?.message && /intent|confirmed/i.test(error.message)) {
+      // validateSigningIntent speaks for itself and says nothing about content.
+      return refusal("INTENT_INVALID", error.message);
+    }
+    // Never surface a raw parser error: it can echo document content.
+    return refusal("INTERNAL_ERROR", "That document could not be processed.");
+  }
+}
 
-  server.setRequestHandler("tools/list", async () => ({
+export function listTools() {
+  return {
     tools: TOOLS.map(({ name, description, inputSchema, annotations }) => ({
       name,
       description,
       inputSchema,
       annotations,
     })),
-  }));
+  };
+}
 
-  server.setRequestHandler("tools/call", async (request) => {
-    const tool = TOOLS.find((candidate) => candidate.name === request.params?.name);
-    if (!tool) return refusal("UNKNOWN_TOOL", `There is no tool named ${request.params?.name}.`);
-    try {
-      return await tool.handler(request.params.arguments ?? {});
-    } catch (error) {
-      if (error instanceof ToolRefusal || error instanceof FetchRefused) {
-        return refusal(error.code, error.message);
-      }
-      if (error?.message && /intent|confirmed/i.test(error.message)) {
-        // validateSigningIntent speaks for itself and says nothing about content.
-        return refusal("INTENT_INVALID", error.message);
-      }
-      // Never surface a raw parser error: it can echo document content.
-      return refusal("INTERNAL_ERROR", "That document could not be processed.");
-    }
-  });
+export function createRemoteServer() {
+  const server = new Server(
+    { name: SERVER_NAME, version: SERVER_VERSION },
+    { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
+  );
+
+  server.setRequestHandler("tools/list", async () => listTools());
+
+  server.setRequestHandler("tools/call", async (request) =>
+    callTool(request.params?.name, request.params?.arguments ?? {}));
 
   return server;
 }
