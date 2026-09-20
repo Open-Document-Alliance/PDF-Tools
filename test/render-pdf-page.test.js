@@ -214,6 +214,56 @@ describe("render_pdf_page MCP tool", () => {
     expect(result.structuredContent.requested_region).toEqual(result.structuredContent.region_points);
   }, 30_000);
 
+  // max_dimension_px is a target, not a ceiling: the scale clamp wins at both
+  // ends. The input-schema descriptions say so, and these calls hold them to it.
+  it("renders past or short of max_dimension_px exactly where the documented scale clamps apply", async () => {
+    const longerSide = result => Math.max(
+      result.structuredContent.rendered_width_px,
+      result.structuredContent.rendered_height_px,
+    );
+    const call = async (name, args) => {
+      const result = await client.callTool({ name, arguments: { pdf_path: EXAMPLE_PDF, page: 1, ...args } });
+      expect(result.isError, `${name} ${JSON.stringify(args)}`).not.toBe(true);
+      return result;
+    };
+    const renderPage = (await client.listTools()).tools.find(tool => tool.name === "render_pdf_page");
+    const renderRegion = (await client.listTools()).tools.find(tool => tool.name === "render_pdf_region");
+    expect(renderPage.inputSchema.properties.max_dimension_px.description)
+      .toMatch(/integer from 64 to 8192[\s\S]*between 1 and 2\.5 pixels per PDF\.js viewport point/);
+    expect(renderRegion.inputSchema.properties.max_dimension_px.description)
+      .toMatch(/integer from 64 to 8192[\s\S]*between 0\.1 and 4 pixels per PDF\.js viewport point/);
+
+    const smallPage = await call("render_pdf_page", { max_dimension_px: 64 });
+    const pageView = smallPage.structuredContent.page_view;
+    const pageLongerSide = Math.max(pageView.width_points, pageView.height_points);
+    expect(pageLongerSide).toBeGreaterThan(64);
+    expect(smallPage.structuredContent.scale).toBe(1);
+    expect(longerSide(smallPage)).toBeGreaterThan(64);
+
+    expect(8192).toBeGreaterThan(pageLongerSide * 2.5);
+    const largePage = await call("render_pdf_page", { max_dimension_px: 8192 });
+    expect(largePage.structuredContent.scale).toBe(2.5);
+    expect(longerSide(largePage)).toBeLessThan(8192);
+
+    for (const outOfRange of [63, 8193, 1600.5]) {
+      const refused = await client.callTool({
+        name: "render_pdf_page",
+        arguments: { pdf_path: EXAMPLE_PDF, page: 1, max_dimension_px: outOfRange },
+      }).catch(error => ({ isError: true, thrown: error }));
+      expect(refused.isError, `max_dimension_px ${outOfRange}`).toBe(true);
+    }
+
+    const wholePageRegion = { x: 0, y: 0, width: pageView.width_points, height: pageView.height_points };
+    expect(pageLongerSide).toBeGreaterThan(64 * 10);
+    const smallRegion = await call("render_pdf_region", { ...wholePageRegion, max_dimension_px: 64 });
+    expect(smallRegion.structuredContent.scale).toBe(0.1);
+    expect(longerSide(smallRegion)).toBeGreaterThan(64);
+
+    const largeRegion = await call("render_pdf_region", { x: 72, y: 72, width: 100, height: 50, max_dimension_px: 8192 });
+    expect(largeRegion.structuredContent.scale).toBe(4);
+    expect(longerSide(largeRegion)).toBe(400);
+  }, 60_000);
+
   it("keeps region coordinates aligned on rotated pages by rendering in native page space", async () => {
     const rotatedPdfPath = path.join(tempDirectory, "rotated-region.pdf");
     const doc = await PDFDocument.create();

@@ -1024,6 +1024,33 @@ const EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA = Object.freeze({
   required: ["canonical_path", "size_bytes", "sha256"],
 });
 
+// get_pdf_identity refuses a file without a PDF header, so it cannot identify
+// an existing .md destination. The conversion that wrote the file reports the
+// same three values in saved_output.
+const EXPECTED_MARKDOWN_OUTPUT_IDENTITY_INPUT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  description:
+    "Exact current identity of the existing .md output_path: canonical path, byte length, and SHA-256. get_pdf_identity cannot supply it, because it requires a PDF header; the convert_pdf_to_markdown result that wrote the file reports these values as saved_output.path, saved_output.bytes, and saved_output.sha256. Required with overwrite=true; omit it for a new destination.",
+  properties: {
+    canonical_path: {
+      type: "string",
+      description: "Exact canonical path of the existing destination, as reported in saved_output.path.",
+    },
+    size_bytes: {
+      type: "integer",
+      minimum: 0,
+      description: "Exact byte length of the existing destination, as reported in saved_output.bytes.",
+    },
+    sha256: {
+      type: "string",
+      pattern: "^[a-f0-9]{64}$",
+      description: "Exact SHA-256 of the existing destination, as reported in saved_output.sha256.",
+    },
+  },
+  required: ["canonical_path", "size_bytes", "sha256"],
+});
+
 const EXPECTED_OUTPUT_IDENTITIES_INPUT_SCHEMA = Object.freeze({
   type: "array",
   maxItems: 1000,
@@ -3894,7 +3921,7 @@ async function listTools(request) {
             },
             max_chars_per_page: {
               type: "number",
-              description: "Maximum characters to return per page in the structured output (default: 4000)."
+              description: "Maximum characters to return per page, an integer from 1 to 20000 (default: 4000). Every page in one call also draws on a shared 16,000-character budget, so a later page in a long range can return less text than this, or none; read it with a later start_page."
             }
           },
           required: ["pdf_path"],
@@ -3959,7 +3986,7 @@ async function listTools(request) {
             emit_table_proposals: { type: "boolean", description: "Opt into emitting one bounded, deterministic table_proposals packet per abandoned table region (TABLE_TOPOLOGY_UNKNOWN or TABLE_RULING_UNSUPPORTED), carrying the region's text items, ruled and painted evidence, header hints, page, bbox, coordinate_space, and a source-and-IR-bound proposal_token so a host model can propose a structure for later read-only verification. Additive: the abstention gap is unchanged and default output stays byte-identical. Default: false." },
             output_path: { type: "string", description: "Optional absolute .md path, or ~/ path. The file is written only after complete bytes are staged and verified." },
             overwrite: { type: "boolean", description: "Replace an existing output_path only when its exact expected_output_identity is also supplied. Default: false." },
-            expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
+            expected_output_identity: EXPECTED_MARKDOWN_OUTPUT_IDENTITY_INPUT_SCHEMA
           },
           required: ["pdf_path"]
         },
@@ -4031,7 +4058,7 @@ async function listTools(request) {
             },
             max_dimension_px: {
               type: "number",
-              description: "Maximum width or height in rendered pixels (default: 1800). Use smaller values for lighter previews."
+              description: "Target size of the page image's longer side in pixels, an integer from 64 to 8192 (default: 1800). The render scale is held between 1 and 2.5 pixels per PDF.js viewport point, so a page whose longer side exceeds this many points renders larger than the target, and a target above 2.5 times that side renders smaller. Use smaller values for lighter previews."
             },
             password: {
               type: "string",
@@ -4087,7 +4114,7 @@ async function listTools(request) {
             },
             max_dimension_px: {
               type: "number",
-              description: "Maximum width or height in rendered pixels for the cropped region (default: 1400)."
+              description: "Target size of the region image's longer side in pixels, an integer from 64 to 8192 (default: 1400). The render scale is held between 0.1 and 4 pixels per PDF.js viewport point, so a region whose longer side exceeds ten times the target renders larger than it, and a target above four times that side renders smaller."
             },
             password: {
               type: "string",
@@ -4837,7 +4864,7 @@ async function listTools(request) {
             output_path: { type: "string", description: "Path to save the prepared PDF. May be the same as pdf_path for in-place editing; the original will be backed up on the first mutation." },
             field_values: {
               type: "object",
-              description: "Optional map of AcroForm field name → value. Same shape as fill_pdf's 'fields' argument.",
+              description: "Optional map of AcroForm field name → value. Same shape as fill_pdf's 'field_data' argument.",
               additionalProperties: true
             },
             signature_locations: {

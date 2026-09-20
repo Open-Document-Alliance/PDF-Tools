@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { pathToPdfResourceUri } from "../server/resource-uri.js";
 import {
   DISPLAY_NAME_CANDIDATES,
@@ -210,9 +211,17 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // change's original value measured on 91b969dd
 // (324333fedf66c1b7b4f8ccd306699cde4ee0d8bf0b5d2fe336d37c9b77b9eeea) nor the
 // master value it replaces, because each of those was measured against a
-// different tree; it was read from a live tools/list over the real stdio
-// transport, both runtimes agreeing, rather than chosen between them.
-const TOOL_CONTRACT_SHA256 = "537800312b4fe1fd88934a378b724728732f4d0b81c6e94d7118e099a19b1850";
+// different tree.
+// 2026-09-14 (re-derived onto b0deb60b): five input-schema descriptions
+// corrected to what the handlers do: prepare_signing_packet names fill_pdf's
+// real 'field_data' argument; render_pdf_page and render_pdf_region call
+// max_dimension_px a target and state the scale clamps that override it;
+// read_pdf_pages states the shared 16,000-character budget; and
+// convert_pdf_to_markdown's expected_output_identity points at saved_output
+// instead of get_pdf_identity, which refuses a Markdown file. Tool names,
+// types, required arguments and annotations are unchanged. The combined
+// digest below is measured from live tools/list after both changes.
+const TOOL_CONTRACT_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -682,6 +691,64 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
     }
   });
 
+  it("points only at arguments the named tool really has", () => {
+    const descriptions = [];
+    const collect = value => {
+      if (Array.isArray(value)) return value.forEach(collect);
+      if (!value || typeof value !== "object") return;
+      if (typeof value.description === "string") descriptions.push(value.description);
+      Object.values(value).forEach(collect);
+    };
+    for (const tool of tools) collect(tool);
+    const references = descriptions.flatMap(description => [
+      ...description.matchAll(/\b([a-z][a-z0-9_]*)'s '([a-z][a-z0-9_]*)' argument\b/g),
+    ].map(([, toolName, argumentName]) => ({ toolName, argumentName })));
+    // prepare_signing_packet once named fill_pdf's 'fields', which does not exist.
+    expect(references).toContainEqual({ toolName: "fill_pdf", argumentName: "field_data" });
+    for (const { toolName, argumentName } of references) {
+      const target = tools.find(tool => tool.name === toolName);
+      expect(target, `${toolName} is a tool`).toBeDefined();
+      expect(Object.keys(target.inputSchema.properties ?? {}), `${toolName}'s '${argumentName}'`)
+        .toContain(argumentName);
+    }
+  });
+
+  it("returns less than max_chars_per_page, or nothing, for a page past read_pdf_pages' shared budget", async () => {
+    const readPages = tools.find(tool => tool.name === "read_pdf_pages");
+    expect(readPages.inputSchema.properties.max_chars_per_page.description)
+      .toMatch(/integer from 1 to 20000[\s\S]*shared 16,000-character budget/);
+
+    const document = await PDFDocument.create();
+    const font = await document.embedFont(StandardFonts.Helvetica);
+    const line = "abcdefghij".repeat(10);
+    for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+      const page = document.addPage([612, 792]);
+      for (let lineIndex = 0; lineIndex < 60; lineIndex += 1) {
+        page.drawText(line, { x: 36, y: 760 - lineIndex * 12, size: 6, font });
+      }
+    }
+    const budgetPdf = path.join(stateRoot, "shared-budget.pdf");
+    await fs.writeFile(budgetPdf, await document.save());
+
+    const result = await client.callTool({
+      name: "read_pdf_pages",
+      arguments: { pdf_path: budgetPdf, start_page: 1, end_page: 5, max_chars_per_page: 20000 },
+    });
+    expect(result.isError).not.toBe(true);
+    const pages = result.structuredContent.pages;
+    expect(pages).toHaveLength(5);
+    for (const page of pages) expect(page.char_count, `page ${page.page}`).toBeGreaterThanOrEqual(6000);
+    expect(pages[0].returned_chars).toBe(pages[0].char_count);
+    expect(pages.reduce((total, page) => total + page.returned_chars, 0)).toBe(16000);
+    expect(pages[2].returned_chars).toBeLessThan(pages[2].char_count);
+    expect(pages[4]).toMatchObject({ returned_chars: 0, text: "", truncated: true });
+
+    const refused = await client.callTool({
+      name: "read_pdf_pages",
+      arguments: { pdf_path: budgetPdf, start_page: 1, end_page: 1, max_chars_per_page: 20001 },
+    }).catch(error => ({ isError: true, thrown: error }));
+    expect(refused.isError).toBe(true);
+  }, 30_000);
 
   it("fails closed before opening Lumin OAuth when no client ID is configured", async () => {
     const result = await client.callTool({

@@ -748,13 +748,32 @@ describe("convert_pdf_to_markdown MCP tool", () => {
     expect(await fs.readFile(outputPath)).toEqual(saved);
     expect(await fs.readFile(structureFixture)).toEqual(sourceBefore);
 
+    // The expected_output_identity description sends the caller to saved_output,
+    // because get_pdf_identity cannot identify a Markdown file. Take that route.
+    const identitySchema = (await client.listTools()).tools
+      .find(tool => tool.name === "convert_pdf_to_markdown")
+      .inputSchema.properties.expected_output_identity;
+    expect(identitySchema.description)
+      .toMatch(/saved_output\.path, saved_output\.bytes, and saved_output\.sha256/);
+    const markdownIdentity = await client.callTool({
+      name: "get_pdf_identity",
+      arguments: { pdf_path: outputPath },
+    });
+    expect(markdownIdentity.isError).toBe(true);
+    const identityFromSavedOutput = {
+      canonical_path: first.structuredContent.saved_output.path,
+      size_bytes: first.structuredContent.saved_output.bytes,
+      sha256: first.structuredContent.saved_output.sha256,
+    };
+    expect(identityFromSavedOutput).toEqual(await expectedOutputIdentity(outputPath));
+
     const replaced = await client.callTool({
       name: "convert_pdf_to_markdown",
       arguments: {
         pdf_path: structureFixture,
         output_path: outputPath,
         overwrite: true,
-        expected_output_identity: await expectedOutputIdentity(outputPath),
+        expected_output_identity: identityFromSavedOutput,
       },
     });
     expect(replaced.isError).not.toBe(true);
