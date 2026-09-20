@@ -575,6 +575,98 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
     );
   });
 
+  // The two macOS host scripts drive an installed build over stdio and pin the
+  // tool surface they expect to find there. Those pins are measurements of THIS
+  // tree's tool contract, so every one of them goes stale the moment the
+  // contract moves -- and until 2026-09-10 nothing noticed. The only control
+  // over either script, test/inspect-pdf-accessibility-tool.test.js, binds the
+  // accessibility receipt wiring and not one tool-surface value, so both
+  // scripts read as guarded while rotting. Measured that day against this tree:
+  // five pins in the smoke script and two in the Shannon script had drifted,
+  // and the smoke script failed on its very first assertion.
+  //
+  // Only pins whose authority lives IN this repository are bound here, and the
+  // authority is the live contract this suite already spawns rather than a
+  // second copy of a literal. Deliberately OUT of scope, because nothing in
+  // this tree can re-derive them and a binding that guessed would be worse than
+  // none: the Shannon script's EXPECTED_SOURCE_SHA256, EXPECTED_PAGE_COUNT,
+  // EXPECTED_MARKDOWN_SHA256, EXPECTED_MARKDOWN_BYTES, EXPECTED_GAP_COUNT,
+  // EXPECTED_ALPHA_COUNT and EXPECTED_REPLACEMENT_CHARACTER_COUNT, which are
+  // measurements of a document and of an installed build's own output.
+  it("binds the macOS host scripts' tool-surface pins to the live tool contract", async () => {
+    const liveDigest = createHash("sha256").update(JSON.stringify(tools)).digest("hex");
+    const liveToolCount = String(tools.length);
+    const liveStructuredCount = String(tools.filter(tool => tool.outputSchema).length);
+
+    // One pattern per syntactic position, never a search for the value itself:
+    // a pin site is identified by the expression that reads it, and EVERY
+    // numeric or hex group a site carries -- including the one inside its
+    // failure message -- is checked, so a half-updated site cannot pass.
+    const pinSites = [
+      {
+        script: "scripts/macos-claude-installed-smoke.mjs",
+        sites: [
+          {
+            label: "EXPECTED_TOOL_CONTRACT_SHA256",
+            pattern: /const EXPECTED_TOOL_CONTRACT_SHA256 = "([0-9a-f]{64})";/g,
+            expected: liveDigest,
+          },
+          {
+            label: "same-session tool count",
+            pattern: /assert\(toolNames\.length === (\d+), `Expected (\d+) tools, received/g,
+            expected: liveToolCount,
+          },
+          {
+            label: "tool-name uniqueness count",
+            pattern: /assert\(new Set\(toolNames\)\.size === (\d+),/g,
+            expected: liveToolCount,
+          },
+          {
+            label: "structured tool count",
+            pattern: /assert\(structuredToolCount === (\d+), `Expected (\d+) structured tools/g,
+            expected: liveStructuredCount,
+          },
+          {
+            label: "fresh-session tool count",
+            pattern: /assert\(tools\.tools\.length === (\d+), "Fresh session did not discover (\d+) tools"/g,
+            expected: liveToolCount,
+          },
+        ],
+      },
+      {
+        script: "scripts/macos-claude-installed-shannon.mjs",
+        sites: [
+          {
+            label: "EXPECTED_TOOL_CONTRACT_SHA256",
+            pattern: /const EXPECTED_TOOL_CONTRACT_SHA256 = "([0-9a-f]{64})";/g,
+            expected: liveDigest,
+          },
+          {
+            label: "installed tool count",
+            pattern: /assert\(tools\.tools\.length === (\d+), `Expected (\d+) installed tools/g,
+            expected: liveToolCount,
+          },
+        ],
+      },
+    ];
+
+    for (const { script, sites } of pinSites) {
+      const source = await fs.readFile(path.join(REPO_ROOT, script), "utf8");
+      for (const { label, pattern, expected } of sites) {
+        const matches = [...source.matchAll(pattern)];
+        // A pattern that stops matching must fail by name rather than report an
+        // absence, or a renamed pin silently leaves this assertion vacuous.
+        expect(matches, `${script}: no site matched for ${label}`).toHaveLength(1);
+        const captured = matches[0].slice(1);
+        expect(captured.length, `${script}: ${label} captured no value`).toBeGreaterThan(0);
+        for (const [index, value] of captured.entries()) {
+          expect(value, `${script}: ${label} (capture ${index + 1})`).toBe(expected);
+        }
+      }
+    }
+  });
+
+
   it("fails closed before opening Lumin OAuth when no client ID is configured", async () => {
     const result = await client.callTool({
       name: "start_lumin_authorization",
