@@ -221,7 +221,7 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // instead of get_pdf_identity, which refuses a Markdown file. Tool names,
 // types, required arguments and annotations are unchanged. The combined
 // digest below is measured from live tools/list after both changes.
-const TOOL_CONTRACT_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000";
+const TOOL_CONTRACT_SHA256 = "40572cce414ac18315c66b1ab7ababe81d9d9542d75220e764b133943afb23aa";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

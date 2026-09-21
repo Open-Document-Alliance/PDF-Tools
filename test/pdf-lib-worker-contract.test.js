@@ -1949,6 +1949,7 @@ describe("existing-signature resign guard coverage", () => {
         operation,
         sources,
         password: null,
+        force_xfa: false,
         options,
         stage_directory: stageDirectory,
       },
