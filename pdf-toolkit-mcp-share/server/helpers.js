@@ -1015,11 +1015,35 @@ export function detectExistingSignatures(pdfDoc) {
   }
 }
 
-// Heuristic: does this PDF use XFA forms?
+// The mutations that carry the `force_xfa` contract, and therefore the exact
+// set the XFA refusal applies to. It is not every mutation: a tool that never
+// declared `force_xfa` has no way for a caller to proceed past a refusal, so
+// guarding it here would be a new refusal with no escape hatch rather than the
+// enforcement of a promise the tool already makes. merge_pdfs, split_pdf,
+// rotate_pdf_pages, reorder_pdf_pages and fill_with_profile are outside it for
+// that reason, and they strip XFA silently today exactly as they always have.
+// `test/xfa-guard-surface-consistency.test.js` pins this set against the tools
+// whose MCP inputSchema declares `force_xfa`, so the two cannot drift apart.
+export const XFA_GUARDED_MUTATION_OPERATIONS = new Set([
+  "add_signature_field",
+  "apply_page_plan",
+  "apply_signature",
+  "apply_text",
+  "bulk_fill_from_csv",
+  "fill_pdf",
+  "prepare_signing_packet",
+]);
+
+// Cheap first pass: does this PDF's raw byte prefix advertise an XFA form?
 // pdf-lib strips XFA data on save(), which silently guts government/IRS forms.
-// We scan the raw bytes for the /XFA dict entry — fast and effective.
-// Not 100% foolproof (won't catch heavily-obfuscated PDFs) but catches all
-// real-world XFA forms we've tested.
+//
+// This pass is a prefix scan of the uncompressed bytes, so it sees only what
+// the file states in the clear. A document that keeps its catalog and AcroForm
+// inside a compressed object stream never shows those bytes and this function
+// returns false for it — and that is most modern government forms, including
+// the current IRS W-9, which is exactly the population the guard exists for.
+// `detectXfaFormInDocument` below is the authoritative pass, and a mutation
+// must consult it; this one only buys an early refusal that costs no parse.
 export function detectXfaForm(pdfBytes) {
   if (!pdfBytes || pdfBytes.length < 10) return false;
   // Scan first 200KB — XFA refs are always in the catalog/AcroForm, near the
@@ -1030,14 +1054,68 @@ export function detectXfaForm(pdfBytes) {
   return /\/XFA[\s\[<\/]/.test(sample);
 }
 
+// Authoritative pass: does this *parsed* document carry an XFA form?
+//
+// pdf-lib has already inflated every object stream by the time a mutation
+// holds a document, so looking `/XFA` up on the AcroForm dictionary sees what
+// the byte scan cannot, and costs no extra parse — the mutation paths load the
+// document anyway.
+//
+// `dynamic` is reported separately. A catalog that sets /NeedsRendering true is
+// the dynamic case: the AcroForm is a placeholder and the XFA layer is the
+// form, so stripping it can leave a viewer showing a "please wait" page rather
+// than a document. Static XFA (the W-9 shape) keeps its data in the AcroForm
+// fields and survives the strip, which is why the two are named apart in the
+// refusal rather than merged.
+export function detectXfaFormInDocument(pdfDoc) {
+  const absent = { present: false, dynamic: false };
+  if (!pdfDoc) return absent;
+  try {
+    const catalog = pdfDoc.catalog;
+    if (!catalog || typeof catalog.lookup !== "function") return absent;
+    const acroForm = catalog.lookup(PDFName.of("AcroForm"));
+    if (!acroForm || typeof acroForm.lookup !== "function") return absent;
+    if (acroForm.lookup(PDFName.of("XFA")) === undefined) return absent;
+    const needsRendering = catalog.lookup(PDFName.of("NeedsRendering"));
+    return {
+      present: true,
+      dynamic: typeof needsRendering?.asBoolean === "function"
+        ? needsRendering.asBoolean() === true
+        : false,
+    };
+  } catch {
+    // A catalog that cannot be walked is not evidence of XFA. The mutation's
+    // own structural validation owns malformed documents; inventing a refusal
+    // here would report the wrong cause.
+    return absent;
+  }
+}
+
+export function xfaMutationRefusalMessage({ dynamic = false } = {}) {
+  return (
+    "This PDF uses XFA forms, which pdf-lib cannot preserve — saving it would destroy the form data. " +
+    (dynamic
+      ? "Its catalog sets /NeedsRendering true, so the AcroForm layer may be only a placeholder and the " +
+        "XFA layer is the form itself; stripping it can leave a viewer showing a \"please wait\" page " +
+        "instead of a document. "
+      : "") +
+    "Convert the form to AcroForm first (e.g. via Adobe Acrobat's 'Flatten Form'), or pass force_xfa=true " +
+    "if you understand that the XFA layer will be stripped."
+  );
+}
+
 export function assertXfaMutationAllowed(pdfBytes, { forceXfa = false } = {}) {
   if (!forceXfa && detectXfaForm(pdfBytes)) {
-    throw new Error(
-      "This PDF uses XFA forms, which pdf-lib cannot preserve — saving it would destroy the form data. " +
-      "Convert the form to AcroForm first (e.g. via Adobe Acrobat's 'Flatten Form'), or pass force_xfa=true " +
-      "if you understand that the XFA layer will be stripped."
-    );
+    throw new Error(xfaMutationRefusalMessage());
   }
+}
+
+// The parse-time companion to `assertXfaMutationAllowed`, run where the
+// document is actually parsed. Refuses the documents the byte scan cannot see.
+export function assertParsedXfaMutationAllowed(pdfDoc, { forceXfa = false } = {}) {
+  if (forceXfa) return;
+  const xfa = detectXfaFormInDocument(pdfDoc);
+  if (xfa.present) throw new Error(xfaMutationRefusalMessage({ dynamic: xfa.dynamic }));
 }
 
 // ─── Signature zone detection ────────────────────────────────────────────────

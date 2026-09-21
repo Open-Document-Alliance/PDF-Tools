@@ -95,6 +95,7 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
   "test/temp-directory.test.js",
   "test/type3-recovery-gate.test.js",
   "test/validate-pdf.test.js",
+  "test/xfa-compressed-catalog.test.js",
   "test/xfa-guards.test.js",
 ]);
 

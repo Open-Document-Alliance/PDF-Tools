@@ -5269,6 +5269,7 @@ async function handleToolCall(request) {
           operation: "fill_pdf",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
+          force_xfa: force_xfa === true,
           options: { field_data },
         }, async ({ result, outputs, atomicTransition }) => {
           const filledFields = result.filledFields;
@@ -5370,6 +5371,7 @@ async function handleToolCall(request) {
           operation: "bulk_fill_from_csv",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
+          force_xfa: force_xfa === true,
           options: { records },
         }, async ({ result, outputs, atomicTransition }) => {
           if (outputs.length !== pendingOutputs.length || result.rows.length !== pendingOutputs.length) {
@@ -7349,6 +7351,7 @@ async function handleToolCall(request) {
             operation: "apply_page_plan",
             sources: [bindRecoveredMutationSource(recoveredInput)],
             password,
+            force_xfa: force_xfa === true,
             options: { page_order, rotations },
           }, async ({ result, outputs, atomicTransition }) => {
             const committedOutput = await writePdfOutputAtomic(resolvedOutputPath, null, {
@@ -7688,6 +7691,7 @@ async function handleToolCall(request) {
           operation: "add_signature_field",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
+          force_xfa: force_xfa === true,
           options: {
             placement: { page, x, y, width, height, label },
             allow_resign,
@@ -7785,6 +7789,7 @@ async function handleToolCall(request) {
           operation: "apply_signature",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
+          force_xfa: force_xfa === true,
           options: {
             signature: signatureRecord,
             placement: { page, x, y, width, height },
@@ -7852,6 +7857,7 @@ async function handleToolCall(request) {
           operation: "prepare_signing_packet",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
+          force_xfa: force_xfa === true,
           options: {
             field_values: field_values ?? {},
             signature_locations: zones,
@@ -7951,6 +7957,7 @@ async function handleToolCall(request) {
           operation: "apply_text",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
+          force_xfa: force_xfa === true,
           options: {
             placement: { page, x, y, width, height },
             text,

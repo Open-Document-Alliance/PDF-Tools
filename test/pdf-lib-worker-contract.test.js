@@ -142,6 +142,7 @@ async function requestFor(bytes) {
       }],
       password: null,
       options: { pages: [], degrees: 90 },
+      force_xfa: false,
       stage_directory: stageDirectory,
     },
   };

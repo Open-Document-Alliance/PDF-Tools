@@ -72,6 +72,7 @@ async function directRequest(bytes) {
       sources: [fixture.source],
       password: null,
       options: {},
+      force_xfa: false,
       stage_directory: stageDirectory,
     },
   };
@@ -129,6 +130,9 @@ describe("isolated read-only PDF-lib accessibility operation", () => {
       sources: [source],
       options: {},
       password: null,
+      // A read-only inspection never forces past the XFA guard; it carries
+      // the field so the request shape is one shape, not two.
+      force_xfa: false,
     });
     for (const request of [
       { operation: "inspect_pdf_accessibility", sources: [source], password: "secret" },
