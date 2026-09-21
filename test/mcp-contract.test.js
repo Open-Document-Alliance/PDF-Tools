@@ -196,7 +196,14 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // and read-coverage descriptions replace the previous fingerprint
 // 1be7e32a616bf23a4bcf4b064eaad15bcf094c807088ac5f0074369bdb66c716.
 // Names, input schemas and effect annotations remain unchanged.
-const TOOL_CONTRACT_SHA256 = "38efffcecdfd667010d18267de70c92cb89671b27a74c2edd4fb00f024cd1e88";
+// 2026-09-21 (XFA guard): the force_xfa description on the four tools that
+// accept it now says the flag is for dynamic XFA, whose pages are built from
+// the layer saving drops, and that static XFA needs no flag because its values
+// live in the AcroForm. That wording change alone replaces the previous
+// fingerprint 38efffcecdfd667010d18267de70c92cb89671b27a74c2edd4fb00f024cd1e88.
+// Tool names, input schemas, annotations and every other output field are
+// unchanged, and the count stays at 57. See issue #200.
+const TOOL_CONTRACT_SHA256 = "4e369e28a72cd3b1bf4747bb69ff01047bd7e06584328c03771183b1db31b137";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
