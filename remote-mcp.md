@@ -5,9 +5,8 @@ description: The hosted PDF Tools MCP endpoint for AI agents, what it does, and 
 
 # PDF Tools Remote MCP
 
-> Draft. The endpoint is not deployed yet, and this page documents the intended
-> service so it can be reviewed before it is. Values marked TBD are settled at
-> deployment.
+> The endpoint is deployed and the properties below are what it does. Its
+> behavioral contract, and the tests that bind it, are in the repository.
 
 PDF Tools is an open source toolkit for working with PDF forms. It exists in two
 forms, and the difference matters:
@@ -24,7 +23,7 @@ filesystem, such as a hosted assistant working from a link or an attachment.
 ## Endpoint
 
 - Transport: Streamable HTTP (MCP)
-- URL: TBD
+- URL: `https://mcp.opendocuments.ai/mcp`
 - Authentication: none
 - Protocol revisions: as published by the server's `initialize` response
 
