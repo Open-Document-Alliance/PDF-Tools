@@ -139,7 +139,7 @@ const TOOLS = [
     annotations: { title: "Fill Form" },
     async handler({ fields, ...input }) {
       const bytes = await resolveBytes(input);
-      assertXfaMutationAllowed(bytes);
+      const xfaNotice = assertXfaMutationAllowed(bytes);
       const document = await loadDocument(bytes);
       const form = document.getForm();
       const filled = [];
@@ -168,8 +168,14 @@ const TOOLS = [
         ? `\nNot filled: ${notFilled.map((entry) => `${entry.name} (${entry.reason})`).join(", ")}`
         : "";
       return ok(
-        `Filled ${filled.length} of ${Object.keys(fields ?? {}).length} fields.${note}\nThis does not prove the form is complete or ready to submit.`,
-        { filled, not_filled: notFilled, pdf_base64: Buffer.from(output).toString("base64") },
+        `Filled ${filled.length} of ${Object.keys(fields ?? {}).length} fields.${note}\n`
+          + `This does not prove the form is complete or ready to submit.${xfaNotice ? `\n${xfaNotice}` : ""}`,
+        {
+          filled,
+          not_filled: notFilled,
+          xfa_notice: xfaNotice,
+          pdf_base64: Buffer.from(output).toString("base64"),
+        },
       );
     },
   },
@@ -237,7 +243,7 @@ const TOOLS = [
         user_confirmed_at: confirmed_at,
       });
       const bytes = await resolveBytes(input);
-      assertXfaMutationAllowed(bytes);
+      const xfaNotice = assertXfaMutationAllowed(bytes);
       const document = await loadDocument(bytes);
       if (detectExistingSignatures(document)?.length) {
         throw new ToolRefusal(
@@ -259,8 +265,9 @@ const TOOLS = [
       document.setKeywords([auditLine]);
       const output = await document.save();
       return ok(
-        `Stamped "${display_name}" on page ${page}.\n${auditLine}\nThis is a visible stamp, not a cryptographic signature.`,
-        { audit_line: auditLine, pdf_base64: Buffer.from(output).toString("base64") },
+        `Stamped "${display_name}" on page ${page}.\n${auditLine}\n`
+          + `This is a visible stamp, not a cryptographic signature.${xfaNotice ? `\n${xfaNotice}` : ""}`,
+        { audit_line: auditLine, xfa_notice: xfaNotice, pdf_base64: Buffer.from(output).toString("base64") },
       );
     },
   },
@@ -272,11 +279,12 @@ const TOOLS = [
     annotations: { title: "Flatten Form" },
     async handler(args) {
       const bytes = await resolveBytes(args);
-      assertXfaMutationAllowed(bytes);
+      const xfaNotice = assertXfaMutationAllowed(bytes);
       const document = await loadDocument(bytes);
       document.getForm().flatten();
       const output = await document.save();
-      return ok("Flattened. The values are now page content.", {
+      return ok(`Flattened. The values are now page content.${xfaNotice ? `\n${xfaNotice}` : ""}`, {
+        xfa_notice: xfaNotice,
         pdf_base64: Buffer.from(output).toString("base64"),
       });
     },

@@ -5,6 +5,7 @@ import { constants as fsConstants } from "fs";
 import path from "path";
 import { homedir } from "os";
 import { createHash, randomUUID } from "crypto";
+import { inflateSync } from "zlib";
 import {
   EncryptedPDFError,
   PDFArray,
@@ -1020,25 +1021,118 @@ export function detectExistingSignatures(pdfDoc) {
 // We scan the raw bytes for the /XFA dict entry — fast and effective.
 // Not 100% foolproof (won't catch heavily-obfuscated PDFs) but catches all
 // real-world XFA forms we've tested.
-export function detectXfaForm(pdfBytes) {
-  if (!pdfBytes || pdfBytes.length < 10) return false;
-  // Scan first 200KB — XFA refs are always in the catalog/AcroForm, near the
-  // top of the file. Whole-file scan would be unnecessarily expensive.
-  const searchLimit = Math.min(pdfBytes.length, 200 * 1024);
-  const sample = pdfBytes.subarray(0, searchLimit).toString("latin1");
-  // Match /XFA followed by whitespace, array start, or dict ref
-  return /\/XFA[\s\[<\/]/.test(sample);
+// Most cost is paid only by documents that hide their catalog in an object
+// stream, which is where the plain scan used to go blind. These bounds keep
+// that second pass from becoming a decompression bomb.
+const XFA_PLAIN_SCAN_BYTES = 200 * 1024;
+const XFA_OBJSTM_INFLATE_BUDGET_BYTES = 8 * 1024 * 1024;
+const XFA_OBJSTM_SINGLE_STREAM_BYTES = 2 * 1024 * 1024;
+
+/** Match /XFA followed by whitespace, array start, or a dict ref. */
+function mentionsXfa(text) {
+  return /\/XFA[\s\[<\/]/.test(text);
 }
 
-export function assertXfaMutationAllowed(pdfBytes, { forceXfa = false } = {}) {
-  if (!forceXfa && detectXfaForm(pdfBytes)) {
-    throw new Error(
-      "This PDF uses XFA forms, which pdf-lib cannot preserve — saving it would destroy the form data. " +
-      "Convert the form to AcroForm first (e.g. via Adobe Acrobat's 'Flatten Form'), or pass force_xfa=true " +
-      "if you understand that the XFA layer will be stripped."
-    );
+/**
+ * Scan the object streams a document compresses its catalog into.
+ *
+ * A PDF written with a compressed cross-reference table keeps the catalog, and
+ * therefore /XFA, inside a Flate-compressed /ObjStm, where no amount of raw
+ * byte scanning will find it. The IRS W-9 is exactly this shape: pdf-lib parses
+ * it and reports /XFA on the AcroForm while the bytes show nothing.
+ */
+function objectStreamsMentionXfa(pdfBytes) {
+  const haystack = pdfBytes.toString("latin1");
+  let inflated = 0;
+  let index = 0;
+  for (;;) {
+    const objstm = haystack.indexOf("/ObjStm", index);
+    if (objstm === -1) return false;
+    index = objstm + 7;
+    const streamStart = haystack.indexOf("stream", objstm);
+    if (streamStart === -1) return false;
+    const dictionary = haystack.slice(objstm, streamStart);
+    if (!/\/Flate(Decode)?/.test(dictionary)) continue;
+    let payloadStart = streamStart + "stream".length;
+    if (haystack[payloadStart] === "\r") payloadStart += 1;
+    if (haystack[payloadStart] === "\n") payloadStart += 1;
+    const payloadEnd = haystack.indexOf("endstream", payloadStart);
+    if (payloadEnd === -1) return false;
+    const length = payloadEnd - payloadStart;
+    if (length <= 0 || length > XFA_OBJSTM_SINGLE_STREAM_BYTES) continue;
+    if (inflated + length > XFA_OBJSTM_INFLATE_BUDGET_BYTES) return false;
+    inflated += length;
+    try {
+      const expanded = inflateSync(pdfBytes.subarray(payloadStart, payloadEnd)).toString("latin1");
+      if (mentionsXfa(expanded)) return true;
+    } catch {
+      // A stream that will not inflate tells us nothing about XFA. The parser
+      // downstream will complain about it in its own words.
+    }
   }
 }
+
+/**
+ * Report whether a document carries an XFA layer.
+ *
+ * Two passes, cheapest first: the plain byte scan that catches an uncompressed
+ * catalog, then the object streams. The second pass exists because the first
+ * one silently returned false for the documents this guard matters most for,
+ * modern government forms, which let every mutation strip their XFA layer
+ * without the refusal or the force_xfa acknowledgement the tools promise.
+ */
+export function detectXfaForm(pdfBytes) {
+  if (!pdfBytes || pdfBytes.length < 10) return false;
+  const bytes = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
+  const sample = bytes.subarray(0, Math.min(bytes.length, XFA_PLAIN_SCAN_BYTES)).toString("latin1");
+  if (mentionsXfa(sample)) return true;
+  return objectStreamsMentionXfa(bytes);
+}
+
+/**
+ * A document that declares /NeedsRendering true expects a viewer to build the
+ * page from its XFA layer, so stripping that layer can leave a reader showing
+ * a placeholder instead of a form. Static XFA survives the same treatment
+ * because its AcroForm carries the values.
+ */
+export function detectDynamicXfaForm(pdfBytes) {
+  if (!detectXfaForm(pdfBytes)) return false;
+  const bytes = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
+  return /\/NeedsRendering\s+true/.test(bytes.toString("latin1"));
+}
+
+/**
+ * Refuse a mutation that would destroy a document, and report one that costs
+ * the document something short of that.
+ *
+ * Saving through pdf-lib drops the XFA layer either way. What that means
+ * depends on the document. A dynamic form (`/NeedsRendering true`) is built
+ * from that layer, so losing it can leave a reader showing a placeholder
+ * instead of a form: that is a refusal. A static form keeps its values in the
+ * AcroForm, which is why filling the current IRS W-9 produces a correct
+ * document, so refusing it would break an ordinary job to prevent nothing.
+ * It returns a notice instead, for the caller to pass on.
+ */
+export function assertXfaMutationAllowed(pdfBytes, { forceXfa = false } = {}) {
+  if (!detectXfaForm(pdfBytes)) return null;
+  if (detectDynamicXfaForm(pdfBytes)) {
+    if (forceXfa) return XFA_DYNAMIC_NOTICE;
+    throw new Error(
+      "This PDF is a dynamic XFA form, and its pages are built from the XFA layer that saving would drop, " +
+      "so the result may open as a placeholder rather than a form. Convert it to AcroForm first " +
+      "(e.g. via Adobe Acrobat's 'Flatten Form'), or pass force_xfa=true if you accept that outcome."
+    );
+  }
+  return XFA_STATIC_NOTICE;
+}
+
+export const XFA_STATIC_NOTICE =
+  "This document carried an XFA layer, which was removed on save because pdf-lib cannot write it. " +
+  "Its form values live in the AcroForm and are preserved; a viewer that prefers XFA will now use the AcroForm view.";
+
+export const XFA_DYNAMIC_NOTICE =
+  "This document is a dynamic XFA form and its XFA layer was removed on save. The result may open as a " +
+  "placeholder rather than a form in readers that build the page from XFA.";
 
 // ─── Signature zone detection ────────────────────────────────────────────────
 // Finds "Sign here", initials, name, and date zones in a PDF so agents/viewers can

@@ -3637,7 +3637,7 @@ async function listTools(request) {
             },
             force_xfa: {
               type: "boolean",
-              description: "Proceed even if the PDF uses XFA forms (default: false). Warning: the XFA layer will be stripped by pdf-lib."
+              description: "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
             },
             expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
           },
@@ -3679,7 +3679,7 @@ async function listTools(request) {
             },
             force_xfa: {
               type: "boolean",
-              description: "Proceed even if the PDF uses XFA forms (default: false). Warning: the XFA layer will be stripped by pdf-lib."
+              description: "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
             },
             expected_output_identities: EXPECTED_OUTPUT_IDENTITIES_INPUT_SCHEMA
           },
@@ -4604,7 +4604,7 @@ async function listTools(request) {
             },
             force_xfa: {
               type: "boolean",
-              description: "Proceed even if the PDF uses XFA forms (default: false). Warning: the XFA layer will be stripped by pdf-lib."
+              description: "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
             },
             expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
           },
@@ -4808,7 +4808,7 @@ async function listTools(request) {
             },
             force_xfa: {
               type: "boolean",
-              description: "Proceed even if the PDF uses XFA forms (default: false). Warning: the XFA layer will be stripped by pdf-lib."
+              description: "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
             },
             overwrite: {
               type: "boolean",
