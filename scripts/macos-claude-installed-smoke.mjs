@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const extensionDirectory = path.resolve(process.argv[2] || "");
 const fixtureDirectory = path.resolve(process.argv[3] || "");
@@ -11,8 +11,12 @@ if (!process.argv[2] || !process.argv[3]) {
   throw new Error("Usage: macos-claude-installed-smoke.mjs <installed-extension-dir> <fixture-dir>");
 }
 
+// The installed extension only needs the server runtime. Keep the test client
+// in this repository's development dependencies so host qualification does not
+// accidentally require shipping the legacy full SDK in the MCPB.
 const sdkDirectory = path.join(
-  extensionDirectory,
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
   "node_modules",
   "@modelcontextprotocol",
   "sdk",
@@ -29,7 +33,7 @@ const textFixture = path.join(fixtureDirectory, "synthetic-text-two-page.pdf");
 const rasterFixture = path.join(fixtureDirectory, "synthetic-raster-only.pdf");
 const mutationDirectory = path.join(fixtureDirectory, "mutation-output");
 const toolNames = [];
-const EXPECTED_TOOL_CONTRACT_SHA256 = "53d965e366b16adf2a0fa90dfe837ca98d29a8f41c1adf8b9e8f661ea3bb7d95";
+const EXPECTED_TOOL_CONTRACT_SHA256 = "40572cce414ac18315c66b1ab7ababe81d9d9542d75220e764b133943afb23aa";
 const ACCESSIBILITY_CONCLUSION_KEYS = Object.freeze([
   "certification",
   "document_accessibility",
@@ -76,8 +80,8 @@ let rasterHash;
 try {
   const tools = await first.client.listTools();
   toolNames.push(...tools.tools.map(tool => tool.name).sort());
-  assert(toolNames.length === 43, `Expected 43 tools, received ${toolNames.length}`);
-  assert(new Set(toolNames).size === 43, "Tool names were not unique");
+  assert(toolNames.length === 57, `Expected 57 tools, received ${toolNames.length}`);
+  assert(new Set(toolNames).size === 57, "Tool names were not unique");
   toolContractSha256 = createHash("sha256")
     .update(JSON.stringify(tools.tools))
     .digest("hex");
@@ -86,7 +90,7 @@ try {
     `Tool contract digest drifted: ${toolContractSha256}`,
   );
   structuredToolCount = tools.tools.filter(tool => tool.outputSchema).length;
-  assert(structuredToolCount === 38, `Expected 38 structured tools, received ${structuredToolCount}`);
+  assert(structuredToolCount === 53, `Expected 53 structured tools, received ${structuredToolCount}`);
 
   const listed = await first.client.callTool({
     name: "list_pdfs",
@@ -240,7 +244,7 @@ assert(mutationFiles.length === 2, `Expected two mutation outputs, received ${mu
 const fresh = await connect("fresh-session");
 try {
   const tools = await fresh.client.listTools();
-  assert(tools.tools.length === 43, "Fresh session did not discover 43 tools");
+  assert(tools.tools.length === 57, "Fresh session did not discover 57 tools");
   const info = await fresh.client.callTool({
     name: "get_pdf_info",
     arguments: { pdf_path: path.join(mutationDirectory, mutationFiles[1]) },

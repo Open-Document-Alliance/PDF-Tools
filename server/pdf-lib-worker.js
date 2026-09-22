@@ -35,6 +35,8 @@ import {
   getPageBoxGeometry,
   parsePageRanges,
   PDF_LIB_ENCRYPTED_MESSAGE,
+  XFA_GUARDED_MUTATION_OPERATIONS,
+  assertParsedXfaMutationAllowed,
   stampSignatureOnPage,
   stampTextOnPage,
 } from "./helpers.js";
@@ -215,7 +217,7 @@ function validateSource(source, index) {
 function validateRequest(request) {
   exactKeys(
     request,
-    ["operation", "options", "password", "protocol_version", "sources", "stage_directory"],
+    ["force_xfa", "operation", "options", "password", "protocol_version", "sources", "stage_directory"],
     "pdf-lib mutation request",
   );
   if (request.protocol_version !== PROTOCOL_VERSION || !OPERATIONS.has(request.operation)) {
@@ -238,6 +240,12 @@ function validateRequest(request) {
   }
   if (request.operation === "inspect_pdf_accessibility" && request.password !== null) {
     throw new TypeError("inspect_pdf_accessibility does not accept a password.");
+  }
+  if (typeof request.force_xfa !== "boolean") {
+    throw new TypeError("force_xfa must be a boolean.");
+  }
+  if (request.force_xfa && !XFA_GUARDED_MUTATION_OPERATIONS.has(request.operation)) {
+    throw new TypeError(`${request.operation} does not accept force_xfa.`);
   }
   if (!request.options || typeof request.options !== "object" || Array.isArray(request.options)) {
     throw new TypeError("options must be an object.");
@@ -1999,7 +2007,7 @@ export async function savePdfDocumentSafely(document, options = {}) {
   return bytes;
 }
 
-export async function loadPdfForMutation(bytes, password) {
+export async function loadPdfForMutation(bytes, password, { forceXfa = false, guardXfa = false } = {}) {
   assertBoundedPdfStructure(bytes);
   await assertBoundedPdfStreamDecodes(bytes);
   let document;
@@ -2026,6 +2034,13 @@ export async function loadPdfForMutation(bytes, password) {
   if (document.getPageCount() < 1) {
     throw new Error("PDF has zero pages. A mutation requires at least one source and output page.");
   }
+  // The parse-time XFA guard runs here, and only here, because this is the one
+  // point every guarded mutation parses its source through. The parent's byte
+  // scan cannot see an /XFA that lives in a compressed object stream, which is
+  // most modern government forms; by this line pdf-lib has already inflated
+  // them, so the check costs no extra parse. A decrypted source arrives here as
+  // its plaintext, so an encrypted XFA form is caught too.
+  if (guardXfa) assertParsedXfaMutationAllowed(document, { forceXfa });
   return document;
 }
 
@@ -2187,6 +2202,8 @@ function createProtection(request) {
   return {
     operation: request.operation,
     password: request.password,
+    forceXfa: request.force_xfa === true,
+    guardXfa: XFA_GUARDED_MUTATION_OPERATIONS.has(request.operation),
     // Every source gets an entry, encrypted or not, because `merge_pdfs` has
     // to be able to tell "all protected the same way" from "some protected".
     sources: new Map(),
@@ -2203,14 +2220,15 @@ function createProtection(request) {
  * the same detection the read path uses.
  */
 async function loadMutationSource(protection, bytes) {
+  const xfa = { forceXfa: protection.forceXfa, guardXfa: protection.guardXfa };
   if (!ENCRYPTED_WRITE_OPERATIONS[protection.operation]) {
     // Not a mutation that may decrypt; behave exactly as before.
-    return loadPdfForMutation(bytes, protection.password);
+    return loadPdfForMutation(bytes, protection.password, xfa);
   }
   const known = protection.sources.get(bytes);
-  if (known?.plaintext) return loadPdfForMutation(known.plaintext, null);
+  if (known?.plaintext) return loadPdfForMutation(known.plaintext, null, xfa);
   try {
-    const document = await loadPdfForMutation(bytes, protection.password);
+    const document = await loadPdfForMutation(bytes, protection.password, xfa);
     if (!protection.sources.has(bytes)) protection.sources.set(bytes, null);
     return document;
   } catch (error) {
@@ -2231,7 +2249,7 @@ async function loadMutationSource(protection, bytes) {
     // source by device, inode, size and digest.
     parsedSha256: createHash("sha256").update(decrypted.plaintext).digest("hex"),
   });
-  return loadPdfForMutation(decrypted.plaintext, null);
+  return loadPdfForMutation(decrypted.plaintext, null, xfa);
 }
 
 /**
