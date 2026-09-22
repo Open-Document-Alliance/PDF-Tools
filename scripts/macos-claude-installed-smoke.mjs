@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const extensionDirectory = path.resolve(process.argv[2] || "");
 const fixtureDirectory = path.resolve(process.argv[3] || "");
@@ -11,8 +11,12 @@ if (!process.argv[2] || !process.argv[3]) {
   throw new Error("Usage: macos-claude-installed-smoke.mjs <installed-extension-dir> <fixture-dir>");
 }
 
+// The installed extension only needs the server runtime. Keep the test client
+// in this repository's development dependencies so host qualification does not
+// accidentally require shipping the legacy full SDK in the MCPB.
 const sdkDirectory = path.join(
-  extensionDirectory,
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
   "node_modules",
   "@modelcontextprotocol",
   "sdk",
