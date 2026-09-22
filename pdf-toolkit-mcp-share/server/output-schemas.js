@@ -1778,6 +1778,11 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
       display_name: nullable(string),
       created_at: nullable(string),
     })),
+    // Files in the signatures folder that did not become an entry above.
+    // A caller reading only `signatures` would otherwise see an unreadable
+    // store as an empty one.
+    unreadable: arrayOf(object({ file: string, code: nullable(string) })),
+    malformed: arrayOf(object({ file: string })),
   }),
   load_signature: object({
     name: string,

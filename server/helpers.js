@@ -5,7 +5,6 @@ import { constants as fsConstants } from "fs";
 import path from "path";
 import { homedir } from "os";
 import { createHash, randomUUID } from "crypto";
-import { inflateSync } from "zlib";
 import {
   EncryptedPDFError,
   PDFArray,
@@ -1016,123 +1015,133 @@ export function detectExistingSignatures(pdfDoc) {
   }
 }
 
-// Heuristic: does this PDF use XFA forms?
+// The mutations that carry the `force_xfa` contract, and therefore the exact
+// set the XFA refusal applies to. It is not every mutation: a tool that never
+// declared `force_xfa` has no way for a caller to proceed past a refusal, so
+// guarding it here would be a new refusal with no escape hatch rather than the
+// enforcement of a promise the tool already makes. merge_pdfs, split_pdf,
+// rotate_pdf_pages, reorder_pdf_pages and fill_with_profile are outside it for
+// that reason, and they strip XFA silently today exactly as they always have.
+// `test/xfa-guard-surface-consistency.test.js` pins this set against the tools
+// whose MCP inputSchema declares `force_xfa`, so the two cannot drift apart.
+export const XFA_GUARDED_MUTATION_OPERATIONS = new Set([
+  "add_signature_field",
+  "apply_page_plan",
+  "apply_signature",
+  "apply_text",
+  "bulk_fill_from_csv",
+  "fill_pdf",
+  "prepare_signing_packet",
+]);
+
+// Cheap first pass: does this PDF's raw byte prefix advertise an XFA form?
 // pdf-lib strips XFA data on save(), which silently guts government/IRS forms.
-// We scan the raw bytes for the /XFA dict entry — fast and effective.
-// Not 100% foolproof (won't catch heavily-obfuscated PDFs) but catches all
-// real-world XFA forms we've tested.
-// Most cost is paid only by documents that hide their catalog in an object
-// stream, which is where the plain scan used to go blind. These bounds keep
-// that second pass from becoming a decompression bomb.
-const XFA_PLAIN_SCAN_BYTES = 200 * 1024;
-const XFA_OBJSTM_INFLATE_BUDGET_BYTES = 8 * 1024 * 1024;
-const XFA_OBJSTM_SINGLE_STREAM_BYTES = 2 * 1024 * 1024;
-
-/** Match /XFA followed by whitespace, array start, or a dict ref. */
-function mentionsXfa(text) {
-  return /\/XFA[\s\[<\/]/.test(text);
-}
-
-/**
- * Scan the object streams a document compresses its catalog into.
- *
- * A PDF written with a compressed cross-reference table keeps the catalog, and
- * therefore /XFA, inside a Flate-compressed /ObjStm, where no amount of raw
- * byte scanning will find it. The IRS W-9 is exactly this shape: pdf-lib parses
- * it and reports /XFA on the AcroForm while the bytes show nothing.
- */
-function objectStreamsMentionXfa(pdfBytes) {
-  const haystack = pdfBytes.toString("latin1");
-  let inflated = 0;
-  let index = 0;
-  for (;;) {
-    const objstm = haystack.indexOf("/ObjStm", index);
-    if (objstm === -1) return false;
-    index = objstm + 7;
-    const streamStart = haystack.indexOf("stream", objstm);
-    if (streamStart === -1) return false;
-    const dictionary = haystack.slice(objstm, streamStart);
-    if (!/\/Flate(Decode)?/.test(dictionary)) continue;
-    let payloadStart = streamStart + "stream".length;
-    if (haystack[payloadStart] === "\r") payloadStart += 1;
-    if (haystack[payloadStart] === "\n") payloadStart += 1;
-    const payloadEnd = haystack.indexOf("endstream", payloadStart);
-    if (payloadEnd === -1) return false;
-    const length = payloadEnd - payloadStart;
-    if (length <= 0 || length > XFA_OBJSTM_SINGLE_STREAM_BYTES) continue;
-    if (inflated + length > XFA_OBJSTM_INFLATE_BUDGET_BYTES) return false;
-    inflated += length;
-    try {
-      const expanded = inflateSync(pdfBytes.subarray(payloadStart, payloadEnd)).toString("latin1");
-      if (mentionsXfa(expanded)) return true;
-    } catch {
-      // A stream that will not inflate tells us nothing about XFA. The parser
-      // downstream will complain about it in its own words.
-    }
-  }
-}
-
-/**
- * Report whether a document carries an XFA layer.
- *
- * Two passes, cheapest first: the plain byte scan that catches an uncompressed
- * catalog, then the object streams. The second pass exists because the first
- * one silently returned false for the documents this guard matters most for,
- * modern government forms, which let every mutation strip their XFA layer
- * without the refusal or the force_xfa acknowledgement the tools promise.
- */
+//
+// This pass is a prefix scan of the uncompressed bytes, so it sees only what
+// the file states in the clear. A document that keeps its catalog and AcroForm
+// inside a compressed object stream never shows those bytes and this function
+// returns false for it — and that is most modern government forms, including
+// the current IRS W-9, which is exactly the population the guard exists for.
+// `detectXfaFormInDocument` below is the authoritative pass, and a mutation
+// must consult it; this one only buys an early refusal that costs no parse.
 export function detectXfaForm(pdfBytes) {
   if (!pdfBytes || pdfBytes.length < 10) return false;
-  const bytes = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
-  const sample = bytes.subarray(0, Math.min(bytes.length, XFA_PLAIN_SCAN_BYTES)).toString("latin1");
-  if (mentionsXfa(sample)) return true;
-  return objectStreamsMentionXfa(bytes);
+  // Scan first 200KB — XFA refs are always in the catalog/AcroForm, near the
+  // top of the file. Whole-file scan would be unnecessarily expensive.
+  const searchLimit = Math.min(pdfBytes.length, 200 * 1024);
+  const sample = pdfBytes.subarray(0, searchLimit).toString("latin1");
+  // Match /XFA followed by whitespace, array start, or dict ref
+  return /\/XFA[\s\[<\/]/.test(sample);
 }
 
-/**
- * A document that declares /NeedsRendering true expects a viewer to build the
- * page from its XFA layer, so stripping that layer can leave a reader showing
- * a placeholder instead of a form. Static XFA survives the same treatment
- * because its AcroForm carries the values.
- */
-export function detectDynamicXfaForm(pdfBytes) {
-  if (!detectXfaForm(pdfBytes)) return false;
-  const bytes = Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes);
-  return /\/NeedsRendering\s+true/.test(bytes.toString("latin1"));
-}
-
-/**
- * Refuse a mutation that would destroy a document, and report one that costs
- * the document something short of that.
- *
- * Saving through pdf-lib drops the XFA layer either way. What that means
- * depends on the document. A dynamic form (`/NeedsRendering true`) is built
- * from that layer, so losing it can leave a reader showing a placeholder
- * instead of a form: that is a refusal. A static form keeps its values in the
- * AcroForm, which is why filling the current IRS W-9 produces a correct
- * document, so refusing it would break an ordinary job to prevent nothing.
- * It returns a notice instead, for the caller to pass on.
- */
-export function assertXfaMutationAllowed(pdfBytes, { forceXfa = false } = {}) {
-  if (!detectXfaForm(pdfBytes)) return null;
-  if (detectDynamicXfaForm(pdfBytes)) {
-    if (forceXfa) return XFA_DYNAMIC_NOTICE;
-    throw new Error(
-      "This PDF is a dynamic XFA form, and its pages are built from the XFA layer that saving would drop, " +
-      "so the result may open as a placeholder rather than a form. Convert it to AcroForm first " +
-      "(e.g. via Adobe Acrobat's 'Flatten Form'), or pass force_xfa=true if you accept that outcome."
-    );
+// Authoritative pass: does this *parsed* document carry an XFA form?
+//
+// pdf-lib has already inflated every object stream by the time a mutation
+// holds a document, so looking `/XFA` up on the AcroForm dictionary sees what
+// the byte scan cannot, and costs no extra parse — the mutation paths load the
+// document anyway.
+//
+// `dynamic` is reported separately. A catalog that sets /NeedsRendering true is
+// the dynamic case: the AcroForm is a placeholder and the XFA layer is the
+// form, so stripping it can leave a viewer showing a "please wait" page rather
+// than a document. Static XFA (the W-9 shape) keeps its data in the AcroForm
+// fields and survives the strip, which is why the two are named apart in the
+// refusal rather than merged.
+export function detectXfaFormInDocument(pdfDoc) {
+  const absent = { present: false, dynamic: false };
+  if (!pdfDoc) return absent;
+  try {
+    const catalog = pdfDoc.catalog;
+    if (!catalog || typeof catalog.lookup !== "function") return absent;
+    const acroForm = catalog.lookup(PDFName.of("AcroForm"));
+    if (!acroForm || typeof acroForm.lookup !== "function") return absent;
+    if (acroForm.lookup(PDFName.of("XFA")) === undefined) return absent;
+    const needsRendering = catalog.lookup(PDFName.of("NeedsRendering"));
+    return {
+      present: true,
+      dynamic: typeof needsRendering?.asBoolean === "function"
+        ? needsRendering.asBoolean() === true
+        : false,
+    };
+  } catch {
+    // A catalog that cannot be walked is not evidence of XFA. The mutation's
+    // own structural validation owns malformed documents; inventing a refusal
+    // here would report the wrong cause.
+    return absent;
   }
-  return XFA_STATIC_NOTICE;
+}
+
+export function xfaMutationRefusalMessage({ dynamic = false } = {}) {
+  return (
+    "This PDF uses XFA forms, which pdf-lib cannot preserve — saving it would destroy the form data. " +
+    (dynamic
+      ? "Its catalog sets /NeedsRendering true, so the AcroForm layer may be only a placeholder and the " +
+        "XFA layer is the form itself; stripping it can leave a viewer showing a \"please wait\" page " +
+        "instead of a document. "
+      : "") +
+    "Convert the form to AcroForm first (e.g. via Adobe Acrobat's 'Flatten Form'), or pass force_xfa=true " +
+    "if you understand that the XFA layer will be stripped."
+  );
 }
 
 export const XFA_STATIC_NOTICE =
   "This document carried an XFA layer, which was removed on save because pdf-lib cannot write it. " +
-  "Its form values live in the AcroForm and are preserved; a viewer that prefers XFA will now use the AcroForm view.";
+  "Its form values live in the AcroForm and are preserved; a viewer that prefers XFA will now use the " +
+  "AcroForm view.";
 
-export const XFA_DYNAMIC_NOTICE =
-  "This document is a dynamic XFA form and its XFA layer was removed on save. The result may open as a " +
-  "placeholder rather than a form in readers that build the page from XFA.";
+/**
+ * The byte-scan pass. It cannot see a compressed catalog, so it can only refuse
+ * early and never conclude a document is clean: `assertParsedXfaMutationAllowed`
+ * is the authority. It refuses a document that declares XFA in the clear only
+ * when that document is also dynamic, matching the parse-time policy below.
+ */
+export function assertXfaMutationAllowed(pdfBytes, { forceXfa = false } = {}) {
+  if (forceXfa || !detectXfaForm(pdfBytes)) return null;
+  if (/\/NeedsRendering\s+true/.test(
+    (Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes)).toString("latin1"),
+  )) {
+    throw new Error(xfaMutationRefusalMessage({ dynamic: true }));
+  }
+  return XFA_STATIC_NOTICE;
+}
+
+/**
+ * The parse-time authority, run where the document is actually parsed, which
+ * sees the XFA a byte scan cannot.
+ *
+ * Refuses what the refusal protects. A dynamic form (`/NeedsRendering true`)
+ * is built from the layer that saving drops, so losing it can leave a viewer
+ * showing a placeholder instead of a document. A static form keeps its values
+ * in the AcroForm and survives, which is why filling the current IRS W-9
+ * produces a correct document; refusing it would break an ordinary job to
+ * prevent nothing, so it returns a notice for the caller to pass on instead.
+ */
+export function assertParsedXfaMutationAllowed(pdfDoc, { forceXfa = false } = {}) {
+  const xfa = detectXfaFormInDocument(pdfDoc);
+  if (!xfa.present) return null;
+  if (xfa.dynamic && !forceXfa) throw new Error(xfaMutationRefusalMessage({ dynamic: true }));
+  return xfa.dynamic ? xfaMutationRefusalMessage({ dynamic: true }) : XFA_STATIC_NOTICE;
+}
 
 // ─── Signature zone detection ────────────────────────────────────────────────
 // Finds "Sign here", initials, name, and date zones in a PDF so agents/viewers can

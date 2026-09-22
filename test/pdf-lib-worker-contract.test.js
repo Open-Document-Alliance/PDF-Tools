@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -8,9 +9,12 @@ import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
 import {
   PDFArray,
+  PDFDict,
   PDFDocument,
+  PDFHexString,
   PDFInvalidObject,
   PDFName,
+  PDFNumber,
   PDFRawStream,
   PDFRef,
   PDFString,
@@ -142,6 +146,7 @@ async function requestFor(bytes) {
       }],
       password: null,
       options: { pages: [], degrees: 90 },
+      force_xfa: false,
       stage_directory: stageDirectory,
     },
   };
@@ -1758,5 +1763,278 @@ endobj
     expect(normalizer).not.toMatch(/PDFDocument\.create|embedPng|embedJpg|embedFont/);
     expect(applySignature).toContain('operation: "apply_signature"');
     expect(applySignature).not.toMatch(/PDFDocument\.create|embedPng|embedJpg|embedFont/);
+  });
+});
+
+/**
+ * The existing-signature resign guard, asserted as a property rather than as a
+ * remembered list.
+ *
+ * `assertMayResave` refuses to re-save a PDF that already carries cryptographic
+ * signature fields, because pdf-lib rewrites the whole file and a detached
+ * signature's /ByteRange stops covering it. The refusal is escapable through
+ * one option, `allow_resign`, which the worker's own OPTION_KEYS map declares
+ * per operation.
+ *
+ * Those two facts are maintained in different places — a map literal near the
+ * top of the worker and a single call site deep inside the mutation branch —
+ * and nothing tied them together. A declaration without a call site is the bad
+ * direction: the option is accepted, documented as a safety escape hatch, and
+ * silently does nothing, which reads to a caller as a guard that exists. The
+ * opposite direction, a call site without a declaration, is a refusal a caller
+ * cannot get past.
+ *
+ * So the assertion below is an iff, derived twice and independently: the set of
+ * operations whose OPTION_KEYS entry names `allow_resign` (read out of the
+ * worker source) must equal the set that actually refuses a signed document
+ * (measured by running each operation). It holds for whatever the guarded set
+ * is, so widening the guard to more operations keeps it green; only a
+ * half-wired change turns it red.
+ *
+ * What it deliberately does NOT assert is that the current partition is the
+ * right one. At the time of writing, eight mutations — fill_pdf,
+ * fill_with_profile, bulk_fill_from_csv, merge_pdfs, split_pdf,
+ * rotate_pdf_pages, reorder_pdf_pages and apply_page_plan — neither declare
+ * `allow_resign` nor refuse, so they re-save a signed document silently. That
+ * is a coverage gap, not an invariant, and pinning it here would make a later
+ * fix read as a regression.
+ */
+describe("existing-signature resign guard coverage", () => {
+  // Read-only inspection shares the option map but is not routed through the
+  // mutation entry point at all, so it carries no resign guard by construction.
+  // The exclusion is measured below rather than asserted.
+  const NON_MUTATION_OPERATIONS = new Set(["inspect_pdf_accessibility"]);
+
+  const PLACEMENT = { page: 1, x: 50, y: 50, width: 120, height: 40 };
+  const LABELLED_PLACEMENT = { ...PLACEMENT, label: "Sign here" };
+
+  // The smallest option payload each operation's validator admits, minus the
+  // `allow_resign` key, which is added back only for the operations that
+  // declare it. Keyed by operation so the table can be checked for completeness
+  // against the worker's own map instead of being trusted.
+  const BASE_OPTIONS = new Map([
+    ["fill_pdf", { field_data: { Name: "Bob" } }],
+    ["fill_with_profile", { field_data: { Name: "Bob" } }],
+    ["bulk_fill_from_csv", { records: [{ Name: "Bob" }] }],
+    ["merge_pdfs", {}],
+    ["split_pdf", { page_ranges: "1" }],
+    ["rotate_pdf_pages", { degrees: 90, pages: [] }],
+    ["reorder_pdf_pages", { page_order: [2, 1], rotations: {} }],
+    ["apply_page_plan", { page_order: [2, 1], rotations: {} }],
+    ["add_signature_field", { placement: LABELLED_PLACEMENT }],
+    ["apply_signature", {
+      audit_line: "Signed by Alice",
+      audit_text: "Signed by Alice",
+      draw_audit_line: false,
+      modification_at: "2026-09-21T08:00:00.000Z",
+      placement: PLACEMENT,
+      signature: { name: "alice", style: "typed", display_name: "Alice Example" },
+    }],
+    ["prepare_signing_packet", {
+      field_values: { Name: "Bob" },
+      require_provider_ready: false,
+      signature_locations: [{
+        evidence_source: "caller_supplied",
+        field_type: "signature",
+        height: 40,
+        label: "Sign here",
+        page: 1,
+        participant_id: null,
+        participant_role: null,
+        width: 120,
+        x: 50,
+        y: 50,
+        zone_id: "zone-1",
+      }],
+    }],
+    ["apply_text", {
+      audit_line: "Text applied",
+      font_style: "normal",
+      modification_at: "2026-09-21T08:00:00.000Z",
+      placement: PLACEMENT,
+      text: "Alice Example",
+    }],
+  ]);
+  const SOURCE_COPIES = new Map([["merge_pdfs", 2]]);
+
+  const workerSource = readFileSync(path.join(REPO_ROOT, "server", "pdf-lib-worker.js"), "utf8");
+
+  // The declaring side, read out of the worker's own map literal rather than
+  // restated here. A rename or a reshaping of that map fails loudly instead of
+  // silently emptying the set and making every assertion below vacuous.
+  function declaredOptionKeys() {
+    const start = workerSource.indexOf("const OPTION_KEYS = new Map([");
+    const end = workerSource.indexOf("\n]);", start);
+    if (start < 0 || end < 0) {
+      throw new Error("pdf-lib-worker.js no longer declares OPTION_KEYS as a Map literal.");
+    }
+    const entries = new Map();
+    for (const [, operation, keys] of workerSource.slice(start, end).matchAll(/\["([a-z_]+)",\s*\[([^\]]*)\]\]/g)) {
+      entries.set(operation, [...keys.matchAll(/"([a-z_]+)"/g)].map(match => match[1]));
+    }
+    return entries;
+  }
+
+  const optionKeys = declaredOptionKeys();
+  const mutationOperations = [...optionKeys.keys()].filter(operation => !NON_MUTATION_OPERATIONS.has(operation));
+  const declaresAllowResign = operation => optionKeys.get(operation).includes("allow_resign");
+
+  async function signableDocument() {
+    const document = await PDFDocument.create();
+    document.addPage([612, 792]);
+    document.addPage([612, 792]);
+    document.getForm().createTextField("Name")
+      .addToPage(document.getPage(0), { x: 50, y: 700, width: 200, height: 20 });
+    return document;
+  }
+
+  // A document carrying one real /FT /Sig widget with a /V signature dictionary
+  // and /SigFlags 3, built through pdf-lib's own object model so the mutation
+  // parser sees a document it could have written itself.
+  async function signedPdfBytes() {
+    const document = await signableDocument();
+    const context = document.context;
+    const signatureValueRef = context.register(context.obj({
+      Type: PDFName.of("Sig"),
+      Filter: PDFName.of("Adobe.PPKLite"),
+      SubFilter: PDFName.of("adbe.pkcs7.detached"),
+      ByteRange: context.obj([0, 0, 0, 0]),
+      Contents: PDFHexString.of("00"),
+      M: PDFString.of("D:20260101000000Z"),
+    }));
+    const widgetRef = context.register(context.obj({
+      Type: PDFName.of("Annot"),
+      Subtype: PDFName.of("Widget"),
+      FT: PDFName.of("Sig"),
+      T: PDFString.of("Signature1"),
+      Rect: context.obj([100, 100, 300, 150]),
+      F: PDFNumber.of(4),
+      P: document.getPage(0).ref,
+      V: signatureValueRef,
+    }));
+    document.getPage(0).node.set(PDFName.of("Annots"), context.obj([widgetRef]));
+    const acroForm = document.catalog.lookup(PDFName.of("AcroForm"), PDFDict);
+    acroForm.lookup(PDFName.of("Fields"), PDFArray).push(widgetRef);
+    acroForm.set(PDFName.of("SigFlags"), PDFNumber.of(3));
+    return Buffer.from(await document.save());
+  }
+
+  async function unsignedPdfBytes() {
+    return Buffer.from(await (await signableDocument()).save());
+  }
+
+  async function mutationRequestFor(bytes, operation, { allowResign = null } = {}) {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "resign-guard-")));
+    roots.push(root);
+    const stageDirectory = path.join(root, "stage");
+    await fs.mkdir(stageDirectory, { mode: 0o700 });
+    const sources = [];
+    for (let index = 0; index < (SOURCE_COPIES.get(operation) ?? 1); index += 1) {
+      const sourcePath = path.join(root, `source-${index}.pdf`);
+      await fs.writeFile(sourcePath, bytes, { mode: 0o600 });
+      const stats = await fs.lstat(sourcePath, { bigint: true });
+      sources.push({
+        canonical_path: sourcePath,
+        file_identity: { device: String(stats.dev), inode: String(stats.ino) },
+        size_bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+    }
+    const options = { ...BASE_OPTIONS.get(operation) };
+    if (declaresAllowResign(operation)) options.allow_resign = allowResign === true;
+    return {
+      stageDirectory,
+      request: {
+        protocol_version: 1,
+        operation,
+        sources,
+        password: null,
+        force_xfa: false,
+        options,
+        stage_directory: stageDirectory,
+      },
+    };
+  }
+
+  // Runs one operation and reports only what this suite is about: did the
+  // resign guard fire? Any other throw is surfaced verbatim so a broken option
+  // payload cannot masquerade as a refusal.
+  async function resignOutcome(bytes, operation, options) {
+    const { request } = await mutationRequestFor(bytes, operation, options);
+    try {
+      const response = await executePdfLibMutationRequest(request);
+      return { operation, refused: false, status: response.status };
+    } catch (error) {
+      if (/cryptographic signature field/.test(error.message)) {
+        return { operation, refused: true, message: error.message };
+      }
+      return { operation, refused: false, unexpectedError: error.message };
+    }
+  }
+
+  it("covers every mutation operation the worker's own option map names", () => {
+    expect(optionKeys.size).toBeGreaterThan(10);
+    expect([...BASE_OPTIONS.keys()].sort()).toEqual([...mutationOperations].sort());
+    for (const operation of NON_MUTATION_OPERATIONS) expect(optionKeys.has(operation)).toBe(true);
+    expect(mutationOperations.filter(declaresAllowResign).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("routes the non-mutation operation away from the mutation entry point", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "resign-guard-")));
+    roots.push(root);
+    const stageDirectory = path.join(root, "stage");
+    await fs.mkdir(stageDirectory, { mode: 0o700 });
+    const bytes = await unsignedPdfBytes();
+    const sourcePath = path.join(root, "source.pdf");
+    await fs.writeFile(sourcePath, bytes, { mode: 0o600 });
+    const stats = await fs.lstat(sourcePath, { bigint: true });
+    await expect(executePdfLibMutationRequest({
+      protocol_version: 1,
+      operation: "inspect_pdf_accessibility",
+      sources: [{
+        canonical_path: sourcePath,
+        file_identity: { device: String(stats.dev), inode: String(stats.ino) },
+        size_bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      }],
+      password: null,
+      options: {},
+      stage_directory: stageDirectory,
+    })).rejects.toThrow(/not a mutation request/i);
+  });
+
+  it("enforces the guard for exactly the operations that declare allow_resign", {
+    timeout: 60_000,
+  }, async () => {
+    const bytes = await signedPdfBytes();
+    const outcomes = [];
+    for (const operation of mutationOperations) outcomes.push(await resignOutcome(bytes, operation));
+    for (const outcome of outcomes) {
+      expect(outcome.unexpectedError, `${outcome.operation} failed for an unrelated reason`).toBeUndefined();
+    }
+    const enforced = outcomes.filter(outcome => outcome.refused).map(outcome => outcome.operation).sort();
+    const declared = mutationOperations.filter(declaresAllowResign).sort();
+    expect(enforced).toEqual(declared);
+    for (const outcome of outcomes.filter(o => o.refused)) expect(outcome.message).toContain("Signature1");
+  });
+
+  it("lets allow_resign through for every operation that declares it", {
+    timeout: 60_000,
+  }, async () => {
+    const bytes = await signedPdfBytes();
+    for (const operation of mutationOperations.filter(declaresAllowResign)) {
+      const outcome = await resignOutcome(bytes, operation, { allowResign: true });
+      expect(outcome, `${operation} refused despite allow_resign`).toMatchObject({ refused: false, status: "ok" });
+    }
+  });
+
+  it("does not fire on a document with no signature field", {
+    timeout: 60_000,
+  }, async () => {
+    const bytes = await unsignedPdfBytes();
+    for (const operation of mutationOperations) {
+      const outcome = await resignOutcome(bytes, operation);
+      expect(outcome, `${operation} refused an unsigned document`).toMatchObject({ refused: false, status: "ok" });
+    }
   });
 });

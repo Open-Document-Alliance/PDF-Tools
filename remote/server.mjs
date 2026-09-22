@@ -13,6 +13,7 @@ import { Server } from "@modelcontextprotocol/server";
 import { PDFDocument } from "pdf-lib";
 
 import {
+  assertParsedXfaMutationAllowed,
   assertXfaMutationAllowed,
   detectExistingSignatures,
   detectSignatureZones,
@@ -139,8 +140,8 @@ const TOOLS = [
     annotations: { title: "Fill Form" },
     async handler({ fields, ...input }) {
       const bytes = await resolveBytes(input);
-      const xfaNotice = assertXfaMutationAllowed(bytes);
       const document = await loadDocument(bytes);
+      const xfaNotice = assertParsedXfaMutationAllowed(document);
       const form = document.getForm();
       const filled = [];
       const notFilled = [];
@@ -243,8 +244,8 @@ const TOOLS = [
         user_confirmed_at: confirmed_at,
       });
       const bytes = await resolveBytes(input);
-      const xfaNotice = assertXfaMutationAllowed(bytes);
       const document = await loadDocument(bytes);
+      const xfaNotice = assertParsedXfaMutationAllowed(document);
       if (detectExistingSignatures(document)?.length) {
         throw new ToolRefusal(
           "ALREADY_SIGNED",
@@ -279,8 +280,8 @@ const TOOLS = [
     annotations: { title: "Flatten Form" },
     async handler(args) {
       const bytes = await resolveBytes(args);
-      const xfaNotice = assertXfaMutationAllowed(bytes);
       const document = await loadDocument(bytes);
+      const xfaNotice = assertParsedXfaMutationAllowed(document);
       document.getForm().flatten();
       const output = await document.save();
       return ok(`Flattened. The values are now page content.${xfaNotice ? `\n${xfaNotice}` : ""}`, {

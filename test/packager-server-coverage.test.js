@@ -35,6 +35,11 @@ import {
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER_DIR = path.join(REPO_ROOT, "server");
 const SHARE_SERVER_DIR = path.join(REPO_ROOT, "pdf-toolkit-mcp-share", "server");
+const SHARE_ROOT = path.join(REPO_ROOT, "pdf-toolkit-mcp-share");
+
+async function sha256File(absolutePath) {
+  return createHash("sha256").update(await fs.readFile(absolutePath)).digest("hex");
+}
 
 async function serverDirectoryFilenames(directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });
@@ -85,6 +90,63 @@ describe("share packager server coverage", () => {
 
   it("names each path once", () => {
     expect(new Set(SHARE_FILES).size).toBe(SHARE_FILES.length);
+  });
+});
+
+/**
+ * The other half of the share bundle: the checked-in `pdf-toolkit-mcp-share/`
+ * tree.
+ *
+ * `package-for-friend.js` refreshes that tree by copying every entry of
+ * `SHARE_MIRRORED_FILES` verbatim out of the repository root, so byte parity
+ * for exactly those paths is what the checked-in tree is supposed to satisfy
+ * between packaging runs. Nothing asserted it. The allow-list checks above
+ * compare *names*; the archive checks compare a staged tree against those same
+ * names; and the one digest comparison in this file covers the vendored
+ * qpdf-wasm runtime only. So editing a module under `server/` and forgetting
+ * the mirror left every suite green and left the share bundle a change behind
+ * the extension, which is what happened to the parse-time XFA refusal. `git
+ * status` cannot report it either: both copies are tracked, and both are
+ * clean.
+ *
+ * Coverage boundary: this asserts that every mirrored path matches, not that
+ * the share tree carries nothing else. Extra files are caught for `server/` by
+ * the listing assertion above and for the qpdf runtime directory by the one
+ * below; for the skills, `scripts/` and `dist-ui/` entries they are not.
+ */
+describe("checked-in share tree parity", () => {
+  it("carries a byte-identical copy of every path the packager mirrors", async () => {
+    let compared = 0;
+    for (const relativePath of SHARE_MIRRORED_FILES) {
+      const segments = relativePath.split("/");
+      // Compared as digests. The mirrored set includes a 2.4 MB WebAssembly
+      // binary, and vitest's deep equality on a buffer that size is slow
+      // enough to blow the suite's budget while naming the file no more
+      // precisely than a digest mismatch does. A path missing from the share
+      // tree fails here as an ENOENT that names it.
+      expect(
+        await sha256File(path.join(SHARE_ROOT, ...segments)),
+        `pdf-toolkit-mcp-share/${relativePath} drifted from ${relativePath}`,
+      ).toBe(await sha256File(path.join(REPO_ROOT, ...segments)));
+      compared += 1;
+    }
+    expect(compared).toBe(SHARE_MIRRORED_FILES.length);
+    // Guards against a mirrored list that has quietly shrunk to the handful of
+    // paths that happen to agree, which would make the equality above vacuous.
+    expect(compared).toBeGreaterThan(30);
+    expect(SHARE_MIRRORED_FILES).toContain("server/index.js");
+  });
+
+  it("compares bytes rather than paths", async () => {
+    // Known-answer control for the comparison above: the same file read twice
+    // has to agree, and one byte of difference has to not. Without this, a
+    // helper that returned a constant would pass the whole block.
+    const witness = path.join(SERVER_DIR, "index.js");
+    const bytes = await fs.readFile(witness);
+    expect(await sha256File(witness)).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(await sha256File(witness)).not.toBe(
+      createHash("sha256").update(Buffer.concat([bytes, Buffer.from("\n")])).digest("hex"),
+    );
   });
 });
 
@@ -160,23 +222,15 @@ describe("qpdf-wasm runtime packager coverage", () => {
     expect(notices).toContain(`${QPDF_WASM_RUNTIME_DIRECTORY}/licenses/QPDF-LICENSE.txt`);
   });
 
-  it("mirrors the same bytes into the checked-in share tree", async () => {
-    const shareRoot = path.join(REPO_ROOT, "pdf-toolkit-mcp-share");
+  it("carries exactly these runtime files in the checked-in share tree", async () => {
+    // The bytes of each of these paths are compared, along with every other
+    // mirrored path, by "checked-in share tree parity" above. What this adds
+    // is the direction a per-path digest loop cannot see: the share tree's
+    // runtime directory holds no file the manifest does not name, so a
+    // promoted build that dropped a file cannot leave the old one behind.
     expect(
-      await runtimeRelativePaths(path.join(shareRoot, ...QPDF_WASM_RUNTIME_DIRECTORY.split("/"))),
+      await runtimeRelativePaths(path.join(SHARE_ROOT, ...QPDF_WASM_RUNTIME_DIRECTORY.split("/"))),
     ).toEqual([...QPDF_WASM_RUNTIME_FILES].sort());
-    for (const relativePath of QPDF_WASM_RUNTIME_FILES) {
-      const segments = relativePath.split("/");
-      // Compared as digests. Vitest's deep equality on a 2.4 MB Buffer is slow
-      // enough to blow the suite's default budget, and a digest mismatch names
-      // the file just as precisely without dumping the binary into the diff.
-      expect(
-        createHash("sha256").update(await fs.readFile(path.join(shareRoot, ...segments))).digest("hex"),
-        `share tree copy of ${relativePath} drifted`,
-      ).toBe(
-        createHash("sha256").update(await fs.readFile(path.join(REPO_ROOT, ...segments))).digest("hex"),
-      );
-    }
   });
 });
 

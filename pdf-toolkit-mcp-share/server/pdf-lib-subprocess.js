@@ -22,6 +22,7 @@ import {
   PDF_LIB_RSS_TERMINAL,
 } from "./pdf-lib-rss-monitor.js";
 import { validateAccessibilityInspectionResult } from "./accessibility-inspection.js";
+import { XFA_GUARDED_MUTATION_OPERATIONS } from "./helpers.js";
 
 export const PDF_RESOURCE_LIMIT_CODE = "PDF_RESOURCE_LIMIT_EXCEEDED";
 export const PDF_CONCURRENT_MODIFICATION_CODE = "CONCURRENT_MODIFICATION";
@@ -183,7 +184,13 @@ function validateSource(source, index) {
   }
 }
 
-export function createPdfLibMutationRequest({ operation, sources, options, password = null }) {
+export function createPdfLibMutationRequest({
+  operation,
+  sources,
+  options,
+  password = null,
+  force_xfa = false,
+}) {
   if (!PDF_LIB_MUTATION_TOOL_NAMES.has(operation)) throw new TypeError(`Unsupported mutation: ${operation}.`);
   if (!Array.isArray(sources) || sources.length < 1 || sources.length > 1000) {
     throw new TypeError("Mutation requests require from 1 to 1000 sources.");
@@ -205,7 +212,11 @@ export function createPdfLibMutationRequest({ operation, sources, options, passw
   if (password !== null && (typeof password !== "string" || password.length < 1 || password.length > 4096)) {
     throw new TypeError("Mutation password is invalid.");
   }
-  return { operation, sources, options, password };
+  if (typeof force_xfa !== "boolean") throw new TypeError("force_xfa must be a boolean.");
+  if (force_xfa && !XFA_GUARDED_MUTATION_OPERATIONS.has(operation)) {
+    throw new TypeError(`${operation} does not accept force_xfa.`);
+  }
+  return { operation, sources, options, password, force_xfa };
 }
 
 export function createPdfLibInspectionRequest(request) {
@@ -222,6 +233,7 @@ export function createPdfLibInspectionRequest(request) {
     sources: request.sources,
     options: {},
     password: null,
+    force_xfa: false,
   };
 }
 
@@ -951,6 +963,7 @@ async function runPdfLibOperation(request, consumeStage, {
       sources: base.sources,
       password: base.password,
       options: base.options,
+      force_xfa: base.force_xfa === true,
       stage_directory: stageDirectory,
     };
     const requestBytes = Buffer.from(JSON.stringify(framed), "utf8");

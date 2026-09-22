@@ -1,117 +1,183 @@
-/**
- * The XFA guard has to see XFA that a document hides from a byte scan.
- *
- * A PDF written with a compressed cross-reference table keeps its catalog, and
- * therefore /XFA, inside a Flate-compressed /ObjStm. The scan that only read
- * raw bytes returned false for every such document, so `force_xfa` was
- * unreachable for the population it was written for: modern government forms.
- *
- * These tests build that shape locally rather than fetching a live form, so
- * they neither need the network nor drift when the IRS reissues a PDF.
- */
+// Regression for issue #200: `detectXfaForm` scans raw bytes, so a document
+// whose catalog and AcroForm live inside a compressed object stream never
+// shows `/XFA` and the guard never fires — which is most modern government
+// forms, the population the guard exists for. A fixture written the plain way
+// passes the old implementation, so every fixture here is built with
+// `useObjectStreams: true` and the byte scan is asserted to miss it.
 
-import { deflateSync } from "node:zlib";
-
-import { PDFDocument } from "pdf-lib";
-import { describe, expect, it } from "vitest";
-
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PDFArray, PDFDocument, PDFName, PDFString, StandardFonts } from "pdf-lib";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createTestTempDirectory, removeTestTempDirectory } from "./helpers/temp-directory.js";
 import {
-  assertXfaMutationAllowed,
-  detectDynamicXfaForm,
   detectXfaForm,
-  XFA_DYNAMIC_NOTICE,
-  XFA_STATIC_NOTICE,
+  detectXfaFormInDocument,
 } from "../server/helpers.js";
 
-/**
- * A document whose /XFA sits in raw bytes, which the old scan already caught.
- * Written by hand rather than through pdf-lib, because pdf-lib strips XFA on
- * the way out: the call that builds a form is the call that deletes the thing
- * under test.
- */
-function plainXfaDocument({ dynamic = false } = {}) {
-  return Buffer.from(
-    "%PDF-1.7\n"
-      + "1 0 obj\n<< /Type /Catalog /AcroForm 2 0 R"
-      + (dynamic ? " /NeedsRendering true" : "")
-      + " >>\nendobj\n"
-      + "2 0 obj\n<< /Fields [] /XFA [ (preamble) 3 0 R ] >>\nendobj\n"
-      + "trailer\n<< /Root 1 0 R >>\n%%EOF",
-    "latin1",
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.join(__dirname, "..");
+const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
+const FIELD_NAME = "topmostSubform[0].Page1[0].f1_01[0]";
+
+// Builds a one-page AcroForm PDF that also carries an XFA packet, saved with
+// object streams so the catalog and AcroForm are compressed. This is the shape
+// the IRS W-9 has; the point of the fixture is that `/XFA` is unreadable in the
+// file's plain bytes.
+async function buildCompressedCatalogXfaPdf({ dynamic = false } = {}) {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  page.drawText("Compressed-catalog XFA fixture", { x: 60, y: 700, size: 14, font });
+  const field = doc.getForm().createTextField(FIELD_NAME);
+  field.setText("");
+  field.addToPage(page, { x: 60, y: 640, width: 300, height: 20, font });
+
+  const acroForm = doc.catalog.lookup(PDFName.of("AcroForm"));
+  const packet = doc.context.flateStream(
+    Buffer.from('<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"></xdp:xdp>', "utf8"),
   );
+  const xfa = PDFArray.withContext(doc.context);
+  xfa.push(PDFString.of("xdp"));
+  xfa.push(doc.context.register(packet));
+  acroForm.set(PDFName.of("XFA"), xfa);
+  if (dynamic) doc.catalog.set(PDFName.of("NeedsRendering"), doc.context.obj(true));
+
+  return Buffer.from(await doc.save({ useObjectStreams: true, updateFieldAppearances: false }));
 }
 
-/**
- * A document with a Flate-compressed object stream that mentions /XFA, which
- * is the shape the plain scan cannot see through.
- */
-function compressedCatalogDocument() {
-  const payload = deflateSync(
-    Buffer.from("<< /Type /Catalog /AcroForm << /XFA [ (preamble) 9 0 R ] >> >>", "latin1"),
-  );
-  const header = Buffer.from(
-    "%PDF-1.7\n1 0 obj\n<< /Type /ObjStm /N 1 /First 6 /Filter /FlateDecode /Length "
-      + `${payload.length} >>\nstream\n`,
-    "latin1",
-  );
-  const footer = Buffer.from("\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF", "latin1");
-  return Buffer.concat([header, payload, footer]);
+function textOf(response) {
+  return response.content?.map(item => (item.type === "text" ? item.text : "")).join(" ") ?? "";
 }
 
-describe("detectXfaForm", () => {
-  it("still catches XFA written in the clear", () => {
-    expect(detectXfaForm(plainXfaDocument())).toBe(true);
+describe("XFA hidden in a compressed catalog (issue #200)", () => {
+  let TMP_DIR;
+  let client;
+  let transport;
+  let staticPath;
+  let dynamicPath;
+  let staticBytes;
+  let dynamicBytes;
+
+  beforeAll(async () => {
+    TMP_DIR = await createTestTempDirectory(REPO_ROOT, "xfa-objstm");
+    staticBytes = await buildCompressedCatalogXfaPdf({ dynamic: false });
+    dynamicBytes = await buildCompressedCatalogXfaPdf({ dynamic: true });
+    staticPath = path.join(TMP_DIR, "xfa-static-objstm.pdf");
+    dynamicPath = path.join(TMP_DIR, "xfa-dynamic-objstm.pdf");
+    await fs.writeFile(staticPath, staticBytes);
+    await fs.writeFile(dynamicPath, dynamicBytes);
+
+    client = new Client({ name: "pdf-tools-xfa-objstm-client", version: "1.0.0" });
+    transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [path.join(REPO_ROOT, "server", "index.js")],
+      cwd: REPO_ROOT,
+      env: { ALLOWED_DIRECTORIES: `${REPO_ROOT}:${TMP_DIR}` },
+      stderr: "pipe",
+    });
+    await client.connect(transport);
+  }, 60_000);
+
+  afterAll(async () => {
+    try {
+      await transport?.close();
+    } finally {
+      await removeTestTempDirectory(TMP_DIR);
+    }
   });
 
-  it("catches XFA hidden in a compressed object stream", () => {
-    const document = compressedCatalogDocument();
-    // The bytes themselves give nothing away, which is the whole bug.
-    expect(document.toString("latin1")).not.toMatch(/\/XFA/);
-    expect(detectXfaForm(document)).toBe(true);
+  it("the fixture really does hide /XFA from the raw byte scan", () => {
+    for (const bytes of [staticBytes, dynamicBytes]) {
+      expect(bytes.toString("latin1")).not.toContain("/XFA");
+      expect(detectXfaForm(bytes)).toBe(false);
+    }
   });
 
-  it("leaves an ordinary document alone", async () => {
-    const document = await PDFDocument.create();
-    document.addPage([200, 200]);
-    expect(detectXfaForm(Buffer.from(await document.save()))).toBe(false);
+  it("the parse-time check sees what the byte scan cannot, and names the dynamic case", async () => {
+    const staticDoc = await PDFDocument.load(staticBytes, { updateMetadata: false });
+    expect(detectXfaFormInDocument(staticDoc)).toEqual({ present: true, dynamic: false });
+
+    const dynamicDoc = await PDFDocument.load(dynamicBytes, { updateMetadata: false });
+    expect(detectXfaFormInDocument(dynamicDoc)).toEqual({ present: true, dynamic: true });
+
+    const plain = await PDFDocument.load(await fs.readFile(EXAMPLE_PDF), { updateMetadata: false });
+    expect(detectXfaFormInDocument(plain)).toEqual({ present: false, dynamic: false });
   });
 
-  it("says nothing about a document too small to be a PDF", () => {
-    expect(detectXfaForm(Buffer.from("%PDF"))).toBe(false);
-    expect(detectXfaForm(null)).toBe(false);
+  it("detectXfaFormInDocument does not invent a refusal for a document it cannot walk", () => {
+    expect(detectXfaFormInDocument(null)).toEqual({ present: false, dynamic: false });
+    expect(detectXfaFormInDocument({})).toEqual({ present: false, dynamic: false });
+    expect(detectXfaFormInDocument({
+      catalog: { lookup() { throw new Error("unwalkable"); } },
+    })).toEqual({ present: false, dynamic: false });
   });
 
-  it("does not inflate an implausible stream length", () => {
-    const lying = Buffer.concat([
-      Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /ObjStm /Filter /FlateDecode >>\nstream\n", "latin1"),
-      Buffer.alloc(64, 0x00),
-      Buffer.from("\nendstream\n%%EOF", "latin1"),
-    ]);
-    expect(detectXfaForm(lying)).toBe(false);
-  });
-});
+  it("fill_pdf fills the compressed-catalog XFA form, which is the live IRS shape", async () => {
+    const filled = await client.callTool({
+      name: "fill_pdf",
+      arguments: {
+        pdf_path: staticPath,
+        output_path: path.join(TMP_DIR, "static-filled.pdf"),
+        field_data: { [FIELD_NAME]: "Jordan Sample" },
+      },
+    });
+    // Static XFA keeps its values in the AcroForm, so the fill is correct and
+    // refusing it would break an ordinary job to prevent nothing. What the
+    // document does lose is the XFA layer, and the result has to say so.
+    expect(textOf(filled)).toContain("PDF filled successfully");
+    await expect(fs.access(path.join(TMP_DIR, "static-filled.pdf"))).resolves.toBeUndefined();
+  }, 60_000);
 
-describe("assertXfaMutationAllowed", () => {
-  it("allows a static XFA document and returns a notice the caller can pass on", () => {
-    const notice = assertXfaMutationAllowed(plainXfaDocument());
-    expect(notice).toBe(XFA_STATIC_NOTICE);
-    expect(notice).toMatch(/values live in the AcroForm and are preserved/);
-  });
+  it("the dynamic refusal says why stripping that document is worse", async () => {
+    const refused = await client.callTool({
+      name: "fill_pdf",
+      arguments: {
+        pdf_path: dynamicPath,
+        output_path: path.join(TMP_DIR, "dynamic-refused.pdf"),
+        field_data: { [FIELD_NAME]: "Jordan Sample" },
+      },
+    });
+    const message = textOf(refused);
+    expect(message).toContain("This PDF uses XFA forms");
+    expect(message).toContain("/NeedsRendering");
+  }, 60_000);
 
-  it("refuses a dynamic XFA document, because its pages come from the layer being dropped", () => {
-    const dynamic = plainXfaDocument({ dynamic: true });
-    expect(detectDynamicXfaForm(dynamic)).toBe(true);
-    expect(() => assertXfaMutationAllowed(dynamic)).toThrow(/dynamic XFA form/);
-  });
+  it("apply_page_plan runs on a static XFA document and refuses a dynamic one", async () => {
+    const allowed = await client.callTool({
+      name: "apply_page_plan",
+      arguments: {
+        input_path: staticPath,
+        output_path: path.join(TMP_DIR, "plan-static.pdf"),
+        plan: { page_order: [1] },
+      },
+    });
+    expect(textOf(allowed)).toContain("Saved 1-page PDF");
 
-  it("lets force_xfa through the dynamic refusal, still saying what it costs", () => {
-    const dynamic = plainXfaDocument({ dynamic: true });
-    expect(assertXfaMutationAllowed(dynamic, { forceXfa: true })).toBe(XFA_DYNAMIC_NOTICE);
-  });
+    const refused = await client.callTool({
+      name: "apply_page_plan",
+      arguments: {
+        input_path: dynamicPath,
+        output_path: path.join(TMP_DIR, "plan-dynamic.pdf"),
+        plan: { page_order: [1] },
+      },
+    });
+    expect(textOf(refused)).toContain("This PDF uses XFA forms");
+    expect(textOf(refused)).toContain("/NeedsRendering");
+  }, 60_000);
 
-  it("returns nothing for a document with no XFA at all", async () => {
-    const document = await PDFDocument.create();
-    document.addPage([200, 200]);
-    expect(assertXfaMutationAllowed(Buffer.from(await document.save()))).toBeNull();
-  });
+  it("a document with no XFA is not refused", async () => {
+    const filled = await client.callTool({
+      name: "fill_pdf",
+      arguments: {
+        pdf_path: EXAMPLE_PDF,
+        output_path: path.join(TMP_DIR, "plain-filled.pdf"),
+        field_data: { "topmostSubform[0].Page1[0].f1_1[0]": "Jordan Sample" },
+      },
+    });
+    expect(textOf(filled)).toContain("PDF filled successfully");
+  }, 60_000);
 });

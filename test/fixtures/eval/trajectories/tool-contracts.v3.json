@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.13.0"
   },
-  "tools_sha256": "dec943a2d538dfd522ecfbe078b5e6792eb4bb1e3d9a38715081f4265ed12aea",
+  "tools_sha256": "e6b3707e54823e3c97193cc43c7589abbb1172c91f47089c53099394aeb7d310",
   "tools": [
     {
       "name": "add_signature_field",
@@ -601,21 +601,21 @@
           "expected_output_identity": {
             "type": "object",
             "additionalProperties": false,
-            "description": "Exact current identity returned by get_pdf_identity. Required when replacing a distinct existing output_path, optional for the separately guarded same-document backup workflow, and omitted for a new destination.",
+            "description": "Exact current identity of the existing .md output_path: canonical path, byte length, and SHA-256. get_pdf_identity cannot supply it, because it requires a PDF header; the convert_pdf_to_markdown result that wrote the file reports these values as saved_output.path, saved_output.bytes, and saved_output.sha256. Required with overwrite=true; omit it for a new destination.",
             "properties": {
               "canonical_path": {
                 "type": "string",
-                "description": "Exact canonical_path returned by get_pdf_identity for the existing destination."
+                "description": "Exact canonical path of the existing destination, as reported in saved_output.path."
               },
               "size_bytes": {
                 "type": "integer",
                 "minimum": 0,
-                "description": "Exact size_bytes returned by get_pdf_identity for the existing destination."
+                "description": "Exact byte length of the existing destination, as reported in saved_output.bytes."
               },
               "sha256": {
                 "type": "string",
                 "pattern": "^[a-f0-9]{64}$",
-                "description": "Exact SHA-256 returned by get_pdf_identity for the existing destination."
+                "description": "Exact SHA-256 of the existing destination, as reported in saved_output.sha256."
               }
             },
             "required": [
@@ -1392,7 +1392,7 @@
           },
           "field_values": {
             "type": "object",
-            "description": "Optional map of AcroForm field name → value. Same shape as fill_pdf's 'fields' argument.",
+            "description": "Optional map of AcroForm field name → value. Same shape as fill_pdf's 'field_data' argument.",
             "additionalProperties": true
           },
           "signature_locations": {
@@ -1723,7 +1723,7 @@
           },
           "max_chars_per_page": {
             "type": "number",
-            "description": "Maximum characters to return per page in the structured output (default: 4000)."
+            "description": "Maximum characters to return per page, an integer from 1 to 20000 (default: 4000). Every page in one call also draws on a shared 16,000-character budget, so a later page in a long range can return less text than this, or none; read it with a later start_page."
           }
         },
         "required": [
@@ -1753,7 +1753,7 @@
           },
           "max_dimension_px": {
             "type": "number",
-            "description": "Maximum width or height in rendered pixels (default: 1800). Use smaller values for lighter previews."
+            "description": "Target size of the page image's longer side in pixels, an integer from 64 to 8192 (default: 1800). The render scale is held between 1 and 2.5 pixels per PDF.js viewport point, so a page whose longer side exceeds this many points renders larger than the target, and a target above 2.5 times that side renders smaller. Use smaller values for lighter previews."
           },
           "password": {
             "type": "string",
@@ -1803,7 +1803,7 @@
           },
           "max_dimension_px": {
             "type": "number",
-            "description": "Maximum width or height in rendered pixels for the cropped region (default: 1400)."
+            "description": "Target size of the region image's longer side in pixels, an integer from 64 to 8192 (default: 1400). The render scale is held between 0.1 and 4 pixels per PDF.js viewport point, so a region whose longer side exceeds ten times the target renders larger than it, and a target above four times that side renders smaller."
           },
           "password": {
             "type": "string",

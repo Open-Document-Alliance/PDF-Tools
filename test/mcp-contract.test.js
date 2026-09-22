@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { pathToPdfResourceUri } from "../server/resource-uri.js";
 import {
   DISPLAY_NAME_CANDIDATES,
@@ -196,14 +197,38 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // and read-coverage descriptions replace the previous fingerprint
 // 1be7e32a616bf23a4bcf4b064eaad15bcf094c807088ac5f0074369bdb66c716.
 // Names, input schemas and effect annotations remain unchanged.
-// 2026-09-21 (XFA guard): the force_xfa description on the four tools that
-// accept it now says the flag is for dynamic XFA, whose pages are built from
-// the layer saving drops, and that static XFA needs no flag because its values
-// live in the AcroForm. That wording change alone replaces the previous
-// fingerprint 38efffcecdfd667010d18267de70c92cb89671b27a74c2edd4fb00f024cd1e88.
-// Tool names, input schemas, annotations and every other output field are
-// unchanged, and the count stays at 57. See issue #200.
-const TOOL_CONTRACT_SHA256 = "4e369e28a72cd3b1bf4747bb69ff01047bd7e06584328c03771183b1db31b137";
+// 2026-08-18: the list_signatures output schema gains `unreadable` and
+// `malformed`, the files in the signatures folder that did not become an
+// entry. Measured at dc90e75, a store whose records could not be read was
+// reported as an empty one -- "No signatures yet. Use create_signature to save
+// one." over the user's own signatures, with structuredContent.signatures set
+// to [] -- and a single unreadable record was dropped from the count with the
+// same output as a corrupt one. A caller reading only `signatures` could not
+// tell any of those apart. No tool name, description, input schema, or
+// annotation changes. Previously
+// 38efffcecdfd667010d18267de70c92cb89671b27a74c2edd4fb00f024cd1e88.
+// Re-derived onto b0deb60b on 2026-09-20. The digest below is neither this
+// change's original value measured on 91b969dd
+// (324333fedf66c1b7b4f8ccd306699cde4ee0d8bf0b5d2fe336d37c9b77b9eeea) nor the
+// master value it replaces, because each of those was measured against a
+// different tree.
+// 2026-09-14 (re-derived onto b0deb60b): five input-schema descriptions
+// corrected to what the handlers do: prepare_signing_packet names fill_pdf's
+// real 'field_data' argument; render_pdf_page and render_pdf_region call
+// max_dimension_px a target and state the scale clamps that override it;
+// read_pdf_pages states the shared 16,000-character budget; and
+// convert_pdf_to_markdown's expected_output_identity points at saved_output
+// instead of get_pdf_identity, which refuses a Markdown file. Tool names,
+// types, required arguments and annotations are unchanged. The combined
+// digest below is measured from live tools/list after both changes.
+// 2026-09-21 (XFA policy): the four force_xfa descriptions that carried the
+// blanket wording now say the flag is for dynamic XFA, whose pages are built
+// from the layer saving drops, and that static XFA needs no flag because its
+// values live in the AcroForm. Wording only, measured against this tree after
+// merging master: tool names, input schemas, annotations and the count of 57
+// are unchanged. Replaces
+// 40572cce414ac18315c66b1ab7ababe81d9d9542d75220e764b133943afb23aa.
+const TOOL_CONTRACT_SHA256 = "2edabecaa5aa61e9ee533f8811180e8661a9423dddaee8ba59fec19cb846ab7d";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -581,6 +606,156 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
       sorted(names(MCPB_MANIFEST.tools)),
     );
   });
+
+  // The two macOS host scripts drive an installed build over stdio and pin the
+  // tool surface they expect to find there. Those pins are measurements of THIS
+  // tree's tool contract, so every one of them goes stale the moment the
+  // contract moves -- and until 2026-09-10 nothing noticed. The only control
+  // over either script, test/inspect-pdf-accessibility-tool.test.js, binds the
+  // accessibility receipt wiring and not one tool-surface value, so both
+  // scripts read as guarded while rotting. Measured that day against this tree:
+  // five pins in the smoke script and two in the Shannon script had drifted,
+  // and the smoke script failed on its very first assertion.
+  //
+  // Only pins whose authority lives IN this repository are bound here, and the
+  // authority is the live contract this suite already spawns rather than a
+  // second copy of a literal. Deliberately OUT of scope, because nothing in
+  // this tree can re-derive them and a binding that guessed would be worse than
+  // none: the Shannon script's EXPECTED_SOURCE_SHA256, EXPECTED_PAGE_COUNT,
+  // EXPECTED_MARKDOWN_SHA256, EXPECTED_MARKDOWN_BYTES, EXPECTED_GAP_COUNT,
+  // EXPECTED_ALPHA_COUNT and EXPECTED_REPLACEMENT_CHARACTER_COUNT, which are
+  // measurements of a document and of an installed build's own output.
+  it("binds the macOS host scripts' tool-surface pins to the live tool contract", async () => {
+    const liveDigest = createHash("sha256").update(JSON.stringify(tools)).digest("hex");
+    const liveToolCount = String(tools.length);
+    const liveStructuredCount = String(tools.filter(tool => tool.outputSchema).length);
+
+    // One pattern per syntactic position, never a search for the value itself:
+    // a pin site is identified by the expression that reads it, and EVERY
+    // numeric or hex group a site carries -- including the one inside its
+    // failure message -- is checked, so a half-updated site cannot pass.
+    const pinSites = [
+      {
+        script: "scripts/macos-claude-installed-smoke.mjs",
+        sites: [
+          {
+            label: "EXPECTED_TOOL_CONTRACT_SHA256",
+            pattern: /const EXPECTED_TOOL_CONTRACT_SHA256 = "([0-9a-f]{64})";/g,
+            expected: liveDigest,
+          },
+          {
+            label: "same-session tool count",
+            pattern: /assert\(toolNames\.length === (\d+), `Expected (\d+) tools, received/g,
+            expected: liveToolCount,
+          },
+          {
+            label: "tool-name uniqueness count",
+            pattern: /assert\(new Set\(toolNames\)\.size === (\d+),/g,
+            expected: liveToolCount,
+          },
+          {
+            label: "structured tool count",
+            pattern: /assert\(structuredToolCount === (\d+), `Expected (\d+) structured tools/g,
+            expected: liveStructuredCount,
+          },
+          {
+            label: "fresh-session tool count",
+            pattern: /assert\(tools\.tools\.length === (\d+), "Fresh session did not discover (\d+) tools"/g,
+            expected: liveToolCount,
+          },
+        ],
+      },
+      {
+        script: "scripts/macos-claude-installed-shannon.mjs",
+        sites: [
+          {
+            label: "EXPECTED_TOOL_CONTRACT_SHA256",
+            pattern: /const EXPECTED_TOOL_CONTRACT_SHA256 = "([0-9a-f]{64})";/g,
+            expected: liveDigest,
+          },
+          {
+            label: "installed tool count",
+            pattern: /assert\(tools\.tools\.length === (\d+), `Expected (\d+) installed tools/g,
+            expected: liveToolCount,
+          },
+        ],
+      },
+    ];
+
+    for (const { script, sites } of pinSites) {
+      const source = await fs.readFile(path.join(REPO_ROOT, script), "utf8");
+      for (const { label, pattern, expected } of sites) {
+        const matches = [...source.matchAll(pattern)];
+        // A pattern that stops matching must fail by name rather than report an
+        // absence, or a renamed pin silently leaves this assertion vacuous.
+        expect(matches, `${script}: no site matched for ${label}`).toHaveLength(1);
+        const captured = matches[0].slice(1);
+        expect(captured.length, `${script}: ${label} captured no value`).toBeGreaterThan(0);
+        for (const [index, value] of captured.entries()) {
+          expect(value, `${script}: ${label} (capture ${index + 1})`).toBe(expected);
+        }
+      }
+    }
+  });
+
+  it("points only at arguments the named tool really has", () => {
+    const descriptions = [];
+    const collect = value => {
+      if (Array.isArray(value)) return value.forEach(collect);
+      if (!value || typeof value !== "object") return;
+      if (typeof value.description === "string") descriptions.push(value.description);
+      Object.values(value).forEach(collect);
+    };
+    for (const tool of tools) collect(tool);
+    const references = descriptions.flatMap(description => [
+      ...description.matchAll(/\b([a-z][a-z0-9_]*)'s '([a-z][a-z0-9_]*)' argument\b/g),
+    ].map(([, toolName, argumentName]) => ({ toolName, argumentName })));
+    // prepare_signing_packet once named fill_pdf's 'fields', which does not exist.
+    expect(references).toContainEqual({ toolName: "fill_pdf", argumentName: "field_data" });
+    for (const { toolName, argumentName } of references) {
+      const target = tools.find(tool => tool.name === toolName);
+      expect(target, `${toolName} is a tool`).toBeDefined();
+      expect(Object.keys(target.inputSchema.properties ?? {}), `${toolName}'s '${argumentName}'`)
+        .toContain(argumentName);
+    }
+  });
+
+  it("returns less than max_chars_per_page, or nothing, for a page past read_pdf_pages' shared budget", async () => {
+    const readPages = tools.find(tool => tool.name === "read_pdf_pages");
+    expect(readPages.inputSchema.properties.max_chars_per_page.description)
+      .toMatch(/integer from 1 to 20000[\s\S]*shared 16,000-character budget/);
+
+    const document = await PDFDocument.create();
+    const font = await document.embedFont(StandardFonts.Helvetica);
+    const line = "abcdefghij".repeat(10);
+    for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+      const page = document.addPage([612, 792]);
+      for (let lineIndex = 0; lineIndex < 60; lineIndex += 1) {
+        page.drawText(line, { x: 36, y: 760 - lineIndex * 12, size: 6, font });
+      }
+    }
+    const budgetPdf = path.join(stateRoot, "shared-budget.pdf");
+    await fs.writeFile(budgetPdf, await document.save());
+
+    const result = await client.callTool({
+      name: "read_pdf_pages",
+      arguments: { pdf_path: budgetPdf, start_page: 1, end_page: 5, max_chars_per_page: 20000 },
+    });
+    expect(result.isError).not.toBe(true);
+    const pages = result.structuredContent.pages;
+    expect(pages).toHaveLength(5);
+    for (const page of pages) expect(page.char_count, `page ${page.page}`).toBeGreaterThanOrEqual(6000);
+    expect(pages[0].returned_chars).toBe(pages[0].char_count);
+    expect(pages.reduce((total, page) => total + page.returned_chars, 0)).toBe(16000);
+    expect(pages[2].returned_chars).toBeLessThan(pages[2].char_count);
+    expect(pages[4]).toMatchObject({ returned_chars: 0, text: "", truncated: true });
+
+    const refused = await client.callTool({
+      name: "read_pdf_pages",
+      arguments: { pdf_path: budgetPdf, start_page: 1, end_page: 1, max_chars_per_page: 20001 },
+    }).catch(error => ({ isError: true, thrown: error }));
+    expect(refused.isError).toBe(true);
+  }, 30_000);
 
   it("fails closed before opening Lumin OAuth when no client ID is configured", async () => {
     const result = await client.callTool({
