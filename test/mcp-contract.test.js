@@ -221,7 +221,14 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // instead of get_pdf_identity, which refuses a Markdown file. Tool names,
 // types, required arguments and annotations are unchanged. The combined
 // digest below is measured from live tools/list after both changes.
-const TOOL_CONTRACT_SHA256 = "40572cce414ac18315c66b1ab7ababe81d9d9542d75220e764b133943afb23aa";
+// 2026-09-21 (XFA policy): the four force_xfa descriptions that carried the
+// blanket wording now say the flag is for dynamic XFA, whose pages are built
+// from the layer saving drops, and that static XFA needs no flag because its
+// values live in the AcroForm. Wording only, measured against this tree after
+// merging master: tool names, input schemas, annotations and the count of 57
+// are unchanged. Replaces
+// 40572cce414ac18315c66b1ab7ababe81d9d9542d75220e764b133943afb23aa.
+const TOOL_CONTRACT_SHA256 = "2edabecaa5aa61e9ee533f8811180e8661a9423dddaee8ba59fec19cb846ab7d";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

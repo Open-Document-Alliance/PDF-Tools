@@ -1,0 +1,13 @@
+test/
+vendor/
+docs/
+ui/
+dist-ui/
+pdf-toolkit-mcp-share/
+plugins/
+schemas/
+scripts/
+_includes/
+*.mcpb
+*.zip
+example-fw9.pdf

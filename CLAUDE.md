@@ -240,6 +240,35 @@ Pass the optional `password` parameter to `read_pdf_layout`,
 preserve the source's protection, which is exactly the capability the scope
 rule above withholds. It remains an open decision, not a bug fix.
 
+## XFA Forms
+
+**pdf-lib cannot write XFA, so every mutation drops that layer.** What the loss
+costs depends on the document, and the guard now distinguishes the two cases
+instead of treating them alike.
+
+- **Static XFA** keeps its values in the AcroForm. The current IRS W-9 is this
+  shape. Filling it produces a correct document, so the mutation proceeds and
+  the result carries `XFA_STATIC_NOTICE` saying the layer was removed. No flag
+  is needed, and requiring one would break an ordinary job to prevent nothing.
+- **Dynamic XFA** (`/NeedsRendering true`) builds its pages from that layer, so
+  dropping it can leave a reader showing a placeholder. This is refused, and
+  `force_xfa: true` is the acknowledgement that overrides it.
+- **No XFA**: unchanged, `assertXfaMutationAllowed` returns null.
+
+`detectXfaForm` scans raw bytes first, then Flate-compressed object streams,
+because a document with a compressed cross-reference table keeps its catalog,
+and therefore `/XFA`, where a byte scan cannot see it. That second pass is
+bounded (8 MB inflated in total, 2 MB per stream) so it cannot be turned into a
+decompression bomb. Before it existed the guard was blind to exactly the
+documents it was written for, and `force_xfa` was unreachable for them: see
+issue #200 and `test/xfa-compressed-catalog.test.js`.
+
+The tool contract is pinned twice, so rewording a description fails two tests
+until both are updated deliberately: `TOOL_CONTRACT_SHA256` in
+`test/mcp-contract.test.js`, which wants a dated note, and the byte-for-byte
+capture at `test/fixtures/eval/trajectories/tool-contracts.v3.json`, which is
+regenerated with `node scripts/eval-capture-tool-contracts.mjs`.
+
 ## Development Commands
 
 ### Build and Package

@@ -1104,18 +1104,43 @@ export function xfaMutationRefusalMessage({ dynamic = false } = {}) {
   );
 }
 
+export const XFA_STATIC_NOTICE =
+  "This document carried an XFA layer, which was removed on save because pdf-lib cannot write it. " +
+  "Its form values live in the AcroForm and are preserved; a viewer that prefers XFA will now use the " +
+  "AcroForm view.";
+
+/**
+ * The byte-scan pass. It cannot see a compressed catalog, so it can only refuse
+ * early and never conclude a document is clean: `assertParsedXfaMutationAllowed`
+ * is the authority. It refuses a document that declares XFA in the clear only
+ * when that document is also dynamic, matching the parse-time policy below.
+ */
 export function assertXfaMutationAllowed(pdfBytes, { forceXfa = false } = {}) {
-  if (!forceXfa && detectXfaForm(pdfBytes)) {
-    throw new Error(xfaMutationRefusalMessage());
+  if (forceXfa || !detectXfaForm(pdfBytes)) return null;
+  if (/\/NeedsRendering\s+true/.test(
+    (Buffer.isBuffer(pdfBytes) ? pdfBytes : Buffer.from(pdfBytes)).toString("latin1"),
+  )) {
+    throw new Error(xfaMutationRefusalMessage({ dynamic: true }));
   }
+  return XFA_STATIC_NOTICE;
 }
 
-// The parse-time companion to `assertXfaMutationAllowed`, run where the
-// document is actually parsed. Refuses the documents the byte scan cannot see.
+/**
+ * The parse-time authority, run where the document is actually parsed, which
+ * sees the XFA a byte scan cannot.
+ *
+ * Refuses what the refusal protects. A dynamic form (`/NeedsRendering true`)
+ * is built from the layer that saving drops, so losing it can leave a viewer
+ * showing a placeholder instead of a document. A static form keeps its values
+ * in the AcroForm and survives, which is why filling the current IRS W-9
+ * produces a correct document; refusing it would break an ordinary job to
+ * prevent nothing, so it returns a notice for the caller to pass on instead.
+ */
 export function assertParsedXfaMutationAllowed(pdfDoc, { forceXfa = false } = {}) {
-  if (forceXfa) return;
   const xfa = detectXfaFormInDocument(pdfDoc);
-  if (xfa.present) throw new Error(xfaMutationRefusalMessage({ dynamic: xfa.dynamic }));
+  if (!xfa.present) return null;
+  if (xfa.dynamic && !forceXfa) throw new Error(xfaMutationRefusalMessage({ dynamic: true }));
+  return xfa.dynamic ? xfaMutationRefusalMessage({ dynamic: true }) : XFA_STATIC_NOTICE;
 }
 
 // ─── Signature zone detection ────────────────────────────────────────────────

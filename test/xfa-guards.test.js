@@ -11,6 +11,21 @@ const REPO_ROOT = path.join(__dirname, "..");
 const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 let TMP_DIR;
 
+/**
+ * Mark a document as dynamic XFA. A dynamic form is built from the XFA layer,
+ * so dropping that layer can leave a reader showing a placeholder, which is the
+ * case the refusal is for.
+ */
+function insertDynamicXfaMarker(pdfBuffer) {
+  const marked = insertFakeXfaMarker(pdfBuffer);
+  const newlineIndex = marked.indexOf("\n");
+  return Buffer.concat([
+    marked.subarray(0, newlineIndex + 1),
+    Buffer.from("% synthetic dynamic marker /NeedsRendering true\n", "utf8"),
+    marked.subarray(newlineIndex + 1),
+  ]);
+}
+
 function insertFakeXfaMarker(pdfBuffer) {
   const header = "%PDF-";
   const headerIndex = pdfBuffer.indexOf(header);
@@ -33,6 +48,7 @@ describe("XFA guards for mutating tools", () => {
   let client;
   let transport;
   let xfaPdfPath;
+  let dynamicXfaPdfPath;
   let csvPath;
 
   beforeAll(async () => {
@@ -40,6 +56,8 @@ describe("XFA guards for mutating tools", () => {
     const source = await fs.readFile(EXAMPLE_PDF);
     xfaPdfPath = path.join(TMP_DIR, "xfa-flagged.pdf");
     await fs.writeFile(xfaPdfPath, insertFakeXfaMarker(source));
+    dynamicXfaPdfPath = path.join(TMP_DIR, "xfa-dynamic.pdf");
+    await fs.writeFile(dynamicXfaPdfPath, insertDynamicXfaMarker(source));
     csvPath = path.join(TMP_DIR, "fill.csv");
     await fs.writeFile(
       csvPath,
@@ -68,11 +86,11 @@ describe("XFA guards for mutating tools", () => {
     }
   });
 
-  it("fill_pdf rejects XFA PDFs unless force_xfa=true", async () => {
+  it("fill_pdf refuses a dynamic XFA PDF unless force_xfa=true", async () => {
     const rejected = await client.callTool({
       name: "fill_pdf",
       arguments: {
-        pdf_path: xfaPdfPath,
+        pdf_path: dynamicXfaPdfPath,
         output_path: path.join(TMP_DIR, "filled-rejected.pdf"),
         field_data: {
           "topmostSubform[0].Page1[0].f1_1[0]": "Smoke Test User",
@@ -81,11 +99,12 @@ describe("XFA guards for mutating tools", () => {
     });
     const rejectText = rejected.content?.map(item => item.type === "text" ? item.text : "").join(" ");
     expect(rejectText).toContain("This PDF uses XFA forms");
+    expect(rejectText).toContain("/NeedsRendering");
 
     const allowed = await client.callTool({
       name: "fill_pdf",
       arguments: {
-        pdf_path: xfaPdfPath,
+        pdf_path: dynamicXfaPdfPath,
         output_path: path.join(TMP_DIR, "filled-allowed.pdf"),
         field_data: {
           "topmostSubform[0].Page1[0].f1_1[0]": "Smoke Test User",
@@ -96,22 +115,39 @@ describe("XFA guards for mutating tools", () => {
     expect(allowed.content?.map(item => item.type === "text" ? item.text : "").join(" ")).toContain("PDF filled successfully");
   }, 30_000);
 
-  it("bulk_fill_from_csv rejects XFA PDFs unless force_xfa=true", async () => {
+  it("fill_pdf fills a static XFA PDF, which is what the live IRS forms are", async () => {
+    const filled = await client.callTool({
+      name: "fill_pdf",
+      arguments: {
+        pdf_path: xfaPdfPath,
+        output_path: path.join(TMP_DIR, "filled-static-xfa.pdf"),
+        field_data: {
+          "topmostSubform[0].Page1[0].f1_1[0]": "Smoke Test User",
+        },
+      },
+    });
+    const text = filled.content?.map(item => item.type === "text" ? item.text : "").join(" ");
+    expect(text).toContain("PDF filled successfully");
+    expect(text).not.toContain("/NeedsRendering");
+  }, 30_000);
+
+  it("bulk_fill_from_csv refuses a dynamic XFA PDF unless force_xfa=true", async () => {
     const rejected = await client.callTool({
       name: "bulk_fill_from_csv",
       arguments: {
-        pdf_path: xfaPdfPath,
+        pdf_path: dynamicXfaPdfPath,
         csv_path: csvPath,
         output_directory: path.join(TMP_DIR, "bulk-rejected"),
       },
     });
     const rejectText = rejected.content?.map(item => item.type === "text" ? item.text : "").join(" ");
     expect(rejectText).toContain("This PDF uses XFA forms");
+    expect(rejectText).toContain("/NeedsRendering");
 
     const allowed = await client.callTool({
       name: "bulk_fill_from_csv",
       arguments: {
-        pdf_path: xfaPdfPath,
+        pdf_path: dynamicXfaPdfPath,
         csv_path: csvPath,
         output_directory: path.join(TMP_DIR, "bulk-allowed"),
         force_xfa: true,
@@ -120,11 +156,11 @@ describe("XFA guards for mutating tools", () => {
     expect(allowed.content?.map(item => item.type === "text" ? item.text : "").join(" ")).toContain("Bulk fill complete");
   }, 30_000);
 
-  it("apply_page_plan rejects XFA PDFs unless force_xfa=true", async () => {
+  it("apply_page_plan refuses a dynamic XFA PDF unless force_xfa=true", async () => {
     const rejected = await client.callTool({
       name: "apply_page_plan",
       arguments: {
-        input_path: xfaPdfPath,
+        input_path: dynamicXfaPdfPath,
         output_path: path.join(TMP_DIR, "plan-rejected.pdf"),
         plan: {
           page_order: [1],
@@ -133,11 +169,12 @@ describe("XFA guards for mutating tools", () => {
     });
     const rejectText = rejected.content?.map(item => item.type === "text" ? item.text : "").join(" ");
     expect(rejectText).toContain("This PDF uses XFA forms");
+    expect(rejectText).toContain("/NeedsRendering");
 
     const allowed = await client.callTool({
       name: "apply_page_plan",
       arguments: {
-        input_path: xfaPdfPath,
+        input_path: dynamicXfaPdfPath,
         output_path: path.join(TMP_DIR, "plan-allowed.pdf"),
         plan: {
           page_order: [1],
@@ -242,8 +279,11 @@ describe("XFA guard wiring: schema, source and behaviour name the same tools", (
   beforeAll(async () => {
     TMP = await createTestTempDirectory(REPO_ROOT, "xfa-wiring");
     const source = await fs.readFile(EXAMPLE_PDF);
-    xfaPdfPath = path.join(TMP, "xfa-flagged.pdf");
-    await fs.writeFile(xfaPdfPath, insertFakeXfaMarker(source));
+    // Dynamic, because that is what the guard refuses: a static form keeps its
+    // values in the AcroForm and is allowed to fill. The wiring under test is
+    // the identity between schema, source and behaviour, not the policy.
+    xfaPdfPath = path.join(TMP, "xfa-dynamic.pdf");
+    await fs.writeFile(xfaPdfPath, insertDynamicXfaMarker(source));
     csvPath = path.join(TMP, "fill.csv");
     await fs.writeFile(
       csvPath,

@@ -116,28 +116,20 @@ describe("XFA hidden in a compressed catalog (issue #200)", () => {
     })).toEqual({ present: false, dynamic: false });
   });
 
-  it("fill_pdf refuses the compressed-catalog XFA form, and force_xfa still works", async () => {
-    const refused = await client.callTool({
+  it("fill_pdf fills the compressed-catalog XFA form, which is the live IRS shape", async () => {
+    const filled = await client.callTool({
       name: "fill_pdf",
       arguments: {
         pdf_path: staticPath,
-        output_path: path.join(TMP_DIR, "static-refused.pdf"),
+        output_path: path.join(TMP_DIR, "static-filled.pdf"),
         field_data: { [FIELD_NAME]: "Jordan Sample" },
       },
     });
-    expect(textOf(refused)).toContain("This PDF uses XFA forms");
-    await expect(fs.access(path.join(TMP_DIR, "static-refused.pdf"))).rejects.toThrow();
-
-    const allowed = await client.callTool({
-      name: "fill_pdf",
-      arguments: {
-        pdf_path: staticPath,
-        output_path: path.join(TMP_DIR, "static-forced.pdf"),
-        field_data: { [FIELD_NAME]: "Jordan Sample" },
-        force_xfa: true,
-      },
-    });
-    expect(textOf(allowed)).toContain("PDF filled successfully");
+    // Static XFA keeps its values in the AcroForm, so the fill is correct and
+    // refusing it would break an ordinary job to prevent nothing. What the
+    // document does lose is the XFA layer, and the result has to say so.
+    expect(textOf(filled)).toContain("PDF filled successfully");
+    await expect(fs.access(path.join(TMP_DIR, "static-filled.pdf"))).resolves.toBeUndefined();
   }, 60_000);
 
   it("the dynamic refusal says why stripping that document is worse", async () => {
@@ -154,27 +146,27 @@ describe("XFA hidden in a compressed catalog (issue #200)", () => {
     expect(message).toContain("/NeedsRendering");
   }, 60_000);
 
-  it("apply_page_plan is guarded through the same parse-time path", async () => {
-    const refused = await client.callTool({
-      name: "apply_page_plan",
-      arguments: {
-        input_path: staticPath,
-        output_path: path.join(TMP_DIR, "plan-refused.pdf"),
-        plan: { page_order: [1] },
-      },
-    });
-    expect(textOf(refused)).toContain("This PDF uses XFA forms");
-
+  it("apply_page_plan runs on a static XFA document and refuses a dynamic one", async () => {
     const allowed = await client.callTool({
       name: "apply_page_plan",
       arguments: {
         input_path: staticPath,
-        output_path: path.join(TMP_DIR, "plan-forced.pdf"),
+        output_path: path.join(TMP_DIR, "plan-static.pdf"),
         plan: { page_order: [1] },
-        force_xfa: true,
       },
     });
     expect(textOf(allowed)).toContain("Saved 1-page PDF");
+
+    const refused = await client.callTool({
+      name: "apply_page_plan",
+      arguments: {
+        input_path: dynamicPath,
+        output_path: path.join(TMP_DIR, "plan-dynamic.pdf"),
+        plan: { page_order: [1] },
+      },
+    });
+    expect(textOf(refused)).toContain("This PDF uses XFA forms");
+    expect(textOf(refused)).toContain("/NeedsRendering");
   }, 60_000);
 
   it("a document with no XFA is not refused", async () => {
