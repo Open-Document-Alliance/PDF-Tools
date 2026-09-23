@@ -83,6 +83,7 @@ export const SERVER_FILES = [
   "helpers.js",
   "index.js",
   "layout-extraction.js",
+  "lumin-client-identity.js",
   "lumin-oauth-loopback.js",
   "lumin-sign-v1-mapper.js",
   "lumin-sign-v1-operation.js",

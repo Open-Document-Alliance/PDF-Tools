@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { types as utilTypes } from "node:util";
+import { LUMIN_CLIENT_USER_AGENT } from "./lumin-client-identity.js";
 import { executeAuthorizedLuminSignV1DirectUpload } from "./lumin-sign-v1-transport.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -1220,7 +1221,11 @@ export async function pollAndRecordLuminSignV1Status(input, options = {}) {
       `https://api.luminpdf.com/v1/signature_request/${encodeURIComponent(signatureRequestId)}`,
       {
         method: "GET",
-        headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${accessToken}`,
+          "user-agent": LUMIN_CLIENT_USER_AGENT,
+        },
         redirect: "error",
         signal: controller.signal,
       },
@@ -1334,7 +1339,11 @@ export async function requestAndRecordLuminSignV1ArtifactAccess(input, options =
       `https://api.luminpdf.com/v1/signature_request/${encodeURIComponent(signatureRequestId)}/file?type=${fileType}`,
       {
         method: "GET",
-        headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${accessToken}`,
+          "user-agent": LUMIN_CLIENT_USER_AGENT,
+        },
         redirect: "error",
         signal: controller.signal,
       },

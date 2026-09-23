@@ -52,13 +52,17 @@ The current integration does not install or call it. Two co-installed servers
 must not both send the same request when one has already submitted it or has
 an uncertain outcome.
 
-## Attribution proposal, not enabled telemetry
+## Provider-side attribution, not client telemetry
 
-The preferred first step is provider-side reporting against a dedicated,
-ODA-owned production OAuth application identity. Confirm with Lumin that an
-app registered in the owner's workspace can serve unrelated users/workspaces,
-which workspace bears quotas/charges, and whether reporting can distinguish
-PDF Tools traffic. Do not ship the test app as a production default.
+Lumin confirmed that direct API requests already record the OAuth client ID
+and user agent. PDF Tools sends `User-Agent: PDF-Tools/<version>` on its token
+exchange, signing-request create, status poll, and artifact-metadata read.
+Lumin says it maps the `PDF-Tools/` prefix to `client: pdf-tools` in its
+reporting; a synthetic reporting readback has not yet been performed.
+This is one product identifier, not a per-user analytics identifier. The
+hosted Lumin MCP still needs Lumin's announced user-agent forwarding change;
+PDF Tools does not currently call that hosted server or claim its attribution.
+Do not ship the test app as a production default.
 
 Useful proposed measures are attributable new accounts, connected accounts,
 unique signature requests sent, and completed/canceled/failed requests. A
@@ -66,10 +70,12 @@ successful authorization is not necessarily a new account. Polls are not new
 requests. Provider outcomes must be deduplicated by request and state, rather
 than counting every tool call or status poll as engagement.
 
-The public docs inspected do not establish a signup referral mechanism or
-per-app analytics dashboard. Lumin must confirm attribution across signup and
-authorization. Do not invent referral parameters or repurpose OAuth `state`,
-which is reserved here for connection security.
+Lumin confirmed that users may sign in or create a workspace and that API
+usage is billed to their own workspace. A first-time signup return, ODA-owned
+production app across unrelated workspaces, and provider reporting of new
+account acquisition still need live qualification. Do not invent referral
+parameters or repurpose OAuth `state`, which is reserved here for connection
+security.
 
 Local preparation, abandoned local attempts, and local errors are not covered
 by provider-side reporting. Any future client analytics requires a separately

@@ -1,6 +1,7 @@
 import http from "node:http";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LUMIN_CLIENT_USER_AGENT } from "../server/lumin-client-identity.js";
 import {
   LUMIN_OAUTH_AUTHORIZATION_ENDPOINT,
   LUMIN_OAUTH_REGISTERED_REDIRECT_URI,
@@ -188,6 +189,7 @@ describe("Lumin OAuth loopback PKCE", () => {
         headers: {
           accept: "application/json",
           "content-type": "application/x-www-form-urlencoded",
+          "user-agent": LUMIN_CLIENT_USER_AGENT,
         },
       });
       expect(body.get("client_id")).toBe("pdf-tools-public-client");

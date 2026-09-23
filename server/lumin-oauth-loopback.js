@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import http from "node:http";
+import { LUMIN_CLIENT_USER_AGENT } from "./lumin-client-identity.js";
 
 export const LUMIN_OAUTH_AUTHORIZATION_ENDPOINT = "https://auth.luminpdf.com/oauth2/auth";
 export const LUMIN_OAUTH_TOKEN_ENDPOINT = "https://auth.luminpdf.com/oauth2/token";
@@ -398,6 +399,7 @@ export async function createLuminOAuthLoopbackSession({
           headers: {
             accept: "application/json",
             "content-type": "application/x-www-form-urlencoded",
+            "user-agent": LUMIN_CLIENT_USER_AGENT,
           },
           body: form.toString(),
           redirect: "error",

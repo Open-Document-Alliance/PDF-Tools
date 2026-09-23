@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
+import { LUMIN_CLIENT_USER_AGENT } from "./lumin-client-identity.js";
 import {
   LUMIN_SIGN_V1_DIRECT_UPLOAD_REFERENCE,
   LUMIN_SIGN_V1_MAPPER_CONTRACT_SHA256,
@@ -823,6 +824,7 @@ export async function executeAuthorizedLuminSignV1DirectUpload(input, options = 
         headers: {
           accept: "application/json",
           authorization: `Bearer ${accessToken}`,
+          "user-agent": LUMIN_CLIENT_USER_AGENT,
         },
         body: form,
         redirect: "error",
