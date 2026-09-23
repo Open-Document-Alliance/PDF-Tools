@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { LUMIN_CLIENT_USER_AGENT } from "../server/lumin-client-identity.js";
 import {
   LUMIN_SIGN_V1_MAPPER_CONTRACT_SHA256,
   mapLuminSignV1SignatureRequest,
@@ -289,6 +290,7 @@ describe("executeAuthorizedLuminSignV1DirectUpload", () => {
       expect(options.headers).toEqual({
         accept: "application/json",
         authorization: `Bearer ${ACCESS_TOKEN}`,
+        "user-agent": LUMIN_CLIENT_USER_AGENT,
       });
       expect(options.headers).not.toHaveProperty("content-type");
       expect(options.body).toBeInstanceOf(FormData);
@@ -1110,6 +1112,7 @@ describe("durable Lumin Sign v1 operation lifecycle", () => {
           expect(url).toBe("https://api.luminpdf.com/v1/signature_request/sigreq.synthetic-123");
           expect(options).toMatchObject({ method: "GET", redirect: "error" });
           expect(options.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+          expect(options.headers["user-agent"]).toBe(LUMIN_CLIENT_USER_AGENT);
           return new Response(JSON.stringify({
             signature_request: {
               signature_request_id: "sigreq.synthetic-123",
@@ -1585,6 +1588,7 @@ describe("durable Lumin Sign v1 operation lifecycle", () => {
         fetchImpl: async (url, options) => {
           expect(url).toBe("https://api.luminpdf.com/v1/signature_request/sigreq.synthetic-123/file?type=merged");
           expect(options.headers.authorization).toBe(`Bearer ${ACCESS_TOKEN}`);
+          expect(options.headers["user-agent"]).toBe(LUMIN_CLIENT_USER_AGENT);
           return new Response(JSON.stringify({
             signed_url: signedUrl,
             expires_at: shape === "seconds" ? expiresAtSeconds : expiresAtSeconds * 1000 + 123,
