@@ -15,7 +15,14 @@ import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 
-import { callTool, createRemoteServer, listTools, MAX_PAGES, SERVER_NAME } from "../remote/server.mjs";
+import {
+  callTool,
+  createRemoteServer,
+  listTools,
+  MAX_INLINE_PDF_BYTES,
+  MAX_PAGES,
+  SERVER_NAME,
+} from "../remote/server.mjs";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES, testing } from "../remote/fetch-guard.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,11 +73,22 @@ describe("P2: no identity", () => {
 });
 
 describe("P5: bounded inputs", () => {
-  it("refuses a base64 document over the size cap before parsing it", async () => {
-    const oversized = Buffer.alloc(MAX_PDF_BYTES + 1024, 0x41).toString("base64");
+  it("refuses an inline document over the host's request ceiling, and names the way round it", async () => {
+    // The host rejects a request body above ~4.5 MB before this code runs, so
+    // an inline document has a lower ceiling than one fetched by URL. Refusing
+    // it here is what turns an opaque host error into an instruction.
+    const oversized = Buffer.alloc(MAX_INLINE_PDF_BYTES + 1024, 0x41).toString("base64");
     const result = await callTool("read_form_fields", { pdf_base64: oversized });
     expect(result.isError).toBe(true);
-    expect(textOf(result)).toMatch(/^TOO_LARGE/);
+    const text = textOf(result);
+    expect(text).toMatch(/^TOO_LARGE_INLINE/);
+    expect(text).toMatch(/pdf_url/);
+    expect(text).toMatch(/25 MB/);
+    expect(text).toMatch(/PDF-Tools/);
+  });
+
+  it("keeps the inline ceiling below the fetched one, since a host sets the first", () => {
+    expect(MAX_INLINE_PDF_BYTES).toBeLessThan(MAX_PDF_BYTES);
   });
 
   it("refuses a document with more pages than the cap", async () => {

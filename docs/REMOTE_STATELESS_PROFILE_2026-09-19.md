@@ -50,6 +50,15 @@ scheme and host class.
 count, render dimensions, and wall-clock time, enforced before parsing and
 again during it. Exceeding a cap fails closed with a typed error.
 
+Two document ceilings, not one, because they have different owners. A document
+fetched from a URL is bounded by this service at 25 MB. A document sent inline
+is bounded by the host, which rejects a request body above roughly 4.5 MB
+before any of this code runs, leaving about 3 MB of PDF after base64. The
+service refuses inline documents above 3 MB itself so the caller is told to
+pass a URL rather than reading the host's own message about an entity it never
+addressed. Results travel back inside the response and are subject to the same
+ceiling, so a large document fetched by URL can still fail on the way out.
+
 **P6. A narrow tool surface.** Only the tools the paperwork job needs. The local
 product's 57 tools include local-only concepts (allowed directories, saved
 profiles, Finder integration, viewer state) that are meaningless or misleading
