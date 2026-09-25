@@ -71,10 +71,22 @@ extension handles encrypted files on your own machine.
 
 | Limit | Value |
 |---|---|
-| Maximum document size | 25 MB |
+| Document fetched from a URL | 25 MB |
+| Document sent inline (`pdf_base64`) | 3 MB |
 | Maximum pages | 200 |
 | Fetch timeout | 15 seconds |
 | Redirects followed | 3 |
+
+The two document limits differ because they are set by different things. A
+document we fetch is bounded by this service. A document sent inline rides
+inside the request, and the host rejects a request body above roughly 4.5 MB
+before this service sees it, which after base64 leaves about 3 MB of PDF. A
+finished document travels back the same way, so a result much above 3 MB may
+fail on the way out even when the input arrived by URL.
+
+Two ways around it, in order of preference: pass a URL, which this service
+fetches itself, or run PDF Tools on the machine that holds the file. The
+desktop extension has no such ceiling because nothing crosses a network.
 
 The URL fetcher refuses anything other than `http` and `https`, refuses private,
 loopback, link-local and similar network ranges after resolving the name and

@@ -27,9 +27,31 @@ export const SERVER_NAME = "pdf-tools-remote";
 export const SERVER_VERSION = "0.1.0";
 export const MAX_PAGES = 200;
 
+/**
+ * The ceiling on a document sent inline, which is lower than the one on a
+ * document we fetch ourselves and is not ours to choose.
+ *
+ * The host rejects a request body over about 4.5 MB before this code runs, and
+ * base64 inflates a document by a third, so roughly 3 MB of PDF is as much as
+ * can arrive inline. Measured against the deployed endpoint: a 4.0 MB request
+ * succeeded, 8.0 MB and 16 MB were refused by the host in about 160 ms with a
+ * message this service never sees.
+ *
+ * Refusing it here first is the difference between a caller being told to pass
+ * a URL instead and a caller reading "Request Entity Too Large" from a server
+ * it has never heard of.
+ */
+export const MAX_INLINE_PDF_BYTES = 3 * 1024 * 1024;
+
 const PDF_INPUT_PROPERTIES = {
-  pdf_url: { type: "string", description: "HTTPS URL of the PDF. Supply this or pdf_base64." },
-  pdf_base64: { type: "string", description: "The PDF itself, base64 encoded. Supply this or pdf_url." },
+  pdf_url: {
+    type: "string",
+    description: "HTTPS URL of the PDF, which this service fetches itself. Prefer this: it accepts documents up to 25 MB, where an inline document is limited to 3 MB.",
+  },
+  pdf_base64: {
+    type: "string",
+    description: "The PDF itself, base64 encoded, for a document with no public URL. Limited to 3 MB; above that the request is rejected before it arrives, so pass pdf_url instead.",
+  },
 };
 
 class ToolRefusal extends Error {
@@ -48,8 +70,16 @@ async function resolveBytes({ pdf_url, pdf_base64 }) {
   if (pdf_base64) {
     const bytes = new Uint8Array(Buffer.from(pdf_base64, "base64"));
     if (bytes.length === 0) throw new ToolRefusal("EMPTY_INPUT", "That base64 value did not decode to any bytes.");
-    if (bytes.length > MAX_PDF_BYTES) {
-      throw new ToolRefusal("TOO_LARGE", `That document is larger than the ${MAX_PDF_BYTES / 1024 / 1024} MB limit.`);
+    if (bytes.length > MAX_INLINE_PDF_BYTES) {
+      throw new ToolRefusal(
+        "TOO_LARGE_INLINE",
+        `That document is ${(bytes.length / 1024 / 1024).toFixed(1)} MB, above the `
+          + `${MAX_INLINE_PDF_BYTES / 1024 / 1024} MB limit for a document sent inline. `
+          + `Pass pdf_url instead and this service will fetch it, which allows up to `
+          + `${MAX_PDF_BYTES / 1024 / 1024} MB. For a document that has no public URL and is larger `
+          + `than this, run PDF Tools on the machine that holds it: `
+          + `https://github.com/Open-Document-Alliance/PDF-Tools`,
+      );
     }
     return bytes;
   }
