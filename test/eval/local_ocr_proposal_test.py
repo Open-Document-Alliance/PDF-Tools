@@ -223,6 +223,75 @@ class LocalOcrProposalTests(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("regular file", json.loads(result.stderr)["message"])
 
+    def test_offline_review_uses_validated_snapshot_and_escapes_ocr_text(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "output"
+            text = '<script>fetch("https://evil.test")</script><img onerror="alert(1)">'
+            proposal = self.proposal([(text, 0.8, [0.1, 0.2, 0.3, 0.1])])
+            MODULE.retain_proposal(folder, PNG, proposal)
+            review = Path(root) / "review.html"
+            result = MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"], self.replay,
+                                            review_html=review)
+            document = review.read_bytes()
+            self.assertEqual(result["review_html_sha256"], MODULE.digest(document))
+            self.assertIn(b'&lt;script&gt;', document)
+            self.assertNotIn(b'<script>', document)
+            self.assertNotIn(b'<img onerror=', document)
+            self.assertIn(b"default-src 'none'", document)
+            self.assertIn(b"Image replay does not verify OCR words", document)
+            self.assertIn(b'href="#box-0"', document)
+            self.assertEqual(review.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(set(os.listdir(folder)), {"render.png", "proposal.json", "commit.json"})
+
+    def test_review_writes_nothing_on_failed_replay_and_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "output"
+            proposal = self.proposal()
+            MODULE.retain_proposal(folder, PNG, proposal)
+            review = Path(root) / "review.html"
+            with self.assertRaises(ValueError):
+                MODULE.verify_retained(folder, PDF, "f" * 64, self.replay, review_html=review)
+            self.assertFalse(review.exists())
+            review.write_bytes(b"outside sentinel")
+            with self.assertRaises(FileExistsError):
+                MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"], self.replay, review_html=review)
+            self.assertEqual(review.read_bytes(), b"outside sentinel")
+            with self.assertRaisesRegex(ValueError, "outside"):
+                MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"], self.replay,
+                                        review_html=folder / "review.html")
+            self.assertFalse((folder / "review.html").exists())
+
+    def test_review_does_not_reread_changed_proposal_after_validation(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "output"
+            proposal = self.proposal()
+            MODULE.retain_proposal(folder, PNG, proposal)
+            def render_and_change_disk(source, page):
+                (folder / "proposal.json").write_bytes(b'changed after snapshot read')
+                return self.replay(source, page)
+            review = Path(root) / "review.html"
+            result = MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"],
+                                            render_and_change_disk, review_html=review)
+            self.assertEqual(result["proposal_sha256"], proposal["proposal_sha256"])
+            self.assertIn("VISIBLE", review.read_text())
+            self.assertNotIn("changed after snapshot read", review.read_text())
+
+    def test_empty_review_is_explicit_and_generation_cannot_skip_replay(self):
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "output"
+            proposal = self.proposal([])
+            MODULE.retain_proposal(folder, PNG, proposal)
+            review = Path(root) / "review.html"
+            MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"], self.replay, review_html=review)
+            self.assertIn("No text was proposed", review.read_text())
+            result = subprocess.run([sys.executable, str(SCRIPT), "--pdf", "not-read.pdf", "--page", "1",
+                                     "--output-dir", str(Path(root) / "new"), "--expect-source-sha256", "f" * 64,
+                                     "--review-html", str(Path(root) / "not-created.html")],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("requires --verify-proposal-dir", result.stderr)
+            self.assertFalse((Path(root) / "not-created.html").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
