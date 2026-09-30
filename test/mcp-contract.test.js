@@ -498,6 +498,7 @@ describe("MCPB static declarations", () => {
       "lumin-sign-v1-operation.js",
       "lumin-sign-v1-transport.js",
       "lumin-signing-tools.js",
+      "local-ocr-tools.js",
       "markdown-conversion.js",
       "markdown-output-transaction.js",
       "pdf-lib-subprocess.js",
@@ -521,7 +522,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(32);
+    expect(mirrored).toHaveLength(33);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",

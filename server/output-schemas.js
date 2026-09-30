@@ -7,6 +7,7 @@ import {
 } from "./pdf-observations.js";
 import { validatePdfComparisonSemantics } from "./pdf-comparison.js";
 import { validateAccessibilityInspectionResult } from "./accessibility-inspection.js";
+import { LOCAL_OCR_OUTPUT_SCHEMA, validateLocalOcrResult } from "./local-ocr-tools.js";
 import {
   TABLE_PROPOSAL_CLAIM_BOUNDARY,
   TABLE_PROPOSAL_REASON_CODES,
@@ -1209,6 +1210,7 @@ const workspacePageRange = object({
 });
 
 export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
+  propose_pdf_ocr: LOCAL_OCR_OUTPUT_SCHEMA,
   create_extraction_workspace: object({
     workspace_id: string,
     workspace_path: string,
@@ -2016,6 +2018,7 @@ const errorValidators = new Map(Object.entries(TOOL_ERROR_OUTPUT_SCHEMAS).map(
 ));
 const standardErrorValidator = validatorProvider.getValidator(standardError);
 const semanticSuccessValidators = new Map([
+  ["propose_pdf_ocr", validateLocalOcrResult],
   ["compare_pdfs", validatePdfComparisonSemantics],
   ["inspect_pdf_accessibility", validateAccessibilityInspectionResult],
   ["read_pdf_layout", validatePdfLayoutSemantics],

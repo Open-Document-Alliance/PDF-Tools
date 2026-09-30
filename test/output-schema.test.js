@@ -51,6 +51,7 @@ const STRUCTURED_TOOLS = [
   "merge_pdfs",
   "prepare_signing_packet",
   "prepare_lumin_request",
+  "propose_pdf_ocr",
   "read_extraction_chunk",
   "read_extraction_workspace",
   "read_pdf_bytes",
