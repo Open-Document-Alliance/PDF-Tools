@@ -54,6 +54,13 @@ explicit empty result and displaying the captured snapshot despite a later
 disk mutation. Native OCR was not rerun for the screen; the existing proposal
 was replayed and displayed.
 
+A separate review of the screen delta at `a4f7ca91` found no actionable
+defects and independently passed all 19 contract tests and the diff check.
+It did not repeat the Mac browser run. The observed browser was
+HeadlessChrome 151; both the selected text and source box highlight matched.
+The isolated browser session was closed after capture; Claude Desktop was
+not restarted or modified.
+
 ## Invocation
 
 ```sh
