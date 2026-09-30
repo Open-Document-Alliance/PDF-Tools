@@ -104,6 +104,44 @@ class LocalOcrProposalTests(unittest.TestCase):
                 MODULE.retain_proposal(folder, PNG, proposal)
             self.assertEqual((folder / "render.png").read_bytes(), PNG)
 
+    def test_symlink_parent_saves_and_syncs_the_physical_parent(self):
+        with tempfile.TemporaryDirectory() as root:
+            physical = Path(root) / "physical"
+            physical.mkdir(mode=0o700)
+            alias = Path(root) / "shortcut"
+            alias.symlink_to(physical, target_is_directory=True)
+            folder = alias / "output"
+            proposal = self.proposal()
+            MODULE.retain_proposal(folder, PNG, proposal)
+            result = MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"], self.replay)
+            self.assertEqual(result["observation_count"], 1)
+            with self.assertRaises(FileExistsError):
+                MODULE.retain_proposal(folder, PNG, proposal)
+
+    def test_independently_rounded_page_edge_boxes_replay(self):
+        x = 0.8369076797385621
+        w = 0.16309232026143794
+        proposal = MODULE.proposal_from_observations(
+            PDF, 1, 2, PNG, 1224, 1224, [("EDGE", 0.8, [x, 0, w, w])], ENGINE)
+        box = proposal["proposals"][0]["box_top_left_pixels"]
+        self.assertEqual(box[:1] + box[2:3], [1024.38, 199.63])
+        self.assertGreater(box[0] + box[2], 1224.01)
+        render = lambda *_: (PNG, 1224, 1224, 2,
+                            {key: ENGINE[key] for key in ("pypdfium2_version", "pillow_version")})
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root) / "valid"
+            MODULE.retain_proposal(folder, PNG, proposal)
+            MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"], render)
+            for axis in (0, 1):
+                bad = json.loads(MODULE.canonical(proposal))
+                bad["proposals"][0]["box_top_left_pixels"][axis] += 0.000001
+                del bad["proposal_sha256"]
+                bad["proposal_sha256"] = MODULE.digest(MODULE.canonical(bad))
+                changed = Path(root) / f"overflow-{axis}"
+                MODULE.retain_proposal(changed, PNG, bad)
+                with self.assertRaisesRegex(ValueError, "outside"):
+                    MODULE.verify_retained(changed, PDF, bad["proposal_sha256"], render)
+
     def test_replay_rejects_changed_source_render_pin_or_engine(self):
         with tempfile.TemporaryDirectory() as root:
             folder = Path(root) / "output"

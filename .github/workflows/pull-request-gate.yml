@@ -81,6 +81,13 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Contract checks need only the runner's Python standard library, not
+      # the optional macOS OCR engine or renderer. Actual OCR stays Mac-only.
+      - name: Local OCR proposal contract
+        run: python3 test/eval/local_ocr_proposal_test.py
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+
       # PDF_TOOLS_TIMING_CALIBRATED=skip stands down two suites that assert
       # wall-clock budgets calibrated to the maintainer's machine:
       # deep-malformed-campaign (15 s per call, measured at 15001-15016 ms

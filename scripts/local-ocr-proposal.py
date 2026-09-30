@@ -9,6 +9,7 @@ proposal. It never edits the PDF or substitutes OCR for its text layer.
 from __future__ import annotations
 
 import argparse
+from decimal import Decimal
 import hashlib
 import importlib.metadata
 import io
@@ -179,6 +180,10 @@ def sync_directory(path: Path) -> None:
 def retain_proposal(folder: Path, png: bytes, proposal: dict) -> None:
     # commit.json is written last. Any interrupted prefix is explicitly
     # incomplete and cannot be read as a committed proposal. Never overwrite it.
+    # macOS /tmp and user-selected shortcut parents may be symlinks. Resolve
+    # the existing parent before writing so its final no-follow fsync uses the
+    # same physical directory. The new final component remains exclusive.
+    folder = folder.parent.resolve(strict=True) / folder.name
     os.mkdir(folder, 0o700)
     proposal_bytes = canonical(proposal) + b"\n"
     write_exclusive(folder / "render.png", png)
@@ -260,8 +265,12 @@ def verify_retained(folder: Path, source: bytes, expected_proposal: str, render)
                 or any(type(value) not in (int, float) or not math.isfinite(value) for value in box)):
             raise ValueError("proposal observation values are invalid")
         x, y, w, h = box
-        # Coordinates were rounded to 0.01 pixels when retained.
-        if min(x, y, w, h) < 0 or x + w > width + 0.01 or y + h > height + 0.01:
+        # Coordinates were independently rounded to 0.01 pixels. Decimal
+        # sums preserve that allowance without binary float edge overflow.
+        right = Decimal(str(x)) + Decimal(str(w))
+        bottom = Decimal(str(y)) + Decimal(str(h))
+        if (min(x, y, w, h) < 0 or right > Decimal(width) + Decimal("0.01")
+                or bottom > Decimal(height) + Decimal("0.01")):
             raise ValueError("proposal box is outside the rendered page")
     return {"status": "source_render_replayed_ocr_unverified", "proposal_sha256": expected_proposal,
             "source_pdf_sha256": digest(source), "render_png_sha256": digest(png),

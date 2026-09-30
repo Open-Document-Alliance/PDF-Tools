@@ -53,6 +53,17 @@ recomputation, and absent-adapter failure before output.
 A thirteenth check rejects a FIFO immediately without waiting for a writer;
 the open uses `O_NONBLOCK` before testing that its handle is a regular file.
 
+Independent review of the first replay commit found two functional edges:
+syncing a symlinked parent (including macOS `/tmp`) failed after output was
+committed, and binary floating-point addition could reject a valid box rounded
+to the page boundary. Retention now resolves the existing parent before any
+write. Replay compares decimal coordinates with the same 0.01-pixel allowance,
+without widening it. Both direct regressions pass, including rejection just
+beyond the allowance. All 15 dependency-free checks pass on Linux and Mac;
+the same bank runs in the existing pull-request CI workflow without installing
+OCR dependencies. The actual Apollo proposal still replays under the corrected
+script.
+
 ## Invocation
 
 Use a Python environment containing separately installed `ocrmac`,
