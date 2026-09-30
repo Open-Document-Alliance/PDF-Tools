@@ -64,6 +64,11 @@ the same bank runs in the existing pull-request CI workflow without installing
 OCR dependencies. The actual Apollo proposal still replays under the corrected
 script.
 
+The separate full-branch review at `29a9a1ec` found no actionable regressions
+after those fixes and independently reran all 15 contract tests. It did not
+rerun native macOS OCR; the real Mac generation/replay evidence above is the
+implementation lane's observation, not an independent native-engine verdict.
+
 ## Invocation
 
 Use a Python environment containing separately installed `ocrmac`,
