@@ -7,7 +7,7 @@ import { parseStrictJson } from "../scripts/eval-strict-json.mjs";
 
 // The adapter is separately installed, never supplied by a model argument.
 // Change this pin only with the reviewed first-party Python adapter.
-export const LOCAL_OCR_HELPER_SHA256 = "48f168f2b954d1a0f5d5a6a5080cd103a1072874ad01e654c2430e356a5cb755";
+export const LOCAL_OCR_HELPER_SHA256 = "2991b9e68dd7327813292126f8ae4398546662187799ff92b6446b591e825991";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const MAX_SOURCE = 50 * 1024 * 1024;
 const MAX_PNG = 25 * 1024 * 1024;
@@ -159,6 +159,9 @@ export function runLocalOcrAdapter(python, helper, args, deadline) {
     });
     child.on("error", () => { failure ??= new Error("Optional local OCR adapter could not start. Check its separate installation."); });
     child.on("close", code => {
+      // The parent can exit while a same-group descendant has redirected its
+      // pipes. Close that group before dropping deadline/shutdown tracking.
+      killAdapter(child);
       clearTimeout(timer); children.delete(record); finish();
       if (failure) reject(failure);
       else if (code !== 0) reject(new Error("Optional local OCR adapter failed. Check the separate macOS installation, supported PDF and page; no verified OCR result was returned."));

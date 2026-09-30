@@ -24,7 +24,7 @@ Install the reviewed `scripts/local-ocr-proposal.py` outside the extension
 bundle. This helper version has SHA-256:
 
 ```text
-48f168f2b954d1a0f5d5a6a5080cd103a1072874ad01e654c2430e356a5cb755
+2991b9e68dd7327813292126f8ae4398546662187799ff92b6446b591e825991
 ```
 
 Use `get_allowed_directories` to find the active configuration file. Preserve

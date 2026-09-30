@@ -213,3 +213,19 @@ test("real subprocess timeout and duplicate JSON fail closed", { skip: !python }
   await assert.rejects(runLocalOcrAdapter(python, helper, [], Date.now() + 10_000), /duplicate/);
   await assert.rejects(runLocalOcrAdapter("/nonexistent-python", helper, [], Date.now() + 10_000), /could not start/);
 });
+
+test("ordinary adapter completion terminates redirected same-group descendants", { skip: !python }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-ocr-process-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const helper = path.join(root, "adapter.py");
+  const sentinel = path.join(root, "descendant-survived");
+  await fs.writeFile(helper, [
+    "import json, subprocess, sys",
+    "code = 'import pathlib,sys,time; time.sleep(0.4); pathlib.Path(sys.argv[1]).write_text(\"survived\")'",
+    "subprocess.Popen([sys.executable, '-I', '-c', code, sys.argv[1]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
+    "print(json.dumps({'ok': True}))",
+  ].join("\n"));
+  assert.deepEqual(await runLocalOcrAdapter(python, helper, [sentinel], Date.now() + 10_000), { ok: true });
+  await new Promise(done => setTimeout(done, 600));
+  await assert.rejects(fs.stat(sentinel), { code: "ENOENT" });
+});

@@ -363,6 +363,10 @@ def render_page(source: bytes, page_number: int):
                 "pillow_version": PIL.__version__}
     document = pdfium.PdfDocument(source)
     try:
+        # An empty user password can still open an encrypted PDF. Refuse the
+        # security handler explicitly, before rendering or recognition.
+        if pdfium.raw.FPDF_GetSecurityHandlerRevision(document) != -1:
+            raise ValueError("Optional OCR does not accept encrypted PDFs")
         page_count = len(document)
         if not 1 <= page_number <= page_count:
             raise ValueError("page is outside the PDF")
