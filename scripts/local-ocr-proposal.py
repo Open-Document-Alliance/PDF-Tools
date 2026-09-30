@@ -9,7 +9,9 @@ proposal. It never edits the PDF or substitutes OCR for its text layer.
 from __future__ import annotations
 
 import argparse
+import base64
 from decimal import Decimal
+import html
 import hashlib
 import importlib.metadata
 import io
@@ -200,7 +202,70 @@ def retain_proposal(folder: Path, png: bytes, proposal: dict) -> None:
     sync_directory(folder.parent)
 
 
-def verify_retained(folder: Path, source: bytes, expected_proposal: str, render) -> dict:
+def review_html_document(body: dict, png: bytes, proposal_sha: str) -> bytes:
+    """Offline display of an already validated snapshot; never approves words."""
+    css = """
+*{box-sizing:border-box}body{margin:0;background:#f4f3ef;color:#202522;font:15px system-ui,sans-serif}
+header{padding:26px 36px 20px;border-bottom:1px solid #d7dad3;background:#fff}
+.brand{font-size:12px;font-weight:700;letter-spacing:.12em;color:#497063;text-transform:uppercase}
+h1{font-size:28px;letter-spacing:-.03em;margin:7px 0}p{margin:8px 0;line-height:1.5}
+.status{font-size:14px;color:#425549}.warning{color:#594720;font-weight:600}
+main{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);gap:28px;padding:24px 36px}
+h2{font-size:16px;margin:0 0 12px}.page{max-height:calc(100vh - 224px);overflow:auto;border:1px solid #d7dad3;background:white}
+svg{display:block;width:100%;height:auto}.box{fill:transparent;stroke:transparent;stroke-width:2;transition:fill .12s,stroke .12s}
+.box:target{stroke:#207957;fill:#20795722;stroke-width:3}
+ol{list-style:none;padding:0;margin:0;max-height:calc(100vh - 280px);overflow:auto}
+li{border-top:1px solid #d7dad3}li:first-child{border-top:0}
+a{display:grid;grid-template-columns:32px minmax(0,1fr);gap:10px;padding:12px 8px;color:inherit;text-decoration:none;transition:background .12s}
+a:hover{background:#e9eae6}a:focus-visible{outline:2px solid #207957;outline-offset:-2px}
+.number{color:#647368;font-size:12px;padding-top:2px}.words{white-space:pre-wrap;overflow-wrap:anywhere}
+small{display:block;font-size:11px;color:#667169;margin-top:5px}.hint{font-size:13px;color:#58665c}
+details{margin-top:16px;border-top:1px solid #d7dad3;padding-top:12px}summary{cursor:pointer;font-size:13px}
+code{font-size:11px;overflow-wrap:anywhere}footer{padding:0 36px 24px;font-size:12px;color:#667169}
+@media(max-width:850px){header{padding:20px}main{grid-template-columns:1fr;padding:20px;gap:22px}.page{max-height:65vh}ol{max-height:55vh}footer{padding:0 20px 20px}}
+@media(prefers-reduced-motion:reduce){a,.box{transition:none}}
+"""
+    # Keep the selected text in step with the source box without scripting.
+    css += "\n".join(f'body:has(#box-{index}:target) a[href="#box-{index}"]'
+                     '{background:#e6ede7;box-shadow:inset 3px 0 #207957}'
+                     for index in range(len(body["proposals"])))
+    style_hash = base64.b64encode(hashlib.sha256(css.encode()).digest()).decode()
+    image = base64.b64encode(png).decode()
+    boxes, rows = [], []
+    for index, item in enumerate(body["proposals"]):
+        text = html.escape(item["text_proposal"], quote=True)
+        x, y, w, h = item["box_top_left_pixels"]
+        boxes.append(f'<rect class="box" id="box-{index}" x="{x}" y="{y}" '
+                     f'width="{w}" height="{h}"><title>{index + 1}: {text}</title></rect>')
+        score = item["engine_confidence_unverified"]
+        rows.append(f'<li><a href="#box-{index}"><span class="number">{index + 1}</span>'
+                    f'<span class="words">{text}<small>Engine score {score:.6f}; uncalibrated</small>'
+                    '</span></a></li>')
+    width, height = body["render_width_pixels"], body["render_height_pixels"]
+    count = len(rows)
+    empty = '<p>No text was proposed for this page.</p>' if not rows else ''
+    document = f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'sha256-{style_hash}'; base-uri 'none'; form-action 'none'">
+<title>Review OCR proposals | PDF Tools</title><style>{css}</style></head>
+<body><header><div class="brand">PDF Tools · Local review</div><h1>Review OCR proposals</h1>
+<p class="status">Page {body["page_number"]} of {body["page_count"]} · {count} proposed text observations · source image replay matched</p>
+<p class="warning">Words may be wrong. Check them against the scan before using them.</p></header>
+<main><section aria-labelledby="source-heading"><h2 id="source-heading">Original page</h2>
+<div class="page"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}" role="img" aria-label="Original PDF page with proposed text boxes">
+<image href="data:image/png;base64,{image}" width="{width}" height="{height}"/>{''.join(boxes)}</svg></div></section>
+<section aria-labelledby="proposal-heading"><h2 id="proposal-heading">Proposed text, not verified</h2>
+<p class="hint">Select text to highlight its box on the page. Use your browser's Find to locate a word.</p>
+{empty}<ol aria-label="OCR observations">{''.join(rows)}</ol><details><summary>Source and proposal identity</summary>
+<p>PDF SHA-256<br><code>{body["source_pdf_sha256"]}</code></p><p>Proposal SHA-256<br><code>{proposal_sha}</code></p>
+<p>Rendered page SHA-256<br><code>{body["render_png_sha256"]}</code></p></details></section></main>
+<footer>Offline, read-only snapshot. No uploads, analytics, corrections, approval or changes to the PDF. Image replay does not verify OCR words.</footer>
+</body></html>'''
+    return document.encode("utf-8")
+
+
+def verify_retained(folder: Path, source: bytes, expected_proposal: str, render,
+                    review_html: Path | None = None) -> dict:
     if not SHA256.fullmatch(expected_proposal):
         raise ValueError("expected proposal digest must be lowercase SHA-256")
     info = os.lstat(folder)
@@ -272,9 +337,20 @@ def verify_retained(folder: Path, source: bytes, expected_proposal: str, render)
         if (min(x, y, w, h) < 0 or right > Decimal(width) + Decimal("0.01")
                 or bottom > Decimal(height) + Decimal("0.01")):
             raise ValueError("proposal box is outside the rendered page")
-    return {"status": "source_render_replayed_ocr_unverified", "proposal_sha256": expected_proposal,
-            "source_pdf_sha256": digest(source), "render_png_sha256": digest(png),
-            "page_number": body["page_number"], "observation_count": len(observations)}
+    result = {"status": "source_render_replayed_ocr_unverified", "proposal_sha256": expected_proposal,
+              "source_pdf_sha256": digest(source), "render_png_sha256": digest(png),
+              "page_number": body["page_number"], "observation_count": len(observations)}
+    if review_html is not None:
+        # Build from the same in-memory bytes just validated, not a second
+        # pathname read that could display a different proposal or image.
+        output = review_html.parent.resolve(strict=True) / review_html.name
+        if output.parent == folder.resolve(strict=True):
+            raise ValueError("review HTML must be outside the retained proposal directory")
+        document = review_html_document(body, png, expected_proposal)
+        write_exclusive(output, document)
+        sync_directory(output.parent)
+        result["review_html_sha256"] = digest(document)
+    return result
 
 
 def render_page(source: bytes, page_number: int):
@@ -326,7 +402,11 @@ def main() -> None:
     mode.add_argument("--output-dir", type=Path)
     mode.add_argument("--verify-proposal-dir", type=Path)
     parser.add_argument("--expect-proposal-sha256")
+    parser.add_argument("--review-html", type=Path,
+                        help="Write a new offline read-only HTML review after successful replay")
     args = parser.parse_args()
+    if args.review_html and not args.verify_proposal_dir:
+        parser.error("--review-html requires --verify-proposal-dir")
     if not SHA256.fullmatch(args.expect_source_sha256):
         parser.error("expected source digest must be lowercase SHA-256")
     source = read_source(args.pdf)
@@ -337,7 +417,8 @@ def main() -> None:
         if args.page is not None or not args.expect_proposal_sha256:
             parser.error("verification requires a proposal digest and uses the retained page number")
         print(json.dumps(verify_retained(args.verify_proposal_dir, source,
-                                        args.expect_proposal_sha256, render_page), sort_keys=True))
+                                        args.expect_proposal_sha256, render_page,
+                                        review_html=args.review_html), sort_keys=True))
         return
     if args.page is None or args.expect_proposal_sha256 is not None:
         parser.error("generation requires --page and no proposal digest")
