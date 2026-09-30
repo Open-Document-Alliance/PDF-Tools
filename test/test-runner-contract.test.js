@@ -527,6 +527,7 @@ describe("aggregate test-runner contract", () => {
       "test/deep-malformed-native-windows-portable.test.js",
     ]);
     const posixFiles = [
+      "test/local-ocr-tools-native.test.js",
       "test/deep-malformed-native-v2-contract.test.js",
       "test/deep-malformed-native-v2-mechanisms.test.js",
       "test/deep-malformed-native-v3-contract.test.js",

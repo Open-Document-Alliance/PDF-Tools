@@ -7,7 +7,6 @@ import {
 } from "./pdf-observations.js";
 import { validatePdfComparisonSemantics } from "./pdf-comparison.js";
 import { validateAccessibilityInspectionResult } from "./accessibility-inspection.js";
-import { LOCAL_OCR_OUTPUT_SCHEMA, validateLocalOcrResult } from "./local-ocr-tools.js";
 import {
   TABLE_PROPOSAL_CLAIM_BOUNDARY,
   TABLE_PROPOSAL_REASON_CODES,
@@ -30,6 +29,47 @@ const object = (properties, required = Object.keys(properties), additionalProper
 });
 const arrayOf = items => ({ type: "array", items });
 const enumString = values => ({ type: "string", enum: values });
+
+// Keep the wire contract independent of the optional subprocess adapter.
+// Scorers import this module without installing or invoking any OCR engine.
+const ocrDigestSchema = { type: "string", pattern: "^[a-f0-9]{64}$" };
+const LOCAL_OCR_OUTPUT_SCHEMA = {
+  type: "object", additionalProperties: false,
+  properties: {
+    status: { const: "source_render_replayed_ocr_unverified" },
+    source_pdf_sha256: ocrDigestSchema, page_number: { type: "integer", minimum: 1 },
+    proposal_sha256: ocrDigestSchema, render_png_sha256: ocrDigestSchema,
+    helper_sha256: ocrDigestSchema, review_html_sha256: ocrDigestSchema,
+    review_html_path: { type: "string" }, proposal_directory: { type: "string" },
+    observation_count: { type: "integer", minimum: 0, maximum: 1000 },
+    returned_observation_count: { type: "integer", minimum: 0, maximum: 200 },
+    omitted_observation_count: { type: "integer", minimum: 0, maximum: 1000 },
+    inline_image_returned: { type: "boolean" },
+    proposals: { type: "array", maxItems: 200, items: {
+      type: "object", additionalProperties: false,
+      properties: {
+        observation_index: { type: "integer", minimum: 0 },
+        text_proposal: { type: "string", minLength: 1, maxLength: 500 },
+        engine_confidence_unverified: { type: "number", minimum: 0, maximum: 1 },
+        box_top_left_pixels: { type: "array", minItems: 4, maxItems: 4,
+          items: { type: "number", minimum: 0 } },
+      },
+      required: ["observation_index", "text_proposal", "engine_confidence_unverified", "box_top_left_pixels"],
+    } },
+  },
+  required: ["status", "source_pdf_sha256", "page_number", "proposal_sha256", "render_png_sha256",
+    "helper_sha256", "review_html_sha256", "review_html_path", "proposal_directory",
+    "observation_count", "returned_observation_count", "omitted_observation_count",
+    "inline_image_returned", "proposals"],
+};
+
+export function validateLocalOcrResult(result) {
+  if (result.proposals.length !== result.returned_observation_count
+    || result.returned_observation_count + result.omitted_observation_count !== result.observation_count
+    || !result.proposals.every((item, index) => item.observation_index === index)) {
+    throw new Error("Local OCR returned-observation accounting is invalid.");
+  }
+}
 
 const fieldValue = {
   anyOf: [string, boolean, stringArray],

@@ -7,8 +7,9 @@ import { execFileSync } from "node:child_process";
 import { test } from "node:test";
 import {
   createLocalOcrToolHandler, LOCAL_OCR_TOOL_DEFINITION,
-  LOCAL_OCR_HELPER_SHA256, runLocalOcrAdapter, validateLocalOcrResult,
+  LOCAL_OCR_HELPER_SHA256, runLocalOcrAdapter,
 } from "../server/local-ocr-tools.js";
+import { validateLocalOcrResult } from "../server/output-schemas.js";
 
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
 const source = Buffer.from("%PDF-1.7\nsynthetic wrapper fixture\n%%EOF\n");

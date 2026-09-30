@@ -34,44 +34,6 @@ export const LOCAL_OCR_TOOL_DEFINITION = Object.freeze({
     destructiveHint: false, idempotentHint: false, openWorldHint: false },
 });
 
-const digestSchema = { type: "string", pattern: "^[a-f0-9]{64}$" };
-export const LOCAL_OCR_OUTPUT_SCHEMA = {
-  type: "object", additionalProperties: false,
-  properties: {
-    status: { const: "source_render_replayed_ocr_unverified" },
-    source_pdf_sha256: digestSchema, page_number: { type: "integer", minimum: 1 },
-    proposal_sha256: digestSchema, render_png_sha256: digestSchema,
-    helper_sha256: digestSchema, review_html_sha256: digestSchema,
-    review_html_path: { type: "string" }, proposal_directory: { type: "string" },
-    observation_count: { type: "integer", minimum: 0, maximum: 1000 },
-    returned_observation_count: { type: "integer", minimum: 0, maximum: MAX_RETURNED },
-    omitted_observation_count: { type: "integer", minimum: 0, maximum: 1000 },
-    inline_image_returned: { type: "boolean" },
-    proposals: { type: "array", maxItems: MAX_RETURNED, items: {
-      type: "object", additionalProperties: false,
-      properties: {
-        observation_index: { type: "integer", minimum: 0 },
-        text_proposal: { type: "string", minLength: 1, maxLength: 500 },
-        engine_confidence_unverified: { type: "number", minimum: 0, maximum: 1 },
-        box_top_left_pixels: { type: "array", minItems: 4, maxItems: 4,
-          items: { type: "number", minimum: 0 } },
-      },
-      required: ["observation_index", "text_proposal", "engine_confidence_unverified", "box_top_left_pixels"],
-    } },
-  },
-  required: ["status", "source_pdf_sha256", "page_number", "proposal_sha256", "render_png_sha256",
-    "helper_sha256", "review_html_sha256", "review_html_path", "proposal_directory",
-    "observation_count", "returned_observation_count", "omitted_observation_count",
-    "inline_image_returned", "proposals"],
-};
-
-export function validateLocalOcrResult(result) {
-  requireThat(result.proposals.length === result.returned_observation_count
-    && result.returned_observation_count + result.omitted_observation_count === result.observation_count
-    && result.proposals.every((item, index) => item.observation_index === index),
-  "Local OCR returned-observation accounting is invalid.");
-}
-
 function requireThat(condition, message) {
   if (!condition) throw new Error(message);
 }

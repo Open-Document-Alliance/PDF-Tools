@@ -53,6 +53,7 @@ an `isError` result is never forced through a success schema.
 | `merge_pdfs` | active output document and page count |
 | `prepare_signing_packet` | active document, fills, legacy pending placements, and a source/output-bound provider-neutral preparation receipt with value-free field outcomes, typed zones, readiness gaps, and `provider_execution_status: not_requested` |
 | `prepare_lumin_request` | exact local prepared-PDF identity, recipients, disclosure, required confirmation, expiry, and proof that no provider was contacted |
+| `propose_pdf_ocr` | optional configured-only one-page unverified word proposals, exact source/render/helper digests, retained private review file, and observed/returned/omitted accounting; absent from default discovery, with no bundled OCR engine |
 | `read_pdf_bytes` | bounded base64 byte chunk |
 | `read_pdf_content` | complete/partial text or image-fallback result with page-scoped routing facts (`read_pages_without_text`, integrity signals, typed `page_read_error`) preserved through failure and resource-limit branches |
 | `read_pdf_fields` | active document and form fields |
@@ -196,7 +197,9 @@ before loading the target PDF, writing output, or changing active-document
 state.
 
 The executable source of truth is `server/output-schemas.js`. The MCP contract
-tests assert this complete matrix of 53 structured tools and four text-only
-tools, compile every schema through the pinned SDK validator, reject newer
+tests assert this complete matrix of 54 structured tools and four text-only
+tools, including the configured-only OCR contract. Default discovery still
+has 53 structured tools and four text-only tools; enabling local OCR adds one
+structured tool. Tests compile every schema through the pinned SDK validator, reject newer
 unsupported JSON Schema keywords, exercise live success and error branches, and
 require byte-identical source/share runtime files.
