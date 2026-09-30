@@ -57,7 +57,9 @@ const serverFilenames = await serverDirectoryFilenames(SERVER_DIR);
 
 describe("production packager server coverage", () => {
   it("stages exactly the modules that exist under server/", () => {
-    expect([...SERVER_FILES].sort()).toEqual(serverFilenames);
+    // The production staged-archive comparison requires this exact order,
+    // not merely set membership. Catch ordering drift before a full build.
+    expect(SERVER_FILES).toEqual(serverFilenames);
   });
 
   it("names each module once", () => {
