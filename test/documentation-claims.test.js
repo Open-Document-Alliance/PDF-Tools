@@ -441,7 +441,7 @@ describe("documentation tool-count claims", () => {
     const sourceToolCount = sourceManifest.tools.length;
     const packedToolCount = packedManifest.tools.length;
     const promptCount = sourceManifest.prompts.length;
-    const structuredToolCount = Object.keys(TOOL_OUTPUT_SCHEMAS).length;
+    const structuredToolCount = sourceManifest.tools.filter(tool => Object.hasOwn(TOOL_OUTPUT_SCHEMAS, tool.name)).length;
 
     const contract = normalizeWhitespace(await readRepositoryFile("docs/MCP_CONTRACT.md"));
     expect(contract).toContain(`The runtime returns ${sourceToolCount} uniquely named tools.`);
@@ -454,6 +454,13 @@ describe("documentation tool-count claims", () => {
     expect(contract.toLowerCase()).toContain(
       `${spellNumber(structuredToolCount)} tool handlers advertise strict \`outputschema\` contracts`,
     );
+    const optionalStructuredNames = Object.keys(TOOL_OUTPUT_SCHEMAS)
+      .filter(name => !sourceManifest.tools.some(tool => tool.name === name));
+    expect(optionalStructuredNames).toEqual(["propose_pdf_ocr"]);
+    expect(contract).toContain(
+      `bringing an opted-in runtime to ${sourceToolCount + optionalStructuredNames.length} tools with ${Object.keys(TOOL_OUTPUT_SCHEMAS).length} output schemas`,
+    );
+    expect(contract).toContain("It is absent from default discovery and both manifests.");
 
     const packedToolNames = packedManifest.tools.map(tool => tool.name);
     const shipped = computeToolIdentifierBudget(DISPLAY_NAME_CANDIDATES.shipped, packedToolNames);
@@ -485,6 +492,9 @@ describe("documentation tool-count claims", () => {
       sourceManifest.tools.length,
       packedManifest.tools.length,
       Object.keys(TOOL_OUTPUT_SCHEMAS).length,
+      sourceManifest.tools.filter(tool => Object.hasOwn(TOOL_OUTPUT_SCHEMAS, tool.name)).length,
+      sourceManifest.tools.length + Object.keys(TOOL_OUTPUT_SCHEMAS)
+        .filter(name => !sourceManifest.tools.some(tool => tool.name === name)).length,
       computeToolIdentifierBudget(
         DISPLAY_NAME_CANDIDATES.rejected,
         packedManifest.tools.map(tool => tool.name),

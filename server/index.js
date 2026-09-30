@@ -120,6 +120,12 @@ import {
   createLuminSigningToolHandler,
   formatLuminSigningToolText,
 } from "./lumin-signing-tools.js";
+import {
+  LOCAL_OCR_TOOL_DEFINITION,
+  createLocalOcrToolHandler,
+  terminateLocalOcrAdapters,
+  forceTerminateLocalOcrAdapters,
+} from "./local-ocr-tools.js";
 
 export const READ_CONTENT_ROUTING_GUIDANCE =
   "Use render_pdf_page to inspect pages flagged as textless, suspect, or containing invisible text. Invisible text may be accurate, but its agreement with the visible page has not been verified. Unavailable visibility measurements do not establish that text is visible. Routing fields cover only successfully-read pages; unread pages are not classified. No OCR or visual transcription was performed.";
@@ -1933,6 +1939,19 @@ function configuredLuminClientId() {
 }
 
 const LUMIN_OAUTH_CLIENT_ID = configuredLuminClientId();
+// No probing, auto-install or ambient executable lookup. Only a user's
+// explicit host configuration exposes the experimental OCR tool.
+function configuredLocalOcr() {
+  for (const configPath of [PLUGIN_DATA_CONFIG_PATH, HOME_CONFIG_PATH]) {
+    if (!configPath || !existsSync(configPath)) continue;
+    try {
+      const config = JSON.parse(readFileSync(configPath, "utf8"));
+      if (Object.prototype.hasOwnProperty.call(config, "localOCR")) return config.localOCR;
+    } catch {}
+  }
+  return null;
+}
+const LOCAL_OCR_CONFIGURATION = configuredLocalOcr();
 const LUMIN_OPERATION_STATE_ROOT = canonicalizePathForPolicy(path.join(
   process.env.PLUGIN_DATA && !process.env.PLUGIN_DATA.includes("${")
     ? path.resolve(process.env.PLUGIN_DATA)
@@ -2060,6 +2079,12 @@ const handleVerifiedExtractionTool = createVerifiedExtractionToolHandler({
 const VERIFIED_EXTRACTION_TOOL_NAMES = new Set(
   VERIFIED_EXTRACTION_TOOL_DEFINITIONS.map(tool => tool.name),
 );
+const handleLocalOcrTool = createLocalOcrToolHandler({
+  configuration: LOCAL_OCR_CONFIGURATION,
+  stateRoot: path.join(PROFILES_DIR, "local-ocr-proposals"),
+  resolvePdfPath: resolvePath,
+  readPdfBytes: readCurrentPdfMutationBytes,
+});
 
 const handleLuminSigningTool = createLuminSigningToolHandler({
   clientId: LUMIN_OAUTH_CLIENT_ID,
@@ -2351,6 +2376,7 @@ for (const [signal, exitCode] of new Map([
       // has its own 30-second deadline, which is the wrong amount of time for a
       // shutdown to wait on.
       terminateAllDecryptionWorkers(),
+      terminateLocalOcrAdapters(),
     ]);
     void workerShutdown.finally(() => process.exit(exitCode));
   });
@@ -2359,6 +2385,7 @@ process.once("exit", () => {
   forceTerminateAllPdfjsSubprocesses();
   forceTerminateAllPdfLibMutations();
   forceTerminateAllDecryptionWorkers();
+  forceTerminateLocalOcrAdapters();
 });
 
 const backupPathByCanonical = new Map();
@@ -5032,6 +5059,7 @@ async function listTools(request) {
       },
       ...LUMIN_SIGNING_TOOL_DEFINITIONS,
       ...VERIFIED_EXTRACTION_TOOL_DEFINITIONS,
+      ...(LOCAL_OCR_CONFIGURATION ? [LOCAL_OCR_TOOL_DEFINITION] : []),
     ].map(withToolOutputSchema),
   };
 }
@@ -5041,6 +5069,9 @@ async function handleToolCall(request) {
   const { name, arguments: args } = request.params;
 
   try {
+    if (name === LOCAL_OCR_TOOL_DEFINITION.name) {
+      return await handleLocalOcrTool(args ?? {});
+    }
     if (LUMIN_SIGNING_TOOL_NAME_SET.has(name)) {
       const structuredContent = await handleLuminSigningTool(name, args ?? {});
       const summary = formatLuminSigningToolText(name, structuredContent);

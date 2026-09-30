@@ -59,11 +59,16 @@ Tools path policy. Consequently the active folder list is defense in depth, not
 a source-confidentiality boundary against a Full Access host. Content returned
 through MCP remains subject to the host and model provider's data terms.
 
-Fifty-three tool handlers advertise strict `outputSchema` contracts and return
+By default, fifty-three tool handlers advertise strict `outputSchema` contracts and return
 `structuredContent`. They also return a human-readable `content` text block so
 non-Apps and older clients remain usable. Successful structured output is
 validated before it leaves the server, with separate generic and tool-specific
 error branches where required.
+
+The separately configured optional `propose_pdf_ocr` tool adds one structured
+handler, bringing an opted-in runtime to 58 tools with 54 output schemas.
+It is absent from default discovery and both manifests. No OCR engine is bundled;
+see [Optional OCR setup and limitations](LOCAL_OCR.md).
 
 `get_pdf_identity` provides parser-independent artifact binding for planning
 and provenance. It streams at most 250 MiB from one read-only descriptor,

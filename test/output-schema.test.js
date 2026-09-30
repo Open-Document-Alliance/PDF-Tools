@@ -51,6 +51,7 @@ const STRUCTURED_TOOLS = [
   "merge_pdfs",
   "prepare_signing_packet",
   "prepare_lumin_request",
+  "propose_pdf_ocr",
   "read_extraction_chunk",
   "read_extraction_workspace",
   "read_pdf_bytes",
@@ -160,11 +161,11 @@ describe("output schema definitions", () => {
     expect(rejected.structuredContent.error.code).toBe("internal_validation_error");
   });
 
-  it("covers the exact 53 structured tools and no text-only tool", () => {
+  it("covers the exact 54 structured schemas including optional OCR", () => {
     expect(Object.keys(TOOL_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
-    expect(STRUCTURED_TOOLS).toHaveLength(53);
+    expect(STRUCTURED_TOOLS).toHaveLength(54);
     expect(TEXT_ONLY_TOOLS).toHaveLength(4);
   });
 
@@ -336,7 +337,10 @@ describe("live output schema contract", () => {
   });
 
   it("publishes the exhaustive structured/text-only discovery matrix", () => {
-    expect(tools.filter(tool => tool.outputSchema).map(tool => tool.name).sort()).toEqual(STRUCTURED_TOOLS);
+    expect(tools.filter(tool => tool.outputSchema).map(tool => tool.name).sort()).toEqual(
+      STRUCTURED_TOOLS.filter(name => name !== "propose_pdf_ocr"),
+    );
+    expect(tools.some(tool => tool.name === "propose_pdf_ocr")).toBe(false);
     expect(tools.filter(tool => !tool.outputSchema).map(tool => tool.name).sort()).toEqual(TEXT_ONLY_TOOLS);
     for (const tool of tools.filter(entry => entry.outputSchema)) {
       expect(tool.outputSchema, tool.name).toEqual(TOOL_OUTPUT_SCHEMAS[tool.name]);

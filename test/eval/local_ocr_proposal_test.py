@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "local-ocr-proposal.py"
@@ -22,6 +23,17 @@ ENGINE = {"name": "ocrmac-vision", "ocrmac_version": "synthetic",
 
 
 class LocalOcrProposalTests(unittest.TestCase):
+    def test_empty_password_encryption_is_refused_before_page_access(self):
+        closed = []
+        document = SimpleNamespace(close=lambda: closed.append(True))
+        pdfium = SimpleNamespace(PdfDocument=lambda source: document,
+                                 raw=SimpleNamespace(FPDF_GetSecurityHandlerRevision=lambda doc: 6))
+        with patch.dict(sys.modules, {"pypdfium2": pdfium, "PIL": SimpleNamespace(__version__="synthetic")}), \
+                patch.object(MODULE.importlib.metadata, "version", return_value="synthetic"):
+            with self.assertRaisesRegex(ValueError, "encrypted PDFs"):
+                MODULE.render_page(PDF, 1)
+        self.assertEqual(closed, [True])
+
     def proposal(self, observations=None):
         return MODULE.proposal_from_observations(
             PDF, 1, 2, PNG, 100, 200,
