@@ -90,7 +90,7 @@ try {
     `Tool contract digest drifted: ${toolContractSha256}`,
   );
   structuredToolCount = tools.tools.filter(tool => tool.outputSchema).length;
-  assert(structuredToolCount === 54, `Expected 54 structured tools, received ${structuredToolCount}`);
+  assert(structuredToolCount === 55, `Expected 55 structured tools, received ${structuredToolCount}`);
 
   const listed = await first.client.callTool({
     name: "list_pdfs",

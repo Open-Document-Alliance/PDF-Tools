@@ -458,6 +458,28 @@ describe("live output schema contract", () => {
     });
   });
 
+  it.each([
+    "HOST_IMPORT_WORKSPACE_UNAVAILABLE", "HOST_IMPORT_INVALID_INPUT",
+    "HOST_IMPORT_TOO_LARGE", "HOST_IMPORT_INVALID_PDF", "HOST_IMPORT_SOURCE_CHANGED",
+  ])("preserves the exact host import refusal %s without widening other tools", code => {
+    const result = { isError: true, structuredContent: {
+      status: "failed", error: { error_schema_version: 1, code },
+    } };
+    expect(validateStructuredToolResult("import_host_pdf", result)).toBe(result);
+    expect(validateStructuredToolResult("display_pdf", result).structuredContent.error.code)
+      .toBe("internal_validation_error");
+  });
+
+  it("rejects invented host import error codes and success data smuggled into a refusal", () => {
+    for (const structuredContent of [
+      { status: "failed", error: { error_schema_version: 1, code: "HOST_IMPORT_INVENTED" } },
+      { status: "failed", error: { error_schema_version: 1, code: "HOST_IMPORT_INVALID_INPUT" }, pdfPath: "/forged.pdf" },
+    ]) {
+      expect(validateStructuredToolResult("import_host_pdf", { isError: true, structuredContent })
+        .structuredContent.error.code).toBe("internal_validation_error");
+    }
+  });
+
   it("accepts scoped routing facts on a read-content worker failure", () => {
     const result = {
       isError: true,

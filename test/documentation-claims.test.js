@@ -600,7 +600,7 @@ const TOOL_INVENTORIES = [
     end: "## Build, Test, and Development Commands",
     // The paragraphs after the list discuss individual tools in backticks;
     // anchoring to the bullet keeps those out of the inventory.
-    entry: /^-\s+(?:`([a-z_][a-z0-9_]*)`(?:,\s*)?)+/gm,
+    entry: /^-\s+(?:`([a-z_][a-z0-9_]*)`(?:\s*\(app-only\))?(?:,\s*)?)+/gm,
     entryWithin: /`([a-z_][a-z0-9_]*)`/g,
     completenessStatement: /not a selection/i,
   },
@@ -687,6 +687,12 @@ function inventoryViolations({ label, names, registered, declaresSelection }) {
 }
 
 describe("documented tool inventories", () => {
+  it("continues an inventory after inline app-only annotations", () => {
+    const inventory = TOOL_INVENTORIES.find(item => item.file === "AGENTS.md");
+    expect(inventoryEntries(inventory, "- `first` (app-only), `second` (app-only), `third`.\n`not_an_entry` is prose."))
+      .toEqual(["first", "second", "third"]);
+  });
+
   async function liveInventoryInputs() {
     const sourceManifest = JSON.parse(await readRepositoryFile("manifest.json"));
     const packedManifest = JSON.parse(await readRepositoryFile("manifest.mcpb.json"));

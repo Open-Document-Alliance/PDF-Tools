@@ -488,6 +488,19 @@ const luminSigningError = object({
     code: { type: "string", pattern: "^LUMIN_[A-Z0-9_]+$" },
   }),
 });
+const hostPdfImportError = object({
+  status: { const: "failed" },
+  error: object({
+    error_schema_version: { const: 1 },
+    code: enumString([
+      "HOST_IMPORT_WORKSPACE_UNAVAILABLE",
+      "HOST_IMPORT_INVALID_INPUT",
+      "HOST_IMPORT_TOO_LARGE",
+      "HOST_IMPORT_INVALID_PDF",
+      "HOST_IMPORT_SOURCE_CHANGED",
+    ]),
+  }),
+});
 const textVisibility = object({
   status: enumString(["available", "unavailable"]),
   invisible_text_show_count: nullable(integer),
@@ -1990,6 +2003,7 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
 });
 
 const specialErrorSchemas = {
+  import_host_pdf: [hostPdfImportError, pdfResourceLimitError],
   compare_pdfs: [layoutPasswordError, pdfResourceLimitError, pdfIdentityError, pdfComparisonError],
   inspect_pdf_accessibility: [
     pdfResourceLimitError,
