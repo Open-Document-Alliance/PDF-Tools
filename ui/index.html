@@ -8,6 +8,17 @@
 </head>
 <body>
   <div class="main">
+    <section id="workspace" class="workspace" style="display:none" aria-labelledby="workspace-title">
+      <div class="workspace-heading">
+        <span class="workspace-kicker">PDF Tools</span>
+        <h1 id="workspace-title">Your next document task</h1>
+        <p>Review, fill, extract, arrange, or prepare to sign. Start with a task, then tell the assistant which PDF to use.</p>
+        <span class="workspace-state">No PDF open</span>
+      </div>
+      <div id="workspace-tasks" class="workspace-tasks"></div>
+      <p id="workspace-status" class="workspace-status" role="status" aria-live="polite">Choose a task to start in the conversation.</p>
+      <p class="workspace-note">This screen does not scan your folders or open a document automatically. Lumin signing is optional and requires a configured connection. Nothing is signed or sent without separate confirmation.</p>
+    </section>
     <!-- Loading -->
     <div id="loading">
       <div class="loading-content">

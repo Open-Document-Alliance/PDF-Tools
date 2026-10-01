@@ -228,7 +228,11 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // merging master: tool names, input schemas, annotations and the count of 57
 // are unchanged. Replaces
 // 40572cce414ac18315c66b1ab7ababe81d9d9542d75220e764b133943afb23aa.
-const TOOL_CONTRACT_SHA256 = "2edabecaa5aa61e9ee533f8811180e8661a9423dddaee8ba59fec19cb846ab7d";
+// 2026-10-01: add one read-only app-only global/thread open_pdf_workspace
+// entrypoint with no PDF or folder access. The model-visible list is unchanged.
+// Total discovery is 58 tools, including two app-only tools. Previously
+// 2edabecaa5aa61e9ee533f8811180e8661a9423dddaee8ba59fec19cb846ab7d.
+const TOOL_CONTRACT_SHA256 = "7f6e8b3c898db15f182046264fe0d979b935c535b171f6697c59491704712588";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -310,6 +314,7 @@ const TOOL_EFFECT_ANNOTATIONS = {
   get_pdf_identity: CLOSED_READ,
   get_pdf_resource_uri: CLOSED_READ,
   display_pdf: CLOSED_SESSION_ACTION,
+  open_pdf_workspace: CLOSED_READ,
   get_active_document: CLOSED_READ,
   set_active_document: CLOSED_SESSION_ACTION,
   read_pdf_bytes: CLOSED_READ,
@@ -453,8 +458,10 @@ describe("MCPB static declarations", () => {
     expect(MCPB_MANIFEST.tools_generated).toBe(true);
     expect(names(SOURCE_MANIFEST.tools)).toContain("read_pdf_bytes");
     expect(names(MCPB_MANIFEST.tools)).not.toContain("read_pdf_bytes");
+    expect(names(SOURCE_MANIFEST.tools)).toContain("open_pdf_workspace");
+    expect(names(MCPB_MANIFEST.tools)).not.toContain("open_pdf_workspace");
     expect(sorted(names(SOURCE_MANIFEST.tools))).toEqual(
-      sorted([...names(MCPB_MANIFEST.tools), "read_pdf_bytes"]),
+      sorted([...names(MCPB_MANIFEST.tools), "read_pdf_bytes", "open_pdf_workspace"]),
     );
   });
 
@@ -572,8 +579,25 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
     });
   });
 
+  it("opens the global/thread workspace with no document or filesystem authority", async () => {
+    const tool = tools.find(tool => tool.name === "open_pdf_workspace");
+    expect(tool.title).toBe("PDF Workspace");
+    expect(tool.inputSchema).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    expect(tool._meta).toEqual({
+      ui: { resourceUri: "ui://pdf-toolkit/viewer", visibility: ["app"] },
+      "openai/ui": { entrypoints: [{ type: "global" }, { type: "thread" }] },
+    });
+    const before = await client.callTool({ name: "get_active_document", arguments: {} });
+    const result = await client.callTool({ name: "open_pdf_workspace", arguments: {} });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({ pdfWorkspace: { version: 1, state: "empty" } });
+    expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("No PDF has been opened") }]);
+    expect(await client.callTool({ name: "get_active_document", arguments: {} })).toEqual(before);
+    expect((await client.callTool({ name: "open_pdf_workspace", arguments: { pdf_path: EXAMPLE_PDF } })).isError).toBe(true);
+  });
+
   it("exposes the same uniquely named, fully annotated tool contract", () => {
-    expect(tools).toHaveLength(57);
+    expect(tools).toHaveLength(58);
     expect(new Set(names(tools)).size).toBe(tools.length);
     expect(sorted(names(tools))).toEqual(sorted(names(SOURCE_MANIFEST.tools)));
     expect(createHash("sha256").update(JSON.stringify(tools)).digest("hex"))
@@ -603,7 +627,7 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
     expect(sorted(Object.keys(TOOL_EFFECT_ANNOTATIONS))).toEqual(sorted(names(tools)));
 
     const appOnlyTools = tools.filter(tool => tool._meta?.ui?.visibility?.includes("app"));
-    expect(names(appOnlyTools)).toEqual(["read_pdf_bytes"]);
+    expect(names(appOnlyTools)).toEqual(["open_pdf_workspace", "read_pdf_bytes"]);
     expect(sorted(names(tools.filter(tool => !appOnlyTools.includes(tool))))).toEqual(
       sorted(names(MCPB_MANIFEST.tools)),
     );

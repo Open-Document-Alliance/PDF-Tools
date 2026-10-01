@@ -51,6 +51,10 @@
   "icon": "icon.png",
   "tools": [
     {
+      "name": "open_pdf_workspace",
+      "description": "Open the PDF Workspace starting screen (app-only)"
+    },
+    {
       "name": "display_pdf",
       "description": "Display an interactive PDF viewer with search, navigation, zoom, and form field detection"
     },

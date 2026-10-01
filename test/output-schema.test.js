@@ -49,6 +49,7 @@ const STRUCTURED_TOOLS = [
   "list_signatures",
   "load_signature",
   "merge_pdfs",
+  "open_pdf_workspace",
   "prepare_signing_packet",
   "prepare_lumin_request",
   "propose_pdf_ocr",
@@ -161,11 +162,11 @@ describe("output schema definitions", () => {
     expect(rejected.structuredContent.error.code).toBe("internal_validation_error");
   });
 
-  it("covers the exact 54 structured schemas including optional OCR", () => {
+  it("covers the exact 55 structured schemas including optional OCR", () => {
     expect(Object.keys(TOOL_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
-    expect(STRUCTURED_TOOLS).toHaveLength(54);
+    expect(STRUCTURED_TOOLS).toHaveLength(55);
     expect(TEXT_ONLY_TOOLS).toHaveLength(4);
   });
 

@@ -3613,6 +3613,23 @@ async function listTools(request) {
   return {
     tools: [
       {
+        name: "open_pdf_workspace",
+        title: "PDF Workspace",
+        description: "Open the PDF Tools workspace starting screen. No PDF is opened, no folders are scanned, and no document is changed or sent. Choose a task, then identify the PDF in the conversation.",
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        annotations: {
+          title: "PDF Workspace",
+          readOnlyHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false
+        },
+        _meta: {
+          ui: { resourceUri: "ui://pdf-toolkit/viewer", visibility: ["app"] },
+          "openai/ui": { entrypoints: [{ type: "global" }, { type: "thread" }] }
+        }
+      },
+      {
         name: "list_pdfs",
         description: "List PDF files in a directory, sorted by name, returning at most 200 paths per call and reporting the true total when more exist. Use offset to page through a folder with more than 200 PDFs. This tool operates on the user's local filesystem — all paths must be absolute paths on the user's machine (e.g. /Users/name/Documents/), NOT paths on Claude's container (/mnt/...).",
         inputSchema: {
@@ -6705,6 +6722,17 @@ async function handleToolCall(request) {
             ].join("\n"),
           }],
           structuredContent: payload,
+        };
+      }
+
+      case "open_pdf_workspace": {
+        const workspaceArgs = args ?? {};
+        if (typeof workspaceArgs !== "object" || Array.isArray(workspaceArgs) || Object.keys(workspaceArgs).length !== 0) {
+          throw new Error("open_pdf_workspace accepts only an empty object. Open a chosen PDF with display_pdf instead.");
+        }
+        return {
+          content: [{ type: "text", text: "PDF Workspace is ready. No PDF has been opened. Tell the assistant which PDF to use and whether you want to review it, fill a form, extract information, arrange pages, or explore Lumin signing. Signing and external sharing still require separate confirmation." }],
+          structuredContent: { pdfWorkspace: { version: 1, state: "empty" } },
         };
       }
 

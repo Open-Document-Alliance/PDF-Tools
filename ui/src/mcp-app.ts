@@ -23,6 +23,7 @@ import {
   zoneToPdfRect,
 } from "./page-box.js";
 import { buildManagedPdfPath, getHostBaseName } from "./path-utils";
+import { isPdfWorkspaceResult, PDF_WORKSPACE_TASKS } from "./workspace";
 import {
   LatestPathRequestState,
   getCanvasBufferSize,
@@ -218,6 +219,9 @@ let pdfGeneration = 0;
 const $ = (id: string) => document.getElementById(id)!;
 
 const mainEl = document.querySelector(".main") as HTMLElement;
+const workspaceEl = $("workspace");
+const workspaceTasksEl = $("workspace-tasks");
+const workspaceStatusEl = $("workspace-status");
 const loadingEl = $("loading");
 const loadingTextEl = $("loading-text");
 const progressBar = $("progress-bar");
@@ -283,6 +287,7 @@ let fallbackLoad:
 // ─── UI State ────────────────────────────────────────────────────────────────
 
 function showLoading(text: string) {
+  workspaceEl.style.display = "none";
   loadingTextEl.textContent = text;
   loadingEl.style.display = "flex";
   errorEl.style.display = "none";
@@ -323,6 +328,7 @@ function describeViewerEnvironment(): string {
 }
 
 function showError(message: string) {
+  workspaceEl.style.display = "none";
   errorMessageEl.textContent = message;
   const detail = describeViewerEnvironment();
   errorDetailEl.textContent = detail;
@@ -336,9 +342,55 @@ function showError(message: string) {
 }
 
 function showViewer() {
+  workspaceEl.style.display = "none";
   loadingEl.style.display = "none";
   errorEl.style.display = "none";
   viewerEl.style.display = "flex";
+}
+
+function showWorkspace() {
+  // A late entrypoint result may not replace a document already being reviewed.
+  if (pdfDocument) { showViewer(); return; }
+  loadingEl.style.display = "none";
+  errorEl.style.display = "none";
+  viewerEl.style.display = "none";
+  workspaceEl.style.display = "block";
+}
+
+for (const task of PDF_WORKSPACE_TASKS) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "workspace-task";
+  const title = document.createElement("strong");
+  title.textContent = task.title;
+  const detail = document.createElement("span");
+  detail.textContent = task.description;
+  button.append(title, detail);
+  button.addEventListener("click", async () => {
+    if (isTearingDown) return;
+    const lifecycle = captureViewerLifecycle();
+    // Keep the exact prompt visible and selectable on every host, including
+    // hosts without ui/message. A click requests guidance, never a tool write.
+    workspaceStatusEl.textContent = "You can send this request in the conversation:";
+    const prompt = document.createElement("span");
+    prompt.className = "workspace-prompt";
+    prompt.textContent = task.prompt;
+    workspaceStatusEl.appendChild(prompt);
+    if (!app.getHostCapabilities()?.message?.text) return;
+    const buttons = workspaceTasksEl.querySelectorAll<HTMLButtonElement>("button");
+    buttons.forEach(item => { item.disabled = true; });
+    try {
+      const delivered = await app.sendMessage({ role: "user", content: [{ type: "text", text: task.prompt }] });
+      if (!isViewerLifecycleCurrent(lifecycle)) return;
+      if (delivered.isError) return;
+      workspaceStatusEl.textContent = "Request sent. Continue in the conversation to choose your PDF.";
+    } catch {
+      // The fallback is already visible. Do not retry a chat submission.
+    } finally {
+      if (isViewerLifecycleCurrent(lifecycle)) buttons.forEach(item => { item.disabled = false; });
+    }
+  });
+  workspaceTasksEl.appendChild(button);
 }
 
 function clearConnectTimeout() {
@@ -3486,6 +3538,7 @@ pageInputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") pageInpu
 
 // Keyboard shortcuts
 document.addEventListener("keydown", (e) => {
+  if (!pdfDocument) return;
   if ((e.ctrlKey || e.metaKey) && e.key === "f") {
     if (!searchOpen) { e.preventDefault(); openSearch(); }
     else if (document.activeElement === searchInputEl) { closeSearch(); }
@@ -3656,6 +3709,10 @@ app.ontoolresult = async (result: CallToolResult) => {
   }
 
   const parsedLoadData = parsePdfToolLoadData(result);
+  if (isPdfWorkspaceResult(result)) {
+    showWorkspace();
+    return;
+  }
   if (parsedLoadData.ok) {
     authoritativePayloadVersion++;
     await loadPdfFromToolResult(result, parsedLoadData.data);

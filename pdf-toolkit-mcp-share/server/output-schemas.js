@@ -1731,6 +1731,7 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     limitations: stringArray,
     observation_sha256: sha256Digest,
   }),
+  open_pdf_workspace: object({ pdfWorkspace: object({ version: { const: 1 }, state: { const: "empty" } }) }),
   display_pdf: activeDocument(),
   get_active_document: {
     type: "object",

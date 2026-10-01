@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "e6b3707e54823e3c97193cc43c7589abbb1172c91f47089c53099394aeb7d310",
+  "tools_sha256": "9b18e7db7d9c4ff5b506b198b9093e398736ebaf2200d1c2e971eedc9542f295",
   "tools": [
     {
       "name": "add_signature_field",
@@ -1281,6 +1281,14 @@
           "input_paths",
           "output_path"
         ]
+      }
+    },
+    {
+      "name": "open_pdf_workspace",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
       }
     },
     {
