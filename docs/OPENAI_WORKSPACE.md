@@ -16,9 +16,13 @@ Implementation starts from public master `14377c2d`. The owned checkout is
 
 The workspace entrypoint opens the existing viewer in an honest empty state.
 Global and thread entrypoints are optional host metadata; other clients can
-ignore them. The next coupled implementation uses the official OpenAI resource
+ignore them. The coupled implementation uses the official OpenAI resource
 bridge to read a host-provided PDF into a private local working copy and offers
 an explicit, version-protected save back to the original.
+
+The source implementation and synthetic built-viewer checks are complete.
+Installed ChatGPT qualification is still pending and is not inferred from those
+checks.
 
 The host-file transport is bounded to 16 MiB. The app-only `import_host_pdf`
 tool accepts bytes and an inert display label, not a resource URI, arbitrary
