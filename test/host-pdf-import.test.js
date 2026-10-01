@@ -144,14 +144,20 @@ describe("app-only host PDF import", () => {
       expect(await fs.readdir(outside)).toEqual([]);
     });
   });
-  it.each(["malformed", "encrypted"])("rejects %s PDF bytes before output publication", async kind => {
+  // The frozen structural guard rejects the truncated/no-xref fixture before
+  // pdf-lib parsing. Preserve its resource-limit type rather than flattening
+  // a safety refusal into a generic malformed-document error.
+  it.each([
+    ["malformed", "PDF_RESOURCE_LIMIT_EXCEEDED"],
+    ["encrypted", "HOST_IMPORT_INVALID_PDF"],
+  ])("rejects %s PDF bytes before output publication", async (kind, expectedCode) => {
     const bytes = kind === "encrypted"
       ? await fs.readFile(path.join(ROOT, "test/fixtures/eval/extraction/oracles/layout-encrypted-qpdf-r4.pdf"))
       : Buffer.from("%PDF-1.7\nnot a document\n");
     const pluginData = path.join(temp, kind, "plugin-data");
     await withServer(kind, { PLUGIN_DATA: pluginData }, async client => {
       const result = await client.callTool({ name: "import_host_pdf", arguments: { pdf_base64: bytes.toString("base64") } });
-      expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: "HOST_IMPORT_INVALID_PDF" } } });
+      expect(result).toMatchObject({ isError: true, structuredContent: { error: { code: expectedCode } } });
       expect(await fs.readdir(path.join(pluginData, "workspace"))).toEqual([]);
       expect((await client.callTool({ name: "get_active_document", arguments: {} })).structuredContent.active_path).toBeNull();
     });
