@@ -269,7 +269,7 @@ describe("MCP v2 dual-era stdio", () => {
       assertNoModernResultFields(a.result);
       assertModernComplete(b.result, { cacheable: method.endsWith("/list") || method === "resources/read" });
       expect(stripModernCodecFields(b.result)).toEqual(a.result);
-      if (method === "tools/list") expect(a.result.tools).toHaveLength(57);
+      if (method === "tools/list") expect(a.result.tools).toHaveLength(59);
     }
     for (const uri of [pathToPdfResourceUri(path.join(stateRoot, "missing.pdf")), pathToPdfResourceUri("/not-allowed.pdf")]) {
       for (const [server, request] of [[legacy, legacyRequest], [modern, modernRequest]]) {
@@ -370,7 +370,7 @@ describe("MCP v2 dual-era stdio", () => {
     await server.request(modernRequest("discover", "server/discover"));
     await legacyInitialize(server);
     const tools = await server.request(legacyRequest("tools", "tools/list"));
-    expect(tools.result.tools).toHaveLength(57);
+    expect(tools.result.tools).toHaveLength(59);
     assertNoModernResultFields(tools.result);
     await server.close();
   });

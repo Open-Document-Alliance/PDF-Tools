@@ -488,6 +488,19 @@ const luminSigningError = object({
     code: { type: "string", pattern: "^LUMIN_[A-Z0-9_]+$" },
   }),
 });
+const hostPdfImportError = object({
+  status: { const: "failed" },
+  error: object({
+    error_schema_version: { const: 1 },
+    code: enumString([
+      "HOST_IMPORT_WORKSPACE_UNAVAILABLE",
+      "HOST_IMPORT_INVALID_INPUT",
+      "HOST_IMPORT_TOO_LARGE",
+      "HOST_IMPORT_INVALID_PDF",
+      "HOST_IMPORT_SOURCE_CHANGED",
+    ]),
+  }),
+});
 const textVisibility = object({
   status: enumString(["available", "unavailable"]),
   invisible_text_show_count: nullable(integer),
@@ -1731,6 +1744,20 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     limitations: stringArray,
     observation_sha256: sha256Digest,
   }),
+  open_pdf_workspace: object({ pdfWorkspace: object({ version: { const: 1 }, state: { const: "empty" } }) }),
+  import_host_pdf: activeDocument({
+    totalPages: { type: "integer", minimum: 1 },
+    source: object({
+      schema_version: { const: "1.0" }, requested_path: string, canonical_path: string,
+      file_name: string, size_bytes: { type: "integer", minimum: 1, maximum: 16 * 1024 * 1024 },
+      sha256: sha256Digest, identity_method: { const: "race_aware_descriptor_sha256" }, pdf_parsed: { const: false },
+    }),
+    host_import: object({
+      version: { const: 1 }, status: { const: "imported" }, sha256: sha256Digest,
+      size_bytes: { type: "integer", minimum: 1, maximum: 16 * 1024 * 1024 },
+      display_name: { type: "string", minLength: 1, maxLength: 255 },
+    }),
+  }),
   display_pdf: activeDocument(),
   get_active_document: {
     type: "object",
@@ -1976,6 +2003,7 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
 });
 
 const specialErrorSchemas = {
+  import_host_pdf: [hostPdfImportError, pdfResourceLimitError],
   compare_pdfs: [layoutPasswordError, pdfResourceLimitError, pdfIdentityError, pdfComparisonError],
   inspect_pdf_accessibility: [
     pdfResourceLimitError,
@@ -2058,6 +2086,19 @@ const errorValidators = new Map(Object.entries(TOOL_ERROR_OUTPUT_SCHEMAS).map(
 ));
 const standardErrorValidator = validatorProvider.getValidator(standardError);
 const semanticSuccessValidators = new Map([
+  ["import_host_pdf", result => {
+    if (result.source.sha256 !== result.host_import.sha256
+      || result.source.size_bytes !== result.host_import.size_bytes
+      || result.totalBytes !== result.source.size_bytes
+      || result.pdfPath !== result.active_path
+      || result.active_path !== result.source.canonical_path
+      || result.source.requested_path !== result.active_path
+      || result.fieldCount !== result.fields.length
+      || result.hasFormFields !== (result.fieldCount > 0)
+      || result.backup_path !== null || result.last_mutation_tool !== null || result.last_mutation_at !== null) {
+      throw new Error("Host PDF import source and viewer metadata disagree.");
+    }
+  }],
   ["propose_pdf_ocr", validateLocalOcrResult],
   ["compare_pdfs", validatePdfComparisonSemantics],
   ["inspect_pdf_accessibility", validateAccessibilityInspectionResult],

@@ -59,6 +59,7 @@ export const SHARE_FILES = [
   "server/bounded-pdf-file.js",
   "server/document-map.js",
   "server/helpers.js",
+  "server/host-pdf-import.js",
   "server/index.js",
   "server/layout-extraction.js",
   "server/lumin-client-identity.js",

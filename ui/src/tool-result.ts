@@ -50,6 +50,12 @@ function asRecord(value: unknown): UnknownRecord | null {
     : null;
 }
 
+/** Presence, including an invalid/undefined value, prevents an empty state. */
+export function hasPdfToolLoadMetadataKeys(value: unknown): boolean {
+  const record = asRecord(value);
+  return Boolean(record && LOAD_KEYS.some(key => key in record));
+}
+
 function hasLoadSignal(value: UnknownRecord | null) {
   return Boolean(value && LOAD_KEYS.some(key => value[key] !== undefined));
 }

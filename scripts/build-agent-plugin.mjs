@@ -32,6 +32,10 @@ import { fileURLToPath } from "url";
 import { spawn } from "child_process";
 import { prepareCleanStage } from "./build-mcpb.mjs";
 import { derivePluginVersion } from "./plugin-version.mjs";
+import { createOpenAIPluginMetadata } from "./openai-plugin-metadata.mjs";
+// The shared listing says the host's permissions govern which files it may import.
+// A model-visible folder boundary does not revoke
+// a desktop host's independent operating-system file access.
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -95,6 +99,9 @@ const PLUGIN_MANIFEST = {
   repository: "https://github.com/Open-Document-Alliance/PDF-Tools",
   license: "MIT",
   keywords: ["pdf", "forms", "signature", "extraction", "accessibility", "mcp"],
+  extensions: {
+    "com.openai": createOpenAIPluginMetadata(),
+  },
 };
 
 // The Agent Plugins manifest schema is closed and carries no icon or
@@ -116,25 +123,7 @@ const CODEX_MANIFEST = {
   keywords: ["pdf", "forms", "signature", "extraction", "accessibility", "mcp"],
   skills: "./skills/",
   mcpServers: "./mcp.json",
-  interface: {
-    displayName: "PDF Tools",
-    shortDescription: "Local PDF workstation: read, fill, sign, compare, convert.",
-    longDescription:
-      "Work with PDFs on your own machine. Read text and layout with real coordinates, convert to Markdown with evidence-backed tables, fill and validate forms, merge, split and reorder pages, compare two documents across several channels, place signatures, and inspect accessibility signals. PDF Tools uses a private import workspace by default; direct folder access is optional. Your host's permissions govern which files it may import, and content returned to the host follows its data terms.",
-    developerName: "Open Document Alliance",
-    category: "Productivity",
-    capabilities: ["Document workflows", "Forms", "Extraction", "Safety checks"],
-    websiteURL: "https://github.com/Open-Document-Alliance/pdf-tools-plugin",
-    privacyPolicyURL: "https://www.opendocuments.ai/privacy-policy",
-    termsOfServiceURL: "https://www.opendocuments.ai/terms-of-service",
-    logo: "./assets/pdf-tools.png",
-    composerIcon: "./assets/pdf-tools.png",
-    defaultPrompt: [
-      "Read this PDF and tell me what is in it.",
-      "Fill this form from my saved profile, then read the fields back.",
-      "Compare these two PDFs and state every coverage gap.",
-    ],
-  },
+  ...createOpenAIPluginMetadata(),
 };
 
 const MCP_CONFIG = {

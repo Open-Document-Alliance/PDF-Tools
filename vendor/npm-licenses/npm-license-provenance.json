@@ -213,9 +213,9 @@
         }
       ]
     },
-    "zod@4.3.6": {
-      "integrity": "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==",
-      "tarball": "https://registry.npmjs.org/zod/-/zod-4.3.6.tgz",
+    "zod@4.4.3": {
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "tarball": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
       "declaration": "license-string",
       "declared": "MIT",
       "license_files": [

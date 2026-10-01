@@ -39,6 +39,31 @@ body {
   overflow: auto;
 }
 
+/* Workspace entrypoint uses the same host theme and document viewer. */
+.workspace {
+  overflow: auto;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: clamp(24px, 6vw, 64px);
+}
+.workspace-heading { max-width: 650px; margin-bottom: 28px; }
+.workspace-kicker { color: var(--accent); font-size: 13px; font-weight: 700; }
+.workspace h1 { font-size: clamp(24px, 4vw, 38px); letter-spacing: -0.035em; margin: 12px 0; }
+.workspace-heading p, .workspace-note { color: var(--text-secondary); line-height: 1.6; font-size: 14px; }
+.workspace-state { display: inline-block; margin-top: 16px; padding: 6px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-secondary); }
+.workspace-tasks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.workspace-task { text-align: left; background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: var(--radius); padding: 18px; min-height: 90px; cursor: pointer; }
+.workspace-task strong { display: block; font-size: 15px; margin-bottom: 7px; }
+.workspace-task span { display: block; color: var(--text-secondary); line-height: 1.5; font-size: 13px; }
+.workspace-task:hover { background: var(--accent-light); }
+.workspace-task:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.workspace-task:disabled { cursor: wait; opacity: 0.65; }
+.workspace-status { margin-top: 20px; font-size: 13px; line-height: 1.5; }
+.workspace-prompt { display: block; margin-top: 12px; padding: 12px; background: var(--bg-secondary); border-radius: var(--radius-sm); font-size: 13px; line-height: 1.6; user-select: text; }
+.workspace-note { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border-color); font-size: 12px; }
+@media (max-width: 520px) { .workspace-tasks { grid-template-columns: 1fr; } }
+
 /* Loading */
 #loading {
   display: flex;
@@ -1584,3 +1609,17 @@ body {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+.host-file-banner {
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.host-file-banner span { flex: 1 1 220px; overflow-wrap: anywhere; }
+.host-file-banner button { flex: 0 0 auto; padding: 7px 10px; }

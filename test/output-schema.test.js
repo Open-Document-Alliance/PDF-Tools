@@ -46,9 +46,11 @@ const STRUCTURED_TOOLS = [
   "get_pdf_resource_uri",
   "inspect_extraction_state",
   "inspect_pdf_accessibility",
+  "import_host_pdf",
   "list_signatures",
   "load_signature",
   "merge_pdfs",
+  "open_pdf_workspace",
   "prepare_signing_packet",
   "prepare_lumin_request",
   "propose_pdf_ocr",
@@ -161,11 +163,11 @@ describe("output schema definitions", () => {
     expect(rejected.structuredContent.error.code).toBe("internal_validation_error");
   });
 
-  it("covers the exact 54 structured schemas including optional OCR", () => {
+  it("covers the exact 56 structured schemas including optional OCR", () => {
     expect(Object.keys(TOOL_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
-    expect(STRUCTURED_TOOLS).toHaveLength(54);
+    expect(STRUCTURED_TOOLS).toHaveLength(56);
     expect(TEXT_ONLY_TOOLS).toHaveLength(4);
   });
 
@@ -454,6 +456,28 @@ describe("live output schema contract", () => {
         required_field_validation_status: "failed",
       },
     });
+  });
+
+  it.each([
+    "HOST_IMPORT_WORKSPACE_UNAVAILABLE", "HOST_IMPORT_INVALID_INPUT",
+    "HOST_IMPORT_TOO_LARGE", "HOST_IMPORT_INVALID_PDF", "HOST_IMPORT_SOURCE_CHANGED",
+  ])("preserves the exact host import refusal %s without widening other tools", code => {
+    const result = { isError: true, structuredContent: {
+      status: "failed", error: { error_schema_version: 1, code },
+    } };
+    expect(validateStructuredToolResult("import_host_pdf", result)).toBe(result);
+    expect(validateStructuredToolResult("display_pdf", result).structuredContent.error.code)
+      .toBe("internal_validation_error");
+  });
+
+  it("rejects invented host import error codes and success data smuggled into a refusal", () => {
+    for (const structuredContent of [
+      { status: "failed", error: { error_schema_version: 1, code: "HOST_IMPORT_INVENTED" } },
+      { status: "failed", error: { error_schema_version: 1, code: "HOST_IMPORT_INVALID_INPUT" }, pdfPath: "/forged.pdf" },
+    ]) {
+      expect(validateStructuredToolResult("import_host_pdf", { isError: true, structuredContent })
+        .structuredContent.error.code).toBe("internal_validation_error");
+    }
   });
 
   it("accepts scoped routing facts on a read-content worker failure", () => {

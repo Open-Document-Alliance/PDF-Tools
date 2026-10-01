@@ -316,6 +316,8 @@ the `.mcpb` manifest that ordinary model workflows discover.
 
 ### Active Document and Host Helpers
 
+- `open_pdf_workspace` (app-only starting screen; no PDF or folder access)
+- `import_host_pdf` (app-only bounded byte import into the already-permitted private workspace; no path fetching or host-file replacement)
 - `get_active_document`
 - `set_active_document`
 - `get_allowed_directories`
