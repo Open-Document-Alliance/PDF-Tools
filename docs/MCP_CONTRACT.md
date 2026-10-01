@@ -33,7 +33,7 @@ template discovery is also unsupported and deterministically returns JSON-RPC
 
 ### Tools
 
-The runtime returns 57 uniquely named tools. Every tool has an object input
+The runtime returns 59 uniquely named tools. Every tool has an object input
 schema plus `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, and
 `openWorldHint` annotations. Annotations are user-interface hints, never an
 authorization boundary; path allowlists and signature-intent checks remain the
@@ -42,12 +42,13 @@ every tool in both runtime copies. The handler evidence and classification
 rules are recorded in
 [`TOOL_ANNOTATION_AUDIT_2026-07-21.md`](TOOL_ANNOTATION_AUDIT_2026-07-21.md).
 
-The source manifest lists all 57 tools. The packed MCPB manifest lists the 56
-normal model-workflow tools and omits `read_pdf_bytes`, whose runtime metadata
-marks it `ui.visibility: ["app"]`. `tools_generated: true` explicitly tells MCPB
-hosts that runtime discovery includes an additional tool. That visibility hint
+The source manifest lists all 59 tools. The packed MCPB manifest lists the 56
+normal model-workflow tools and omits `read_pdf_bytes`, `open_pdf_workspace`
+and `import_host_pdf`, whose runtime metadata marks them `ui.visibility: ["app"]`.
+`tools_generated: true` explicitly tells MCPB hosts that runtime discovery
+includes additional tools. That visibility hint
 is advisory and depends on an MCP Apps-aware host filtering its model catalog;
-a generic MCP client can still discover and call `read_pdf_bytes`. It is not an
+a generic MCP client can still discover and call these app-only tools. It is not an
 authorization or confidentiality boundary. Filesystem allowlists and the tool's
 bounded reads remain the enforced controls.
 
@@ -59,14 +60,27 @@ Tools path policy. Consequently the active folder list is defense in depth, not
 a source-confidentiality boundary against a Full Access host. Content returned
 through MCP remains subject to the host and model provider's data terms.
 
-By default, fifty-three tool handlers advertise strict `outputSchema` contracts and return
+`open_pdf_workspace` returns an empty task-selection screen without reading a
+PDF or scanning a directory. `import_host_pdf` accepts canonical base64 bytes
+of at most 16 MiB, not a local path, URL or host resource URI. It validates the
+unencrypted PDF before publishing one new, non-overwriting local copy, hashes
+that copy through the same descriptor-bound identity path as `get_pdf_identity`,
+and returns ordinary viewer-load metadata. The host display name is an inert
+label, never a filename. Import is allowed only in `${PLUGIN_DATA}/workspace`
+when the existing configured directory policy permits that destination.
+An explicit folder override excluding it fails without creating the workspace,
+widening permission or using another folder. Import does not change the host's
+original document, upload it or authorize signing. Native host-resource
+save-back and installed-host acceptance remain separate integration gates.
+
+By default, fifty-five tool handlers advertise strict `outputSchema` contracts and return
 `structuredContent`. They also return a human-readable `content` text block so
 non-Apps and older clients remain usable. Successful structured output is
 validated before it leaves the server, with separate generic and tool-specific
 error branches where required.
 
 The separately configured optional `propose_pdf_ocr` tool adds one structured
-handler, bringing an opted-in runtime to 58 tools with 54 output schemas.
+handler, bringing an opted-in runtime to 60 tools with 56 output schemas.
 It is absent from default discovery and both manifests. No OCR engine is bundled;
 see [Optional OCR setup and limitations](LOCAL_OCR.md).
 
@@ -96,7 +110,7 @@ exact-output-identity preconditions. New evaluation suites must bind v3
 explicitly. The grader selects the allowlisted contract and trust registry
 declared by each suite, so historical evidence remains valid under its original
 stack and is not silently rescored. The six existing trajectory jobs do not
-constitute behavioral trajectory coverage of all 57 tools.
+constitute behavioral trajectory coverage of all 59 tools.
 `get_pdf_identity` is covered by its contract, handler, filesystem-race, and
 agent-workflow tests rather than by those six retained jobs.
 

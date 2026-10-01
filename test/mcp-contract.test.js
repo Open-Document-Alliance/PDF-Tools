@@ -315,6 +315,7 @@ const TOOL_EFFECT_ANNOTATIONS = {
   get_pdf_resource_uri: CLOSED_READ,
   display_pdf: CLOSED_SESSION_ACTION,
   open_pdf_workspace: CLOSED_READ,
+  import_host_pdf: CLOSED_SESSION_ACTION,
   get_active_document: CLOSED_READ,
   set_active_document: CLOSED_SESSION_ACTION,
   read_pdf_bytes: CLOSED_READ,
@@ -460,8 +461,10 @@ describe("MCPB static declarations", () => {
     expect(names(MCPB_MANIFEST.tools)).not.toContain("read_pdf_bytes");
     expect(names(SOURCE_MANIFEST.tools)).toContain("open_pdf_workspace");
     expect(names(MCPB_MANIFEST.tools)).not.toContain("open_pdf_workspace");
+    expect(names(SOURCE_MANIFEST.tools)).toContain("import_host_pdf");
+    expect(names(MCPB_MANIFEST.tools)).not.toContain("import_host_pdf");
     expect(sorted(names(SOURCE_MANIFEST.tools))).toEqual(
-      sorted([...names(MCPB_MANIFEST.tools), "read_pdf_bytes", "open_pdf_workspace"]),
+      sorted([...names(MCPB_MANIFEST.tools), "read_pdf_bytes", "open_pdf_workspace", "import_host_pdf"]),
     );
   });
 
@@ -495,6 +498,7 @@ describe("MCPB static declarations", () => {
       "pdf-comparison.js",
       "index.js",
       "helpers.js",
+      "host-pdf-import.js",
       "output-schemas.js",
       "layout-extraction.js",
       "type3-cm-reference.js",
@@ -529,7 +533,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(33);
+    expect(mirrored).toHaveLength(34);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",
@@ -597,7 +601,7 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
   });
 
   it("exposes the same uniquely named, fully annotated tool contract", () => {
-    expect(tools).toHaveLength(58);
+    expect(tools).toHaveLength(59);
     expect(new Set(names(tools)).size).toBe(tools.length);
     expect(sorted(names(tools))).toEqual(sorted(names(SOURCE_MANIFEST.tools)));
     expect(createHash("sha256").update(JSON.stringify(tools)).digest("hex"))
@@ -627,7 +631,7 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
     expect(sorted(Object.keys(TOOL_EFFECT_ANNOTATIONS))).toEqual(sorted(names(tools)));
 
     const appOnlyTools = tools.filter(tool => tool._meta?.ui?.visibility?.includes("app"));
-    expect(names(appOnlyTools)).toEqual(["open_pdf_workspace", "read_pdf_bytes"]);
+    expect(names(appOnlyTools)).toEqual(["import_host_pdf", "open_pdf_workspace", "read_pdf_bytes"]);
     expect(sorted(names(tools.filter(tool => !appOnlyTools.includes(tool))))).toEqual(
       sorted(names(MCPB_MANIFEST.tools)),
     );

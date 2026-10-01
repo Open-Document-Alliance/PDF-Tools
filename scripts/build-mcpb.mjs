@@ -81,6 +81,7 @@ export const SERVER_FILES = [
   "bounded-pdf-file.js",
   "document-map.js",
   "helpers.js",
+  "host-pdf-import.js",
   "index.js",
   "layout-extraction.js",
   "local-ocr-tools.js",

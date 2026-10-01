@@ -80,8 +80,8 @@ let rasterHash;
 try {
   const tools = await first.client.listTools();
   toolNames.push(...tools.tools.map(tool => tool.name).sort());
-  assert(toolNames.length === 58, `Expected 58 tools, received ${toolNames.length}`);
-  assert(new Set(toolNames).size === 58, "Tool names were not unique");
+  assert(toolNames.length === 59, `Expected 59 tools, received ${toolNames.length}`);
+  assert(new Set(toolNames).size === 59, "Tool names were not unique");
   toolContractSha256 = createHash("sha256")
     .update(JSON.stringify(tools.tools))
     .digest("hex");
@@ -244,7 +244,7 @@ assert(mutationFiles.length === 2, `Expected two mutation outputs, received ${mu
 const fresh = await connect("fresh-session");
 try {
   const tools = await fresh.client.listTools();
-  assert(tools.tools.length === 58, "Fresh session did not discover 58 tools");
+  assert(tools.tools.length === 59, "Fresh session did not discover 59 tools");
   const info = await fresh.client.callTool({
     name: "get_pdf_info",
     arguments: { pdf_path: path.join(mutationDirectory, mutationFiles[1]) },

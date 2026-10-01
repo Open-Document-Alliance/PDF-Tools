@@ -69,7 +69,7 @@ const chunks = [];
 try {
   await client.connect(transport);
   const tools = await client.listTools();
-  assert(tools.tools.length === 58, `Expected 58 installed tools, received ${tools.tools.length}`);
+  assert(tools.tools.length === 59, `Expected 59 installed tools, received ${tools.tools.length}`);
   assert(
     sha256(Buffer.from(JSON.stringify(tools.tools))) === EXPECTED_TOOL_CONTRACT_SHA256,
     "Installed tool contract differs from the reviewed build",

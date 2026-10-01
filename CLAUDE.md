@@ -300,7 +300,7 @@ qualification. Then perform manual host runs against `example-fw9.pdf`:
 7. `validate_pdf` on a partially filled form
 8. `read_pdf_content` on a text-layer PDF and a textless scanned PDF, confirming the page-1 image fallback boundary
 
-## Core Available Tools (selected; 1 app-only)
+## Core Available Tools (selected; 3 app-only)
 
 1. **display_pdf** - Interactive PDF viewer with search, navigation, zoom, and form field sidebar
 2. **list_pdfs** - Lists PDF files in a directory
@@ -340,6 +340,8 @@ qualification. Then perform manual host runs against `example-fw9.pdf`:
 36. **read_extraction_chunk** - Rebuild one returned chunk from fresh PDF bytes
 37. **submit_extraction_proposal** - Retain one explicitly unverified cited leaf proposal
 38. **verify_extraction_proposal** - Replay citations deterministically and retain the typed result without a model inside PDF Tools
+39. **open_pdf_workspace** - (app-only) Open the empty task-selection screen without reading a PDF or scanning folders
+40. **import_host_pdf** - (app-only) Import at most 16 MiB of exact unencrypted PDF bytes into the already-permitted private plugin workspace as a new local copy; never accepts a path or widens folder access
 
 ### Current Extraction Boundary
 

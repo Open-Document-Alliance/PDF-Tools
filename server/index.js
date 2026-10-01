@@ -47,6 +47,10 @@ import {
   withToolOutputSchema,
 } from "./output-schemas.js";
 import { publicAccessibilityInspectionError } from "./accessibility-inspection.js";
+import {
+  HOST_PDF_IMPORT_MAX_BASE64_CHARS,
+  importHostPdf,
+} from "./host-pdf-import.js";
 import { renderPdfLayoutToMarkdown } from "./markdown-conversion.js";
 import {
   normalizeTableProposalCells,
@@ -109,6 +113,7 @@ import {
 import {
   assertBoundedPdfStreamDecodes,
   assertBoundedPdfStructure,
+  loadPdfForMutation,
 } from "./pdf-lib-worker.js";
 import {
   VERIFIED_EXTRACTION_TOOL_DEFINITIONS,
@@ -3613,6 +3618,28 @@ async function listTools(request) {
   return {
     tools: [
       {
+        name: "import_host_pdf",
+        title: "Import Host PDF",
+        description: "Import exact PDF bytes explicitly supplied by an app into the already-permitted private plugin workspace. Does not accept or fetch a source path or URI, grant folder access, replace a file, send a document, or sign. Refuses encrypted or unsupported PDFs. Creates a new local copy of at most 16 MiB.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            pdf_base64: { type: "string", minLength: 1, maxLength: HOST_PDF_IMPORT_MAX_BASE64_CHARS, description: "Exact PDF bytes as canonical padded base64, with no data URL prefix or whitespace." },
+            display_name: { type: "string", minLength: 1, maxLength: 255, description: "Optional inert label. Never used as a local filename or path." }
+          },
+          required: ["pdf_base64"],
+          additionalProperties: false
+        },
+        annotations: {
+          title: "Import Host PDF",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false
+        },
+        _meta: { ui: { resourceUri: "ui://pdf-toolkit/viewer", visibility: ["app"] } }
+      },
+      {
         name: "open_pdf_workspace",
         title: "PDF Workspace",
         description: "Open the PDF Tools workspace starting screen. No PDF is opened, no folders are scanned, and no document is changed or sent. Choose a task, then identify the PDF in the conversation.",
@@ -6736,6 +6763,48 @@ async function handleToolCall(request) {
         };
       }
 
+      case "import_host_pdf": {
+        const imported = await importHostPdf(args, {
+          workspacePath: PLUGIN_WORKSPACE_PATH,
+          assertPathAllowed,
+          // Reuse the bounded existing parser without decrypting or rewriting
+          // the bytes. Encrypted imports deliberately require another route.
+          validatePdf: bytes => loadPdfForMutation(bytes, null),
+          writePdfOutputAtomic,
+          hashPdfFile: importedPath => hashBoundedPdfFileSafely(importedPath, 16 * 1024 * 1024, { assertPathAllowed }),
+        });
+        const source = {
+          schema_version: "1.0",
+          requested_path: imported.path,
+          canonical_path: imported.identity.canonicalPath,
+          file_name: path.basename(imported.identity.canonicalPath),
+          size_bytes: imported.sizeBytes,
+          sha256: imported.sha256,
+          identity_method: "race_aware_descriptor_sha256",
+          // This describes the descriptor hash, as get_pdf_identity does; the
+          // separate import validation did parse the original PDF bytes.
+          pdf_parsed: false,
+        };
+        const payload = await buildActiveDocumentPayload(imported.path, 1, {
+          ...getFormFieldInfo(imported.parsed),
+          totalPages: imported.parsed.getPageCount(),
+          source,
+          host_import: {
+            version: 1,
+            status: "imported",
+            sha256: imported.sha256,
+            size_bytes: imported.sizeBytes,
+            display_name: imported.displayName,
+          },
+        });
+        syncActiveDocumentState({ pdfPath: imported.path });
+        return {
+          content: [{ type: "text", text: "The host PDF was imported into the permitted private workspace as a new local copy. The original host document has not been changed or sent." }],
+          structuredContent: payload,
+          _meta: { ui: { resourceUri: "ui://pdf-toolkit/viewer" }, ...payload },
+        };
+      }
+
       case "display_pdf": {
         const { pdf_path, page } = args;
         const resolvedPath = resolvePath(pdf_path);
@@ -8266,12 +8335,15 @@ async function handleToolCall(request) {
     let errorCode = error?.code === "path_policy_denied"
       ? "path_policy_denied"
       : "tool_execution_failed";
+    if (name === "import_host_pdf" && /^HOST_IMPORT_[A-Z_]+$/.test(error?.code ?? "")) {
+      errorCode = error.code;
+    }
     if (LUMIN_SIGNING_TOOL_NAME_SET.has(name) && /^LUMIN_[A-Z0-9_]+$/.test(error?.code ?? "")) {
       errorCode = error.code;
     }
     if (
       error?.code === PDF_RESOURCE_LIMIT_CODE
-      && (PDFJS_TOOL_NAMES.has(name) || PDF_LIB_MUTATION_TOOL_NAMES.has(name))
+      && (PDFJS_TOOL_NAMES.has(name) || PDF_LIB_MUTATION_TOOL_NAMES.has(name) || name === "import_host_pdf")
     ) {
       errorCode = PDF_RESOURCE_LIMIT_CODE;
     }

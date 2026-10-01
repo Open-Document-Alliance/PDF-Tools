@@ -33,6 +33,9 @@ import { spawn } from "child_process";
 import { prepareCleanStage } from "./build-mcpb.mjs";
 import { derivePluginVersion } from "./plugin-version.mjs";
 import { createOpenAIPluginMetadata } from "./openai-plugin-metadata.mjs";
+// The shared listing says the host's permissions govern which files it may import.
+// A model-visible folder boundary does not revoke
+// a desktop host's independent operating-system file access.
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");

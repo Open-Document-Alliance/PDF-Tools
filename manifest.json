@@ -51,6 +51,10 @@
   "icon": "icon.png",
   "tools": [
     {
+      "name": "import_host_pdf",
+      "description": "Import app-supplied PDF bytes into the already-permitted private workspace (app-only)"
+    },
+    {
       "name": "open_pdf_workspace",
       "description": "Open the PDF Workspace starting screen (app-only)"
     },

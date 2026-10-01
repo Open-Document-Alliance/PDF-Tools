@@ -46,6 +46,7 @@ const STRUCTURED_TOOLS = [
   "get_pdf_resource_uri",
   "inspect_extraction_state",
   "inspect_pdf_accessibility",
+  "import_host_pdf",
   "list_signatures",
   "load_signature",
   "merge_pdfs",
@@ -162,11 +163,11 @@ describe("output schema definitions", () => {
     expect(rejected.structuredContent.error.code).toBe("internal_validation_error");
   });
 
-  it("covers the exact 55 structured schemas including optional OCR", () => {
+  it("covers the exact 56 structured schemas including optional OCR", () => {
     expect(Object.keys(TOOL_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
-    expect(STRUCTURED_TOOLS).toHaveLength(55);
+    expect(STRUCTURED_TOOLS).toHaveLength(56);
     expect(TEXT_ONLY_TOOLS).toHaveLength(4);
   });
 
