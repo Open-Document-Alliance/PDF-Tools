@@ -26,7 +26,7 @@ The standard defines no hooks, no agents, no commands, no user configuration, no
 
 Two reasons, in order of weight.
 
-**The workflow skill stops being optional.** Today `plugins/pdf-tools-workflow` ships the evidence-first workflow — inspect, compare, plan, authorize, transform, validate, return — against an MCP connection the user has to configure separately. A conformant plugin can carry `skills/` and `mcp.json` in one directory, so the guardrails and the non-claims install with the server rather than beside it. That discipline is a larger part of this product's value than any individual tool.
+**The workflow instructions travel with the server.** The standalone `plugins/pdf-tools-workflow` plugin supplies the evidence-first workflow against a separately configured MCP connection. The MCPB and share ZIP already carry the same authored files listed by `SKILL_FILES` in `server/skill-files.js`, which a modern-era session exposes through `io.modelcontextprotocol/skills`. The server-bearing Agent Plugin also carries `skills/` and `mcp.json` in one directory. Bundled or served instructions are not proof that a particular host activates them; qualify that separately against the exact artifact.
 
 **The MCP Apps viewer is portable in principle, and was not in practice until 2026-08-10.** `server/index.js` serves `ui://pdf-toolkit/viewer` with `mimeType: "text/html;profile=mcp-app"` and attaches `_meta.ui.resourceUri` to the tools that benefit from it. MCP Apps is the official MCP extension for host-rendered UI, and OpenAI's own guidance now treats `_meta.ui.resourceUri` as the primary field, with `_meta["openai/outputTemplate"]` and `window.openai` demoted to compatibility aliases. We are on the current field, so the wiring is correct on any MCP Apps host.
 
@@ -61,13 +61,15 @@ This does not relax the degradation requirement. OpenAI's guidance still require
 
 | Artifact | Consumer | Contents |
 |---|---|---|
-| `manifest.mcpb.json` | Claude Desktop MCPB | Server config, `user_config`, tool list |
+| `manifest.mcpb.json` and staged `SKILL_FILES` | Claude Desktop MCPB | Server config, `user_config`, tool list, canonical skill files |
+| `package-for-friend.js` share ZIP | Local MCP hosts | Server and canonical skill files |
+| `scripts/build-agent-plugin.mjs` output | Agent Plugin hosts | Server, dependencies, launchers, canonical skill, `plugin.json`, and `mcp.json` |
 | `plugins/pdf-tools-workflow/.claude-plugin/plugin.json` | Claude Code | Skill-only plugin |
 | `plugins/pdf-tools-workflow/.codex-plugin/plugin.json` | Codex (pre-standard) | Same skill plus an `interface` block |
 | `.claude-plugin/marketplace.json` | Claude Code | Marketplace entry |
 | `.agents/plugins/marketplace.json` | `.agents` convention | Marketplace entry |
 
-Four packaging descriptions of one product, and the server ships separately from the skill in every one of them.
+Only the standalone workflow-only plugin and its marketplace entries require a separately configured server. The MCPB, share ZIP, and server-bearing Agent Plugin bundle the skill with the server. See `docs/MCP_CONTRACT.md`, Native Skills, for the served extension contract; packaging is not a native-host activation claim.
 
 ## Conformance gaps
 
