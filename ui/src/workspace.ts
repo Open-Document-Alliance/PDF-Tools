@@ -1,3 +1,5 @@
+import { hasPdfToolLoadMetadataKeys } from "./tool-result";
+
 /** The entrypoint is a starting screen, not authority to read an active file. */
 export function isPdfWorkspaceResult(result: {
   isError?: boolean;
@@ -14,7 +16,7 @@ export function isPdfWorkspaceResult(result: {
   // Never let an empty marker hide a conflicting file-bearing result.
   if (result._meta && (typeof result._meta !== "object" || Array.isArray(result._meta))) return false;
   const meta = result._meta as Record<string, unknown> | undefined;
-  return !meta || !["pdfPath", "activePath", "totalBytes"].some(key => key in meta);
+  return !meta || (!hasPdfToolLoadMetadataKeys(meta) && !("activePath" in meta));
 }
 
 export const PDF_WORKSPACE_TASKS = Object.freeze([

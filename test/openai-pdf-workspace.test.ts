@@ -27,6 +27,23 @@ describe("PDF Workspace entrypoint state", () => {
     expect(isPdfWorkspaceResult(result)).toBe(false);
   });
 
+  it.each([
+    ["pdfPath", "/chosen.pdf"],
+    ["active_path", "/chosen.pdf"],
+    ["backup_path", "/backup.pdf"],
+    ["totalBytes", 20],
+    ["initialPage", 0],
+    ["fields", []],
+    ["fieldCount", 0],
+    ["hasFormFields", false],
+    ["viewUUID", "chosen-view"],
+  ])("rejects the actual viewer load key %s even when its value is absent or invalid", (key, value) => {
+    for (const metadataValue of [value, undefined, null]) {
+      expect(isPdfWorkspaceResult({ ...empty(), _meta: { [key as string]: metadataValue } })).toBe(false);
+      expect(isPdfWorkspaceResult({ structuredContent: { ...empty().structuredContent, [key as string]: metadataValue } })).toBe(false);
+    }
+  });
+
   it("offers broader document tasks, not a form-only replacement", () => {
     expect(PDF_WORKSPACE_TASKS.map(task => task.id)).toEqual(["review", "fill", "extract", "pages", "sign"]);
     for (const task of PDF_WORKSPACE_TASKS) {
