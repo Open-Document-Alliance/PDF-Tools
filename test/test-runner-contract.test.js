@@ -119,6 +119,7 @@ async function findJavaScriptSourceFiles(directory) {
         ".beads",
         "coverage",
         "dist",
+        "dist-plugin",
         "dist-ui",
         "node_modules",
       ]).has(entry.name)
@@ -231,6 +232,23 @@ function graphReachesAny(graph, start, targets) {
 }
 
 describe("aggregate test-runner contract", () => {
+  it("does not classify generated plugin copies as repository source", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-source-inventory-"));
+    try {
+      await fs.mkdir(path.join(directory, "dist-plugin", "pdf-tools", "server"), { recursive: true });
+      await fs.writeFile(path.join(directory, "dist-plugin", "pdf-tools", "server", "copy.js"),
+        'import("./generated-runtime.js");\n');
+      await fs.mkdir(path.join(directory, "server"));
+      const sourcePath = path.join(directory, "server", "source.js");
+      await fs.writeFile(sourcePath, 'export const source = true;\n');
+      expect(await findJavaScriptSourceFiles(directory)).toEqual([
+        path.relative(repoRoot, sourcePath).split(path.sep).join("/"),
+      ]);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("recognizes every supported literal module edge conservatively", () => {
     const checkerSpecifier = "./source-worktree-" + "state.mjs";
     const source = [
