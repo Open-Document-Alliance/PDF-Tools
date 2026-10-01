@@ -125,6 +125,7 @@ export class HostPdfSession {
     this.message = "Opening the PDF supplied by the host...";
     this.emit();
     try {
+      this.assertCurrent(epoch);
       const resources = this.dependencies.resources();
       if (!resources) throw new Error("This host does not support native PDF files. Ask the assistant to open a local PDF with display_pdf instead.");
       const binding: Binding = { uri: admitted.file.resourceUri, localPath: "", writable: false, stale: false, resources, removeHandler: () => {}, subscribed: false };

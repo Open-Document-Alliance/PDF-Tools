@@ -173,6 +173,15 @@ describe("OpenAI host file session", () => {
     expect(h.resources.unsubscribe).toHaveBeenCalledTimes(1);
     expect(h.resources.read).not.toHaveBeenCalled();
   });
+  it("cancels a synchronous open-plus-dispose before any resource subscription", async () => {
+    const h = harness();
+    const opening = h.session.open(input);
+    await h.session.dispose();
+    await expect(opening).rejects.toThrow(/session ended/);
+    expect(h.resources.subscribe).not.toHaveBeenCalled();
+    expect(h.resources.read).not.toHaveBeenCalled();
+    expect(h.callTool).not.toHaveBeenCalled();
+  });
   it("refuses a stale notification between the subscription and read", async () => {
     const h = harness();
     h.resources.read.mockImplementation(async () => { h.update(); return { contents: [{ uri: input.file.resourceUri, blob: encodeHostPdfBlob(bytes), openaiMetadata: { writable: true, etag: "v1" } }] }; });
