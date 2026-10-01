@@ -24,7 +24,7 @@ filesystem, such as a hosted assistant working from a link or an attachment.
 
 - Transport: Streamable HTTP (MCP)
 - URL: `https://mcp.opendocuments.ai/mcp`
-- Authentication: none
+- Authentication: none on this public endpoint
 - Protocol revisions: as published by the server's `initialize` response
 
 ## Tools
@@ -47,8 +47,14 @@ it as base64 in the response.
 request. There is no database, no object storage, no cache, and no download link
 that outlives the response, because there is nothing kept to link to.
 
-**It does not know who you are.** There are no accounts, no API keys and no
-sessions. Nothing associates one request with another.
+**The public endpoint does not know who you are.** It requires no accounts,
+API keys or sessions. Nothing associates one request with another.
+
+An optional, separately configured [Vercel Connect surface](docs/REMOTE_CONNECT_API_KEYS.md)
+uses account-free app keys at `/mcp/connect`. It requires maintainer activation
+and returns 503 until configured. Keys are signed capabilities for stateless
+processing, never access to stored records. The public `/mcp` remains available
+without a key. Both surfaces use the same document-processing tools and limits.
 
 **It does not log your content.** Operational logs record tool names, byte
 counts, durations and error classes. They do not record document bytes,

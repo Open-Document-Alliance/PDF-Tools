@@ -8,12 +8,27 @@
     "api/mcp.js": {
       "maxDuration": 60,
       "includeFiles": "node_modules/{@napi-rs/canvas*,pdfjs-dist}/**"
+    },
+    "api/mcp-connect.js": {
+      "maxDuration": 60,
+      "includeFiles": "node_modules/{@napi-rs/canvas*,pdfjs-dist}/**"
+    },
+    "api/connect-key.js": {
+      "maxDuration": 10
     }
   },
   "rewrites": [
     {
       "source": "/mcp",
       "destination": "/api/mcp"
+    },
+    {
+      "source": "/mcp/connect",
+      "destination": "/api/mcp-connect"
+    },
+    {
+      "source": "/connect",
+      "destination": "/connect.html"
     }
   ]
 }

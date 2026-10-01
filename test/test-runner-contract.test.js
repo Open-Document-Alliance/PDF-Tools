@@ -524,6 +524,7 @@ describe("aggregate test-runner contract", () => {
       "test/deep-malformed-native-v3-contract.test.js",
       "test/deep-malformed-native-v4-contract.test.js",
       "test/qpdf-macos-budget-exec.test.js",
+      "test/connect-auth.test.js",
       "test/deep-malformed-native-windows-portable.test.js",
     ]);
     const posixFiles = [
@@ -535,6 +536,7 @@ describe("aggregate test-runner contract", () => {
       "test/deep-malformed-native-v4-contract.test.js",
       "test/deep-malformed-native-v4-mechanisms.test.js",
       "test/qpdf-macos-budget-exec.test.js",
+      "test/connect-auth.test.js",
     ];
     expect(nodeTestFilesForPlatform("darwin")).toEqual(posixFiles);
     expect(nodeTestFilesForPlatform("linux")).toEqual(posixFiles);

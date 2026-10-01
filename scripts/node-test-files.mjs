@@ -47,6 +47,10 @@ export const NODE_TEST_SUITES = Object.freeze([
     platforms: RELEASE_PLATFORMS,
   },
   {
+    file: "test/connect-auth.test.js",
+    platforms: RELEASE_PLATFORMS,
+  },
+  {
     file: "test/deep-malformed-native-windows-portable.test.js",
     platforms: Object.freeze(["win32"]),
     omissions: Object.freeze({

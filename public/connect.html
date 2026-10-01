@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Connect your agent — PDF Tools</title>
+  <style>
+    :root { color-scheme: light dark; --fg: #1a1a1a; --bg: #fff; --muted: #595959; --border: #777; }
+    @media (prefers-color-scheme: dark) { :root { --fg: #ececec; --bg: #141414; --muted: #a6a6a6; --border: #aaa; } }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 ui-sans-serif, system-ui, sans-serif; }
+    main { max-width: 38rem; margin: auto; padding: 3rem 1rem; }
+    h1 { line-height: 1.2; }
+    a { color: inherit; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+    .muted { color: var(--muted); }
+    button, input { font: inherit; min-height: 44px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+    button { padding: .5rem 1rem; cursor: pointer; touch-action: manipulation; }
+    input { box-sizing: border-box; width: 100%; padding: .5rem; }
+    button:disabled { cursor: wait; }
+    :focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
+    label { display: block; margin-top: 1rem; }
+    .actions { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: .75rem; }
+  </style>
+</head>
+<body>
+<main>
+  <a href="/">PDF Tools by Open Document Alliance</a>
+  <h1>Connect your agent to PDF Tools</h1>
+  <p>Read and fill PDF forms, find signature zones, apply a visible typed signature stamp, and flatten fields through MCP.</p>
+  <h2>Use Vercel Connect</h2>
+  <p>Create a free app key below and enter it into your Connect connector. No account is needed. Use <code>https://mcp.opendocuments.ai/mcp/connect</code> with <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+  <button id="create" type="button">Create app key</button>
+  <p id="status" role="status" aria-live="polite"></p>
+  <section id="result" hidden aria-label="Your app key">
+    <label for="key">App key</label>
+    <input id="key" type="password" readonly autocomplete="off" spellcheck="false">
+    <div class="actions">
+      <button id="copy" type="button">Copy key</button>
+      <button id="show" type="button">Show key</button>
+    </div>
+    <p id="expires"></p>
+  </section>
+  <p class="muted">Keys expire after 90 days. Save yours in Connect or your secret manager. It is shown only in this page; we keep no individual key records. A key permits stateless PDF processing and grants no access to stored documents. To replace it, create another key. The old key remains valid until it expires; maintainer rotation can invalidate all keys.</p>
+  <h2>Connect directly without a key</h2>
+  <p>Clients that do not need credential management can use the public endpoint: <code>https://mcp.opendocuments.ai/mcp</code>.</p>
+  <h2>What happens to your PDF</h2>
+  <p>Each call supplies its own document, processes it in memory, and returns the result in the response. Both endpoints use the same five tools. A typed signature is a visible stamp, not a cryptographic signature.</p>
+  <p><a href="https://github.com/Open-Document-Alliance/PDF-Tools/blob/master/remote-mcp.md">Service documentation</a> · <a href="https://www.opendocuments.ai/privacy-policy">Privacy</a> · <a href="https://www.opendocuments.ai/terms-of-service">Terms</a></p>
+</main>
+<script>
+  const create = document.querySelector("#create");
+  const status = document.querySelector("#status");
+  const key = document.querySelector("#key");
+  const show = document.querySelector("#show");
+  create.addEventListener("click", async () => {
+    create.disabled = true;
+    create.textContent = "Create app key…";
+    status.textContent = "Creating your app key…";
+    document.querySelector("#result").hidden = true;
+    key.value = "";
+    key.type = "password";
+    show.textContent = "Show key";
+    try {
+      const response = await fetch("/api/connect-key", {
+        method: "POST", credentials: "omit", cache: "no-store", redirect: "error",
+        headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      if (!response.ok) throw new Error("Key creation is currently unavailable. You can still use the public endpoint below.");
+      const data = await response.json();
+      if (typeof data.apiKey !== "string" || !data.apiKey.startsWith("odapdf_v1.") || !Number.isFinite(Date.parse(data.expiresAt))) throw new Error("An app key could not be created. Please try again.");
+      key.value = data.apiKey;
+      document.querySelector("#expires").textContent = "Expires " + new Date(data.expiresAt).toLocaleString() + ".";
+      document.querySelector("#result").hidden = false;
+      status.textContent = "App key created. Copy it into your Connect connector.";
+      key.focus();
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      create.disabled = false;
+      create.textContent = "Create app key";
+    }
+  });
+  document.querySelector("#copy").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(key.value);
+      status.textContent = "App key copied.";
+    } catch {
+      key.type = "text";
+      show.textContent = "Hide key";
+      key.focus();
+      key.select();
+      status.textContent = "Copy the selected key using your keyboard.";
+    }
+  });
+  show.addEventListener("click", () => {
+    key.type = key.type === "password" ? "text" : "password";
+    show.textContent = key.type === "password" ? "Show key" : "Hide key";
+  });
+</script>
+</body>
+</html>
