@@ -1,7 +1,12 @@
 import { handleKeyIssuance } from "../remote/connect-auth.mjs";
 
 export const config = { runtime: "nodejs", maxDuration: 10 };
-export const POST = handleKeyIssuance;
-export const GET = handleKeyIssuance;
-export const DELETE = handleKeyIssuance;
-export const OPTIONS = handleKeyIssuance;
+
+function handle(request) {
+  return handleKeyIssuance(request);
+}
+
+export const POST = handle;
+export const GET = handle;
+export const DELETE = handle;
+export const OPTIONS = handle;
