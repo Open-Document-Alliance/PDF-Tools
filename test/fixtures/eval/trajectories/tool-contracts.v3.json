@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "9b18e7db7d9c4ff5b506b198b9093e398736ebaf2200d1c2e971eedc9542f295",
+  "tools_sha256": "2794ad7a9ac3a2248afb0e9cf87b49819e250e76f60c46c16ffc1b64fd10ae7c",
   "tools": [
     {
       "name": "add_signature_field",
@@ -1130,6 +1130,30 @@
             "pdf_path": "/Users/alice/Documents/report.pdf"
           }
         ]
+      }
+    },
+    {
+      "name": "import_host_pdf",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_base64": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 22369624,
+            "description": "Exact PDF bytes as canonical padded base64, with no data URL prefix or whitespace."
+          },
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "Optional inert label. Never used as a local filename or path."
+          }
+        },
+        "required": [
+          "pdf_base64"
+        ],
+        "additionalProperties": false
       }
     },
     {

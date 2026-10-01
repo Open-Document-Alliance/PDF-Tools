@@ -232,7 +232,9 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // entrypoint with no PDF or folder access. The model-visible list is unchanged.
 // Total discovery is 58 tools, including two app-only tools. Previously
 // 2edabecaa5aa61e9ee533f8811180e8661a9423dddaee8ba59fec19cb846ab7d.
-const TOOL_CONTRACT_SHA256 = "7f6e8b3c898db15f182046264fe0d979b935c535b171f6697c59491704712588";
+// Live Mac Node 22.23.2 capture after app-only host import: 59 tools,
+// three app-only and 56 model-visible; no existing input authority changes.
+const TOOL_CONTRACT_SHA256 = "1392d1f015ca15d6e970116f80f44b2bf933d85943b27b336f23a7d7a5b9c502";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
