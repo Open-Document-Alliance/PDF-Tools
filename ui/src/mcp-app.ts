@@ -12,6 +12,7 @@ import {
   applyDocumentTheme,
   applyHostStyleVariables,
 } from "@modelcontextprotocol/ext-apps";
+import { OpenAIExtensions } from "@openai/mcp-extensions/app";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as pdfjsLib from "pdfjs-dist";
 import { TextLayer } from "pdfjs-dist";
@@ -24,6 +25,7 @@ import {
 } from "./page-box.js";
 import { buildManagedPdfPath, getHostBaseName } from "./path-utils";
 import { isPdfWorkspaceResult, PDF_WORKSPACE_TASKS } from "./workspace";
+import { HostPdfSession, HostPdfSessionEndedError, parseHostPdfInput } from "./host-pdf";
 import {
   LatestPathRequestState,
   getCanvasBufferSize,
@@ -183,6 +185,7 @@ interface PageState {
 let pageStates: PageState[] = [];
 let dragSourceIndex: number | null = null;
 let hasUnsavedChanges = false;
+let pagePlanInFlight = false;
 
 // Form fields
 interface FieldInfo {
@@ -247,6 +250,9 @@ const fullscreenBtn = $("fullscreen-btn") as HTMLButtonElement;
 const loadingIndicatorEl = $("loading-indicator");
 const loadingIndicatorArc = loadingIndicatorEl.querySelector(".loading-indicator-arc") as SVGCircleElement;
 const sidebarToggleBtn = $("sidebar-toggle-btn") as HTMLButtonElement;
+const hostFileBannerEl = $("host-file-banner");
+const hostFileStatusEl = $("host-file-status");
+const hostFileSaveBtn = $("host-file-save") as HTMLButtonElement;
 const searchBarEl = $("search-bar");
 const searchInputEl = $("search-input") as HTMLInputElement;
 const searchMatchCountEl = $("search-match-count");
@@ -268,6 +274,34 @@ const app = new App(
   {},
   { autoResize: false, strict: true },
 );
+const openai = new OpenAIExtensions(app);
+let bridgeReady: Promise<void>;
+let hostFileInputReceived = false;
+const hostPdfSession = new HostPdfSession({
+  resources: () => openai.resources,
+  callTool: request => callServerToolDuringLifecycle(request, captureViewerLifecycle()),
+  currentPath: () => pdfPath,
+  readyToSave: () => {
+    if (pagePlanInFlight) return "Wait for the current page changes to finish saving locally before saving back.";
+    if (hasUnsavedChanges) return "Save your page changes as a local copy first, then save back to the original.";
+    if (signingInFlight) return "Wait for the current local document change to finish before saving back.";
+    if (!pdfDocument || pendingLoadResultKey || errorEl.style.display !== "none") return "Wait until the current PDF has loaded successfully before saving back.";
+    return null;
+  },
+  load: async result => {
+    await loadPdfFromToolResult(result);
+    const parsed = parsePdfToolLoadData(result);
+    return Boolean(pdfDocument && parsed.ok && lastLoadedResultKey === parsed.data.key && pdfPath === (parsed.data.activePath || parsed.data.pdfPath));
+  },
+  onState: state => {
+    if (isTearingDown) return;
+    hostFileBannerEl.style.display = state.associated || state.message ? "flex" : "none";
+    hostFileStatusEl.textContent = state.blockedReason || state.message;
+    hostFileSaveBtn.hidden = !state.associated;
+    hostFileSaveBtn.disabled = !state.canSave;
+    hostFileSaveBtn.textContent = state.busy ? "Please wait..." : "Save back to original";
+  },
+});
 
 let isTearingDown = false;
 let teardownPromise: Promise<Record<string, never>> | null = null;
@@ -339,6 +373,7 @@ function showError(message: string) {
   loadingEl.style.display = "none";
   errorEl.style.display = "block";
   viewerEl.style.display = "none";
+  hostPdfSession.refresh();
 }
 
 function showViewer() {
@@ -1982,6 +2017,7 @@ function closeSignModal(revertCustomType = true) {
 }
 
 function setSignModalControlsLocked(locked: boolean) {
+  hostPdfSession.refresh();
   signModalTypeEl.disabled = locked;
   signModalNameEl.disabled = locked;
   signModalExistingEl.disabled = locked;
@@ -2170,6 +2206,11 @@ function updateStatementPreview() {
 
 async function onConfirmSign() {
   if (!activeSignZone || signingInFlight || isTearingDown) return;
+  if (hostPdfSession.isBusy || pagePlanInFlight) {
+    signModalErrorEl.textContent = "Wait for the current file operation to finish before changing this PDF.";
+    signModalErrorEl.style.display = "block";
+    return;
+  }
   const lifecycle = captureViewerLifecycle();
   const liveZone = activeSignZone;
   const zone = Object.freeze({
@@ -3069,6 +3110,7 @@ function updateManageActions() {
   manageResetBtn.disabled = !hasUnsavedChanges;
   manageApplyBtn.disabled = !hasUnsavedChanges;
   manageStatusEl.textContent = hasUnsavedChanges ? `\u26A0\uFE0F ${changes.join(", ")}` : "";
+  hostPdfSession.refresh();
 }
 
 async function renderThumbnail(pageNum: number): Promise<string> {
@@ -3348,7 +3390,11 @@ function resetPages() {
 }
 
 async function applyPagePlan() {
-  if (!hasUnsavedChanges || !pdfPath || isTearingDown) return;
+  if (!hasUnsavedChanges || !pdfPath || isTearingDown || pagePlanInFlight) return;
+  if (hostPdfSession.isBusy || signingInFlight) {
+    manageStatusEl.textContent = "Wait for the current file operation to finish before saving page changes.";
+    return;
+  }
   const lifecycle = captureViewerLifecycle();
 
   const activePages = pageStates.filter(ps => !ps.deleted);
@@ -3360,6 +3406,8 @@ async function applyPagePlan() {
 
   const output_path = buildManagedPdfPath(pdfPath);
 
+  pagePlanInFlight = true;
+  hostPdfSession.refresh();
   manageApplyBtn.disabled = true;
   manageApplyBtn.textContent = "Saving...";
   manageStatusEl.textContent = "Saving...";
@@ -3383,6 +3431,8 @@ async function applyPagePlan() {
       return;
     }
 
+    const nextLoad = parsePdfToolLoadData(result);
+    if (nextLoad.ok) hostPdfSession.viewerPathChanged(nextLoad.data.activePath || nextLoad.data.pdfPath, pdfPath);
     await loadPdfFromToolResult(result);
     assertViewerLifecycle(lifecycle);
     manageStatusEl.textContent = `\u2705 Saved to ${output_path}`;
@@ -3394,6 +3444,9 @@ async function applyPagePlan() {
     manageStatusEl.textContent = `\u274C Save failed: ${err.message}`;
     manageApplyBtn.textContent = "Save as new file";
     manageApplyBtn.disabled = false;
+  } finally {
+    pagePlanInFlight = false;
+    if (!isTearingDown) hostPdfSession.refresh();
   }
 }
 
@@ -3408,6 +3461,9 @@ searchCloseBtn.addEventListener("click", closeSearch);
 searchPrevBtn.addEventListener("click", goToPrevMatch);
 searchNextBtn.addEventListener("click", goToNextMatch);
 fullscreenBtn.addEventListener("click", toggleFullscreen);
+hostFileSaveBtn.addEventListener("click", () => {
+  void hostPdfSession.save().catch(error => console.warn("[viewer] Host save was not confirmed:", error));
+});
 sidebarToggleBtn.addEventListener("click", toggleSidebar);
 
 // Manage mode listeners
@@ -3606,10 +3662,33 @@ app.ontoolinput = params => {
   if (hasReceivedToolResult || hasReceivedToolInput) {
     toolInputConflict = true;
     latestToolInput = null;
+    void hostPdfSession.clear();
     console.error("[viewer] Refusing duplicate, late, or interleaved tool input.");
     return;
   }
   hasReceivedToolInput = true;
+  try {
+    const hostInput = parseHostPdfInput(params.arguments);
+    if (hostInput) {
+      hostFileInputReceived = true;
+      latestToolInput = null;
+      clearToolResultTimeout();
+      void (async () => {
+        await bridgeReady;
+        if (isTearingDown || toolInputConflict) return;
+        showLoading("Opening the PDF supplied by the host...");
+        await hostPdfSession.open(hostInput);
+      })().catch(error => {
+        if (!isTearingDown && !toolInputConflict && !(error instanceof HostPdfSessionEndedError)) showError(error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+  } catch (error) {
+    toolInputConflict = true;
+    latestToolInput = null;
+    showError(error instanceof Error ? error.message : String(error));
+    return;
+  }
   latestToolInput = getPdfToolInputData(params);
   startToolResultTimeout();
 };
@@ -3710,6 +3789,9 @@ app.ontoolresult = async (result: CallToolResult) => {
 
   const parsedLoadData = parsePdfToolLoadData(result);
   if (isPdfWorkspaceResult(result)) {
+    // A file entrypoint's opaque host input owns the pending load. Its empty
+    // server response must not replace that load with the starting screen.
+    if (hostFileInputReceived) return;
     showWorkspace();
     return;
   }
@@ -3797,6 +3879,7 @@ async function loadPdfFromToolResult(
   lastLoadedResultKey = payload.key;
   pendingLoadResultKey = payload.key;
   pdfPath = nextPdfPath;
+  hostPdfSession.viewerPathChanged(nextPdfPath);
   viewUUID = payload.viewUUID;
   activeBackupPath = payload.backupPath ?? null;
 
@@ -3856,6 +3939,7 @@ async function loadPdfFromToolResult(
     showError(err.message || "Failed to load PDF");
   } finally {
     if (pendingLoadResultKey === payload.key) pendingLoadResultKey = "";
+    hostPdfSession.refresh();
   }
 
   return true;
@@ -3869,12 +3953,14 @@ app.onerror = (err: unknown) => {
 
 async function teardownViewer(): Promise<Record<string, never>> {
   isTearingDown = true;
+  hostFileSaveBtn.disabled = true;
   viewerLifecycleEpoch++;
   inspectPreviewRequestSeq++;
   zoneRequests.clear();
   clearConnectTimeout();
   clearToolResultTimeout();
   fallbackLoad = null;
+  await hostPdfSession.dispose();
 
   // Stop asynchronous render and preload work before acknowledging teardown.
   // The host may remove the iframe immediately after the response.
@@ -3942,7 +4028,7 @@ connectTimeout = setTimeout(() => {
   }
 }, BRIDGE_CONNECT_TIMEOUT_MS);
 
-app.connect()
+bridgeReady = app.connect()
   .then(() => {
     clearConnectTimeout();
     console.log("[viewer] Connected");

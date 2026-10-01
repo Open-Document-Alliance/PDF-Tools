@@ -1609,3 +1609,17 @@ body {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+.host-file-banner {
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.host-file-banner span { flex: 1 1 220px; overflow-wrap: anywhere; }
+.host-file-banner button { flex: 0 0 auto; padding: 7px 10px; }
