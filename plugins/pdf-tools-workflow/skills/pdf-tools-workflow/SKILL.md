@@ -1,6 +1,6 @@
 ---
 name: pdf-tools-workflow
-description: Run bounded, evidence-first PDF work through a separately configured PDF Tools MCP connection. Use for inspecting, comparing, filling, stamping, organizing, preparing for signature, validating, or returning PDFs when the source must remain unchanged and every result must be independently read back. Do not use as evidence of full semantic or visual comparison, legal validity, cryptographic signing, OCR, zero egress, or host authorization.
+description: Read, compare, fill, stamp, organize, and prepare PDFs for signing with PDF Tools. Use for PDF edits and checks that preserve originals and return checked results or new copies. Requires a connected PDF Tools server.
 ---
 
 # PDF Tools workflow
