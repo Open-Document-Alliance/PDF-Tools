@@ -2,17 +2,24 @@
 
 ## Decision
 
-Ship one canonical Agent Skill as a workflow-only plugin, then keep each host's
-PDF Tools connection separate. The skill standardizes `inspect`, `compare`,
-`plan`, `authorize`, `transform`, `validate`, and `return` without claiming
-that one bundle installs or runs the PDF server everywhere.
+Ship one canonical Agent Skill through three distinct packaging routes. The
+standalone workflow-only plugin carries instructions without a server. The
+MCPB and share ZIP carry the same authored skill files beside the server. The
+server-bearing Agent Plugin bundles both instructions and an MCP connection.
+The skill standardizes `inspect`, `compare`, `plan`, `authorize`, `transform`,
+`validate`, and `return`; none of these packaging routes proves that every host
+installs, activates, or runs the workflow.
 
-The workflow plugin is separate from the MCP server and extension package. It
-does not change the MCP server, MCPB, package graph, PDF.js, or the published
-extension. Native-host and measured-agent evidence is versioned separately and
-must name the exact source and artifact it measured.
+`server/skill-files.js` defines the canonical `SKILL_FILES` inventory. A
+modern-era MCP connection exposes those files through the
+`io.modelcontextprotocol/skills` extension, including `skills/list`,
+`skills/get`, and `skill://` resource reads. Both desktop packagers stage those
+files, so a skill change changes the contents of a subsequently built MCPB or
+share ZIP. Native-host and measured-agent evidence is versioned separately and
+must name the exact source and artifact it measured. Serving the instructions
+does not establish that a host activates them.
 
-## Package shape
+## Standalone workflow-only package shape
 
 ```text
 plugins/pdf-tools-workflow/
@@ -23,17 +30,22 @@ plugins/pdf-tools-workflow/
     └── agents/openai.yaml
 ```
 
-Both host manifests point to `./skills/`. There is one `SKILL.md`, not two
-copies that can drift. The repository has:
+Both host manifests point to `./skills/`. There is one authored `SKILL.md`, not
+two independently maintained skills. The standalone workflow-only package has:
 
 - a Codex marketplace entry at `.agents/plugins/marketplace.json`;
 - a thin Anthropic marketplace entry at `.claude-plugin/marketplace.json`;
 - no bundled MCP configuration, server, app manifest, credential, or remote
   endpoint.
 
-Installing this plugin teaches an agent a workflow. It does not make PDF Tools
-available. Configure the existing local PDF Tools server or a future reviewed
-remote service separately for each host.
+Installing this standalone plugin teaches an agent a workflow. It does not make
+PDF Tools available. Configure the existing local PDF Tools server or a future
+reviewed remote service separately for each host.
+
+For the server-bearing Agent Plugin, `scripts/build-agent-plugin.mjs` copies
+the canonical skill into the bundle's `skills/` directory and writes `mcp.json`
+alongside it. That route does not require a separately installed PDF Tools
+server. See `docs/agent-plugins-packaging.md` for its launch and folder policy.
 
 ## Shared contract
 

@@ -3,6 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { describe, expect, it } from "vitest";
 import { TOOL_OUTPUT_SCHEMAS } from "../server/output-schemas.js";
+import { SKILL_FILES, SKILLS_EXTENSION } from "../server/skill-files.js";
 import {
   DISPLAY_NAME_CANDIDATES,
   computeToolIdentifierBudget,
@@ -137,6 +138,41 @@ function findPdfParseClaimViolations(units) {
 }
 
 describe("documentation capability claims", () => {
+  it("distinguishes standalone workflow instructions from server-bearing packages", async () => {
+    for (const relativePath of [
+      "docs/AGENT_HOST_WORKFLOWS.md",
+      "docs/agent-plugins-packaging.md",
+    ]) {
+      const contents = (await readRepositoryFile(relativePath)).replace(/\s+/g, " ");
+      expect(contents, relativePath).toContain(SKILLS_EXTENSION);
+      expect(contents, relativePath).toContain("server/skill-files.js");
+      expect(contents, relativePath).toContain("SKILL_FILES");
+      expect(contents, relativePath).toContain("MCPB and share ZIP");
+      expect(contents, relativePath).toContain("standalone workflow-only");
+      expect(contents, relativePath).toContain("server-bearing Agent Plugin");
+      expect(contents, relativePath).not.toContain("server ships separately from the skill in every one");
+      expect(contents, relativePath).not.toContain("workflow plugin is separate from the MCP server and extension package");
+    }
+  });
+
+  it("binds the documented bundled skill to authored, mirrored, and staged files", async () => {
+    for (const relativePath of SKILL_FILES) {
+      expect(await readRepositoryFile(`pdf-toolkit-mcp-share/${relativePath}`)).toBe(
+        await readRepositoryFile(relativePath),
+      );
+    }
+    const mcpb = await readRepositoryFile("scripts/build-mcpb.mjs");
+    expect(mcpb).toContain('import { SKILL_FILES } from "../server/skill-files.js"');
+    expect(mcpb).toContain("for (const filename of SKILL_FILES) copyRegularFile");
+    const share = await readRepositoryFile("package-for-friend.js");
+    expect(share).toContain('import { SKILL_FILES } from "./server/skill-files.js"');
+    expect(share).toContain("...SKILL_FILES");
+    const server = await readRepositoryFile("server/index.js");
+    expect(server).toContain("[SKILLS_EXTENSION]");
+    expect(server).toContain('setRequestHandler("skills/list"');
+    expect(server).toContain('setRequestHandler("skills/get"');
+  });
+
   it("does not advertise absent PDF or OCR dependencies on current product surfaces", async () => {
     const violations = [];
 
