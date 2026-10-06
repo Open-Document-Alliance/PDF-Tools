@@ -35,4 +35,16 @@ describe("hosted forms submission profile", () => {
     expect(read("scripts/build-agent-plugin.mjs")).toMatch(/type: "stdio"/);
     expect(read("scripts/build-hosted-forms-plugin.mjs")).not.toMatch(/prepareCleanStage|node_modules|build-mcpb/);
   });
+  it("prepares exactly five positive and three negative prompts without claiming a host run", () => {
+    const cases = JSON.parse(read("plugins/pdf-forms/review-cases.json"));
+    expect(cases.positive).toHaveLength(5);
+    expect(cases.negative).toHaveLength(3);
+    for (const row of [...cases.positive, ...cases.negative]) {
+      expect(row.description).toBeTruthy();
+      expect(row.prompt).toBeTruthy();
+      expect(typeof row.tools_triggered).toBe("string");
+      expect(row.expected_behavior).toBeTruthy();
+    }
+    expect(read("docs/OPENAI_HOSTED_FORMS.md")).toMatch(/not native host acceptance/);
+  });
 });
