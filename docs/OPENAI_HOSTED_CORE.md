@@ -54,10 +54,17 @@ review are distinct evidence. Do not upload this candidate while production
 still exposes only the previous five-tool surface. No public claim or comparison
 with other extraction products follows from these adapter tests.
 
-The inherited public-service network and parser containment limits also need
-to remain explicit. The layout's 20-second deadline is cooperative, not an
-isolated hard CPU termination boundary. Host native file support and sandbox
-download behavior must be measured, not assumed from metadata.
+Hosted downloads pin their connection to the admitted DNS result. A single
+15-second budget covers DNS through the complete body, across redirects and
+merge inputs. Public HTTP tool calls use a fresh worker with a 45-second
+parent-enforced termination deadline and two-worker per-instance limit, without
+queuing documents. Worker V8 heap limits do not cap external buffers or make an
+OS security sandbox. The layout's 20-second deadline remains cooperative inside
+that worker. MCP request cancellation also terminates the worker; an uncertain
+termination conservatively holds capacity. Local worker termination is not
+deployed-worker packaging proof.
+Host native file support and sandbox download behavior must also be measured,
+not assumed from metadata.
 
 October 6 candidate checks passed 199 focused and adjoining tests on Silverbook
 with Node 22.23.2 and one Vitest worker. Independent source review found and

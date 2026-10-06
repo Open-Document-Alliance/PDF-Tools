@@ -1,13 +1,15 @@
 # Deploying the remote stateless MCP endpoint
 
 Target: `https://mcp.opendocuments.ai/mcp`, on Open Document Alliance's Vercel
-account. Nothing here is deployed yet.
+account. The existing production service exposes the original five tools.
+The October 6 twelve-tool candidate is separate source preparation and must
+pass preview runtime and native host checks before promotion or submission.
 
 ## Before deploying
 
 The six gates in [`../docs/REMOTE_STATELESS_PROFILE_2026-09-19.md`](../docs/REMOTE_STATELESS_PROFILE_2026-09-19.md)
-come first. Gate 1 is met: `test/remote-stateless-profile.test.js` binds every
-property and threat, 35 tests. Gates 2 through 6 are about this deployment:
+come first. The focused tests bind the source contract, but gates 2 through 6
+remain about the exact deployed artifact:
 proven refusals against the live endpoint, a log audit, caps enforced before
 allocation, documentation that matches, and a reproducible deploy.
 
@@ -15,20 +17,21 @@ allocation, documentation that matches, and a reproducible deploy.
 
 | File | Role |
 |---|---|
-| `server.mjs` | The five tools, over the byte-level primitives in `server/helpers.js` |
-| `fetch-guard.mjs` | URL fetching with private-range refusal, redirect re-checks, size cap |
+| `server.mjs`, `document-tools.mjs` | Twelve tools over existing byte/extraction engines |
+| `fetch-guard.mjs` | Pinned public connection, redirect/whole-body deadline, size cap |
+| `isolated-tool.mjs`, `tool-worker.mjs` | Per-call worker, parent deadline and concurrency admission |
 | `http.mjs` | `fetch(Request) => Response` handler, one server per request |
-| `vercel/api/mcp.js` | Vercel function that calls that handler |
+| `../api/mcp.js` | Vercel function that calls that handler |
 
 ## Deploy
 
-1. Accept the invitation to the ODA Vercel account.
-2. Create a project from this repository. Root directory `remote/vercel`,
-   framework preset "Other", no build step.
-3. The function needs the repository's `server/` and `remote/` directories, so
-   set the project's included files to the repository root rather than the
-   function directory alone.
-4. Deploy, and confirm the preview URL answers an `initialize` call:
+1. Reuse ODA's existing `pdf-tools-remote` project. Verify the team, project,
+   source commit and clean source; do not create an unrelated hosted service.
+2. Root directory is the repository root, framework "Other", no build step.
+3. Keep the explicit `vercel.json` includes for remote worker/shared engine
+   files and native canvas/PDF.js assets. Inspect the deployed artifact and
+   exercise actual worker dispatch, not just `tools/list`.
+4. Create a preview without promoting production, then verify `initialize`:
 
    ```
    curl -s -X POST <preview>/api/mcp \
@@ -37,12 +40,13 @@ allocation, documentation that matches, and a reproducible deploy.
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
    ```
 
-5. Add the domain `mcp.opendocuments.ai` in Vercel, and ask ODA to add the CNAME
-   Vercel shows. Route `/mcp` to the function so the endpoint reads
+5. Preserve the existing domain `mcp.opendocuments.ai` and its routing. A
+   production promotion is a separate milestone. Route `/mcp` to the function:
    `https://mcp.opendocuments.ai/mcp` rather than `/api/mcp`.
-6. Run `node remote/smoke.mjs` with `MCP_URL` pointing at the deployed endpoint.
-   It fetches the live IRS W-9, fills it, finds the signature zone, signs, and
-   exercises every refusal.
+6. Qualify the preview with conspicuously synthetic PDFs, readback of returned
+   bytes, source/coverage checks and content-free refusals. Prefer synthetic
+   forms and page operations without performing a signature. The historical
+   `remote/smoke.mjs` stamp flow is not authority to create signing intent.
 
 ## After deploying, before submitting
 
@@ -73,8 +77,9 @@ allocation, documentation that matches, and a reproducible deploy.
 
 - No environment variables. The service has no secrets, because it has no
   accounts and no storage.
-- Memory: about 150 MB per document, comfortably inside the default function
-  size. Time: 1 to 3 seconds for a typical form, so the 60 second maximum is
-  generous headroom rather than a target.
+- The worker's 45-second parent deadline is below the configured 60-second
+  invocation cap. V8 heap limits are not a total-memory cap or OS sandbox.
+  Platform packaging, worker resolution and resource behavior need deployed
+  evidence; a source-level cap is not proof of hosting capacity.
 - Moving to other infrastructure later is a redeploy plus a DNS change, since
   nothing is stored and there is no state to migrate.

@@ -3,6 +3,15 @@ import { PDFBool, PDFDocument, PDFName, StandardFonts } from "pdf-lib";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { callTool, listTools, testing } from "../remote/server.mjs";
 
+// Exercise the real resolver/policy without egress. Production uses the
+// pinned Node transport, separately exercised by remote-fetch-guard tests.
+vi.mock("../remote/fetch-guard.mjs", async importOriginal => {
+  const original = await importOriginal();
+  return { ...original, fetchPdfBytes: (url, options = {}) => original.fetchPdfBytes(url, {
+    ...options, fetchImpl: (...args) => globalThis.fetch(...args),
+  }) };
+});
+
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 let bytes;
 let base64;

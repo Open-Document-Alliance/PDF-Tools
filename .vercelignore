@@ -11,3 +11,10 @@ _includes/
 *.mcpb
 *.zip
 example-fw9.pdf
+.env*
+.beads/
+.agents/
+.codex/
+.claude/
+.pdf-operator/
+.github/

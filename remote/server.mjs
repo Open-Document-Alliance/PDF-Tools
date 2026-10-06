@@ -77,7 +77,7 @@ class ToolRefusal extends Error {
 }
 
 /** Resolve either input form to bytes. Nothing here touches a filesystem. */
-async function resolveBytes({ file, pdf_url, pdf_base64 }) {
+async function resolveBytes({ file, pdf_url, pdf_base64 }, fetchOptions = {}) {
   if ([file, pdf_url, pdf_base64].filter(value => value !== undefined).length > 1) {
     throw new ToolRefusal("AMBIGUOUS_INPUT", "Supply exactly one of file, pdf_url or pdf_base64, never more than one.");
   }
@@ -95,9 +95,9 @@ async function resolveBytes({ file, pdf_url, pdf_base64 }) {
     if (url?.protocol !== "https:" || url.username || url.password) {
       throw new ToolRefusal("INVALID_FILE", "The attachment must use an HTTPS download URL without embedded credentials.");
     }
-    return fetchPdfBytes(file.download_url);
+    return fetchPdfBytes(file.download_url, fetchOptions);
   }
-  if (pdf_url) return fetchPdfBytes(pdf_url);
+  if (pdf_url) return fetchPdfBytes(pdf_url, fetchOptions);
   if (pdf_base64) {
     if (typeof pdf_base64 !== "string" || pdf_base64.length > 4 * Math.ceil(MAX_INLINE_PDF_BYTES / 3)) {
       throw new ToolRefusal("TOO_LARGE_INLINE", "Inline PDF data exceeds the 3 MB limit. Use file or pdf_url for inputs up to 25 MB, or local PDF Tools: https://github.com/Open-Document-Alliance/PDF-Tools.");
@@ -435,7 +435,7 @@ export function listTools() {
   };
 }
 
-export function createRemoteServer() {
+export function createRemoteServer({ dispatchTool = callTool } = {}) {
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {}, resources: {} }, instructions: INSTRUCTIONS },
@@ -443,8 +443,8 @@ export function createRemoteServer() {
 
   server.setRequestHandler("tools/list", async () => listTools());
 
-  server.setRequestHandler("tools/call", async (request) =>
-    callTool(request.params?.name, request.params?.arguments ?? {}));
+  server.setRequestHandler("tools/call", async (request, extra) =>
+    dispatchTool(request.params?.name, request.params?.arguments ?? {}, { signal: extra?.signal }));
   server.setRequestHandler("resources/list", async () => ({ resources: [{ uri: OUTPUT_RESOURCE_URI, name: "PDF Tools output", mimeType: "text/html;profile=mcp-app" }] }));
   server.setRequestHandler("resources/read", async request => {
     if (request.params?.uri !== OUTPUT_RESOURCE_URI) throw new Error("Unknown UI resource");

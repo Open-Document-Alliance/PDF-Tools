@@ -204,7 +204,7 @@ describe("T1: the URL fetcher cannot be aimed at private networks", () => {
       if (hops > 1) throw new Error("the guard followed a redirect it should have refused");
       return new Response(null, { status: 302, headers: { location: "http://169.254.169.254/" } });
     };
-    await expect(fetchPdfBytes("https://example.com/a.pdf", { fetchImpl })).rejects.toMatchObject({
+    await expect(fetchPdfBytes("https://8.8.8.8/a.pdf", { fetchImpl })).rejects.toMatchObject({
       code: "PRIVATE_ADDRESS",
     });
     expect(hops).toBe(1);
@@ -212,8 +212,8 @@ describe("T1: the URL fetcher cannot be aimed at private networks", () => {
 
   it("stops after the redirect limit", async () => {
     const fetchImpl = async () =>
-      new Response(null, { status: 302, headers: { location: "https://example.com/next" } });
-    await expect(fetchPdfBytes("https://example.com/a.pdf", { fetchImpl })).rejects.toMatchObject({
+      new Response(null, { status: 302, headers: { location: "https://8.8.8.8/next" } });
+    await expect(fetchPdfBytes("https://8.8.8.8/a.pdf", { fetchImpl })).rejects.toMatchObject({
       code: "TOO_MANY_REDIRECTS",
     });
   });
@@ -224,7 +224,7 @@ describe("T1: the URL fetcher cannot be aimed at private networks", () => {
         status: 200,
         headers: { "content-type": "text/html" },
       });
-    await expect(fetchPdfBytes("https://example.com/a.pdf", { fetchImpl })).rejects.toMatchObject({
+    await expect(fetchPdfBytes("https://8.8.8.8/a.pdf", { fetchImpl })).rejects.toMatchObject({
       code: "NOT_A_PDF",
     });
   });
@@ -234,7 +234,7 @@ describe("T1: the URL fetcher cannot be aimed at private networks", () => {
     oversized.set([0x25, 0x50, 0x44, 0x46]);
     const fetchImpl = async () =>
       new Response(oversized, { status: 200, headers: { "content-length": "10" } });
-    await expect(fetchPdfBytes("https://example.com/a.pdf", { fetchImpl })).rejects.toMatchObject({
+    await expect(fetchPdfBytes("https://8.8.8.8/a.pdf", { fetchImpl })).rejects.toMatchObject({
       code: "TOO_LARGE",
     });
   });

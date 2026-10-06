@@ -76,13 +76,24 @@ Removing storage removes most of July's threat model and introduces these:
 **T1. Server-side request forgery.** `fetch_pdf_from_url` becomes a URL fetcher
 that anyone on the internet can aim. It must refuse non-HTTP(S) schemes, refuse
 private, loopback, link-local, multicast and unique-local address ranges after
-DNS resolution, re-check after every redirect, cap redirects, and never return
-response bodies for non-PDF content types.
+DNS resolution, pin each connection to that approved address while preserving
+Host/TLS hostname, re-check every redirect, and cap redirects. One 15-second
+budget covers DNS, headers, redirects and the complete body; merge inputs share
+that download budget. Embedded URL credentials and mapped/special address
+forms are refused. No response is returned unless its bytes have a PDF header.
 
-**T2. Hostile documents.** Parsers are the attack surface. Caps from P5, plus
-the existing subprocess boundary for pdf-lib and PDF.js work, plus a hard
-refusal of encrypted documents in this profile, since password handling implies
-a secret we promised not to take.
+**T2. Hostile documents.** Parsers are the attack surface. Hosted HTTP tool calls
+run in a fresh worker thread, including downloads and PDF parsing, with a
+45-second parent-enforced termination deadline and at most two active workers
+per service instance, without a waiting document queue. V8 worker heap limits
+are 256 MB old/32 MB young generation; these are not total-process or external
+buffer memory limits. This is a wall-clock/heap containment boundary, not an OS
+security sandbox. The layout's 20-second deadline is cooperative inside it.
+Direct `callTool` is the internal in-process adapter used by unit tests; public
+HTTP uses `callToolIsolated`. The configured Vercel invocation maximum is 60
+seconds; deployed worker packaging and termination still require verification.
+Caps from P5 remain, and encrypted documents are refused since password
+handling implies a secret we promised not to take.
 
 **T3. Free compute.** An unauthenticated endpoint is a public CPU. Per-IP rate
 limits at the edge, small caps, fast failure, and a documented fair-use note.

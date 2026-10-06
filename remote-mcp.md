@@ -86,7 +86,9 @@ extension handles encrypted files on your own machine.
 | Document fetched from a URL | 25 MB |
 | Document sent inline (`pdf_base64`) | 3 MB |
 | Maximum pages | 200 |
-| Fetch timeout | 15 seconds |
+| Download deadline | 15 seconds across DNS, headers, redirects and body; shared across merge inputs |
+| Hosted operation deadline | 45 seconds, parent terminates the per-call worker |
+| Hosted concurrency | 2 active workers per service instance, no waiting document queue |
 | Redirects followed | 3 |
 
 The two document limits differ because they are set by different things. A

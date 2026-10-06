@@ -4,6 +4,7 @@ import { PDFDocument, degrees } from "pdf-lib";
 import { detectXfaFormInDocument, detectExistingSignatures } from "../server/helpers.js";
 import { extractPdfLayoutForMarkdown } from "../server/layout-extraction.js";
 import { renderPdfLayoutToMarkdown } from "../server/markdown-conversion.js";
+import { createFetchBudget } from "./fetch-guard.mjs";
 
 export const MAX_READ_PAGES = 10;
 export const MAX_RETURNED_TEXT_BYTES = 50_000;
@@ -33,8 +34,8 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
     }
     return [start, end];
   }
-  async function input(args) {
-    const bytes = await resolveBytes(args);
+  async function input(args, fetchOptions) {
+    const bytes = await resolveBytes(args, fetchOptions);
     const document = await loadDocument(bytes);
     return { bytes, document, source: { sha256: sha256(bytes), size_bytes: bytes.length, page_count: document.getPageCount() } };
   }
@@ -162,15 +163,20 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
         const combined = await PDFDocument.create();
         const sources = [];
         let bytes = 0;
-        for (const file of args.files) {
-          const admitted = await input({ file });
-          bytes += admitted.source.size_bytes;
-          if (bytes > MAX_MERGE_BYTES || combined.getPageCount() + admitted.source.page_count > MAX_PAGES) fail("MERGE_LIMIT", "Combined input exceeds 25 MB or 200 pages.");
-          mutationAllowed(admitted.document);
-          for (const page of await combined.copyPages(admitted.document, admitted.document.getPageIndices())) combined.addPage(page);
-          sources.push(admitted.source);
+        const budget = createFetchBudget();
+        try {
+          for (const file of args.files) {
+            const admitted = await input({ file }, { budget });
+            bytes += admitted.source.size_bytes;
+            if (bytes > MAX_MERGE_BYTES || combined.getPageCount() + admitted.source.page_count > MAX_PAGES) fail("MERGE_LIMIT", "Combined input exceeds 25 MB or 200 pages.");
+            mutationAllowed(admitted.document);
+            for (const page of await combined.copyPages(admitted.document, admitted.document.getPageIndices())) combined.addPage(page);
+            sources.push(admitted.source);
+          }
+          return output(combined, sources, { limitations: ["Copies page content, not the source documents' form structures, bookmarks or document metadata."] });
+        } finally {
+          budget.close();
         }
-        return output(combined, sources, { limitations: ["Copies page content, not the source documents' form structures, bookmarks or document metadata."] });
       },
     },
   ];
