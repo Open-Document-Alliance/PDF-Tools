@@ -46,5 +46,14 @@ describe("hosted forms submission profile", () => {
       expect(row.expected_behavior).toBeTruthy();
     }
     expect(read("docs/OPENAI_HOSTED_FORMS.md")).toMatch(/not native host acceptance/);
+    expect(cases.positive[0].description).toMatch(/supplied privately/);
+    expect(cases.positive[0].description).not.toMatch(/included in the package/);
+  });
+  it("qualifies returned page content rather than audit metadata alone", () => {
+    const qualifier = read("scripts/qualify-hosted-forms.mjs");
+    expect(qualifier).toMatch(/mkdir\(path.dirname\(output\), \{ recursive: true/);
+    expect(qualifier).toMatch(/await pageText\(stampedBytes\)/);
+    expect(qualifier).toMatch(/await pageText\(flatBytes\)/);
+    expect(qualifier).toMatch(/assert.equal\(pdf.numPages, 1/);
   });
 });

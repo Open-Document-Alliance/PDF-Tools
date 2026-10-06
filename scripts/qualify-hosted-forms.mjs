@@ -5,9 +5,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 const endpoint = "https://mcp.opendocuments.ai/mcp";
 const output = path.resolve(process.argv[2] || "dist-plugin/hosted-forms-qualification");
+await mkdir(path.dirname(output), { recursive: true, mode: 0o700 });
 await mkdir(output, { mode: 0o700 });
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const startedAt = new Date().toISOString();
@@ -31,6 +33,15 @@ async function call(name, args, expectedError = false) {
   assert.equal(result.isError === true, expectedError, `${name}: ${JSON.stringify(result.content)}`);
   observations.push({ tool: name, started_at: start, completed_at: new Date().toISOString(), is_error: result.isError === true, response_sha256: digest(JSON.stringify(result)), text: (result.content || []).filter(c => c.type === "text").map(c => c.text).join("\n") });
   return result;
+}
+async function pageText(bytes) {
+  const pdf = await getDocument({ data: new Uint8Array(bytes), useSystemFonts: true, disableFontFace: true }).promise;
+  try {
+    assert.equal(pdf.numPages, 1, "Output page count must be preserved");
+    return (await (await pdf.getPage(1)).getTextContent()).items.map(item => item.str || "").join(" ");
+  } finally {
+    await pdf.destroy();
+  }
 }
 const document = await PDFDocument.create();
 const page = document.addPage([612, 792]);
@@ -76,11 +87,16 @@ assert.match(stamped.content[0].text, /not a cryptographic signature/);
 const stampedBytes = Buffer.from(stamped.structuredContent.pdf_base64, "base64");
 const stampedPdf = await PDFDocument.load(stampedBytes);
 assert.match(stampedPdf.getKeywords(), /AUTOMATED SYNTHETIC TEST ONLY/);
+assert.match(await pageText(stampedBytes), /SYNTHETIC TEST ONLY/, "The stamp must be present in actual page content, not only metadata");
 await writeFile(path.join(output, "stamped-test-form.pdf"), stampedBytes, { mode: 0o600, flag: "wx" });
 cases.push({ name: "synthetic_visible_stamp", passed: true, real_human_signature: false });
 const flat = await call("flatten_form", { pdf_base64: filled.structuredContent.pdf_base64 });
 const flatBytes = Buffer.from(flat.structuredContent.pdf_base64, "base64");
 assert.equal((await PDFDocument.load(flatBytes)).getForm().getFields().length, 0);
+const flatText = await pageText(flatBytes);
+assert.match(flatText, /Synthetic Example/);
+assert.match(flatText, /Example, Test Only/);
+assert.match(flatText, /PDF FORMS SYNTHETIC TEST/);
 await writeFile(path.join(output, "flattened-form.pdf"), flatBytes, { mode: 0o600, flag: "wx" });
 cases.push({ name: "flatten_and_independent_readback", passed: true });
 const absent = await call("read_form_fields", {}, true);
