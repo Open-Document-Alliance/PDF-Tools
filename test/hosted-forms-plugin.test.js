@@ -1,0 +1,38 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const read = (file) => readFileSync(path.join(root, file), "utf8");
+const manifest = JSON.parse(read("plugins/pdf-forms/plugin.json"));
+const config = JSON.parse(read("plugins/pdf-forms/mcp.json"));
+const skill = read("plugins/pdf-forms/skills/pdf-forms/SKILL.md");
+
+describe("hosted forms submission profile", () => {
+  it("declares exactly the existing production HTTPS endpoint without a command", () => {
+    expect(config.mcpServers).toEqual({ "pdf-forms": { type: "streamable-http", url: "https://mcp.opendocuments.ai/mcp" } });
+    expect(JSON.stringify(config)).not.toMatch(/command|stdio|PLUGIN_ROOT|localhost/);
+  });
+  it("is a distinct package with bounded human-facing metadata", () => {
+    expect(manifest.name).toBe("pdf-forms");
+    const ui = manifest.extensions["com.openai"].interface;
+    expect(ui.displayName.length).toBeLessThanOrEqual(30);
+    expect(ui.shortDescription.length).toBeLessThanOrEqual(30);
+    expect(ui.longDescription).toMatch(/processed on a server|hosted PDF Tools service/);
+    expect(ui.longDescription).toMatch(/does not provide the desktop viewer/);
+    expect(ui.longDescription).toMatch(/3 MB/);
+    expect(ui.longDescription).toMatch(/not a cryptographic signature/);
+  });
+  it("does not import the local workflow or fabricate review acceptance", () => {
+    expect(manifest.extensions["com.openai"].review).toBeUndefined();
+    expect(manifest.extensions["com.openai"].onboardingSkill).toBe("./skills/pdf-forms/SKILL.md");
+    expect(skill).toMatch(/Never invent either required field/);
+    expect(skill).toMatch(/never both/);
+    expect(skill).toMatch(/output handoff is unsupported/);
+  });
+  it("keeps the full local package unchanged", () => {
+    expect(read("scripts/build-agent-plugin.mjs")).toMatch(/type: "stdio"/);
+    expect(read("scripts/build-hosted-forms-plugin.mjs")).not.toMatch(/prepareCleanStage|node_modules|build-mcpb/);
+  });
+});

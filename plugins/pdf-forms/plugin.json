@@ -1,0 +1,32 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "pdf-forms",
+  "version": "0.1.0",
+  "description": "Inspect and fill PDF forms, find signature locations, add a visible signature stamp with your confirmation, and flatten the result. Documents are processed on a server for each request, not stored by PDF Tools.",
+  "author": { "name": "Open Document Alliance", "url": "https://www.opendocuments.ai" },
+  "homepage": "https://github.com/Open-Document-Alliance/PDF-Tools/blob/master/remote-mcp.md",
+  "repository": "https://github.com/Open-Document-Alliance/PDF-Tools",
+  "license": "MIT",
+  "keywords": ["pdf", "forms", "paperwork"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "PDF Forms",
+        "shortDescription": "Fill and prepare PDF forms",
+        "longDescription": "Inspect fillable PDF fields, fill them with information you provide, find signature locations, add a visible typed signature stamp with your explicit confirmation, and flatten a finished form. PDF Forms uses Open Document Alliance's hosted PDF Tools service. Each request supplies its own PDF by HTTPS URL or inline PDF data; PDF Tools does not store documents. Your assistant host's data terms still apply. Inline PDFs are limited to 3 MB, PDFs fetched by URL to 25 MB, and documents to 200 pages. Returned PDFs are inline data and are also subject to host transfer limits. Encrypted PDFs are refused. A visible stamp is not a cryptographic signature. This hosted edition does not provide the desktop viewer, local folder access, verified extraction workspace, saved profiles, or Lumin signing. It does not establish that a form is complete or ready to submit.",
+        "developerName": "Open Document Alliance",
+        "category": "Productivity",
+        "capabilities": ["PDF forms", "Visible signature stamps"],
+        "websiteURL": "https://github.com/Open-Document-Alliance/PDF-Tools/blob/master/remote-mcp.md",
+        "supportURL": "https://github.com/Open-Document-Alliance/PDF-Tools/issues",
+        "privacyPolicyURL": "https://www.opendocuments.ai/privacy-policy",
+        "termsOfServiceURL": "https://www.opendocuments.ai/terms-of-service",
+        "logo": "./assets/pdf-tools.png",
+        "composerIcon": "./assets/pdf-tools.png",
+        "defaultPrompt": ["List the fillable fields in this PDF.", "Fill this PDF form with the values I provide.", "Find the signature locations in this PDF."]
+      },
+      "onboardingSkill": "./skills/pdf-forms/SKILL.md",
+      "publication": { "release_notes": "First hosted PDF Forms package. Connects to the existing five-tool PDF Tools HTTPS endpoint. The full local PDF Tools plugin remains separate." }
+    }
+  }
+}
