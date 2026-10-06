@@ -29,6 +29,12 @@ filesystem, such as a hosted assistant working from a link or an attachment.
 
 ## Tools
 
+The deployed five-tool surface below remains the measured production version.
+A broader hosted PDF Tools source candidate adds attachment-aware reading,
+search, Markdown conversion and page selection, rotation and merging. It is
+not yet production or native ChatGPT acceptance; see
+[the hosted-core qualification record](docs/OPENAI_HOSTED_CORE.md).
+
 | Tool | What it does |
 |---|---|
 | `read_form_fields` | Lists form fields with names, types and current values |
@@ -80,7 +86,9 @@ extension handles encrypted files on your own machine.
 | Document fetched from a URL | 25 MB |
 | Document sent inline (`pdf_base64`) | 3 MB |
 | Maximum pages | 200 |
-| Fetch timeout | 15 seconds |
+| Download deadline | 15 seconds across DNS, headers, redirects and body; shared across merge inputs |
+| Hosted operation deadline | 45 seconds, parent terminates the per-call worker |
+| Hosted concurrency | 2 active workers per service instance, no waiting document queue |
 | Redirects followed | 3 |
 
 The two document limits differ because they are set by different things. A

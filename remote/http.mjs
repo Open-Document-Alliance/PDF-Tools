@@ -14,11 +14,12 @@ import { Readable } from "node:stream";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 
 import { createRemoteServer } from "./server.mjs";
+import { callToolIsolated } from "./isolated-tool.mjs";
 
 export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a third
 
 /** Errors are reported without request content, per property P4 of the profile. */
-const handler = createMcpHandler(() => createRemoteServer(), {
+const handler = createMcpHandler(() => createRemoteServer({ dispatchTool: callToolIsolated }), {
   onerror: (error) => process.stderr.write(`mcp error: ${error?.name ?? "Error"}\n`),
 });
 

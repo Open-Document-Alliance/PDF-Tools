@@ -7,11 +7,11 @@
   "functions": {
     "api/mcp.js": {
       "maxDuration": 60,
-      "includeFiles": "node_modules/{@napi-rs/canvas*,pdfjs-dist}/**"
+      "includeFiles": "{remote/**,server/**,node_modules/{@napi-rs/canvas*,pdfjs-dist}/**}"
     },
     "api/mcp-connect.js": {
       "maxDuration": 60,
-      "includeFiles": "node_modules/{@napi-rs/canvas*,pdfjs-dist}/**"
+      "includeFiles": "{remote/**,server/**,node_modules/{@napi-rs/canvas*,pdfjs-dist}/**}"
     },
     "api/connect-key.js": {
       "maxDuration": 10

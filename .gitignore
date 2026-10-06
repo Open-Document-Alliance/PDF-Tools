@@ -52,3 +52,4 @@ pdf-toolkit-mcp.zip
 windows-render-probe.json
 dist-plugin/
 .vercel
+.env*

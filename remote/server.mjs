@@ -11,6 +11,7 @@
 
 import { Server } from "@modelcontextprotocol/server";
 import { PDFDocument } from "pdf-lib";
+import { createHash } from "node:crypto";
 
 import {
   assertParsedXfaMutationAllowed,
@@ -22,9 +23,11 @@ import {
   validateSigningIntent,
 } from "../server/helpers.js";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES } from "./fetch-guard.mjs";
+import { createDocumentTools } from "./document-tools.mjs";
+import { OUTPUT_RESOURCE_URI, OUTPUT_TOOL_NAMES, outputResource } from "./output-card.mjs";
 
 export const SERVER_NAME = "pdf-tools-remote";
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = "0.2.0";
 export const MAX_PAGES = 200;
 
 /**
@@ -44,6 +47,18 @@ export const MAX_PAGES = 200;
 export const MAX_INLINE_PDF_BYTES = 3 * 1024 * 1024;
 
 const PDF_INPUT_PROPERTIES = {
+  file: {
+    type: "object",
+    description: "A PDF attachment explicitly supplied by the host. Its temporary download URL is fetched for this request only.",
+    properties: {
+      download_url: { type: "string" },
+      file_id: { type: "string" },
+      mime_type: { type: "string" },
+      file_name: { type: "string" },
+    },
+    required: ["download_url", "file_id"],
+    additionalProperties: false,
+  },
   pdf_url: {
     type: "string",
     description: "HTTPS URL of the PDF, which this service fetches itself. Prefer this: it accepts documents up to 25 MB, where an inline document is limited to 3 MB.",
@@ -62,13 +77,38 @@ class ToolRefusal extends Error {
 }
 
 /** Resolve either input form to bytes. Nothing here touches a filesystem. */
-async function resolveBytes({ pdf_url, pdf_base64 }) {
-  if (pdf_url && pdf_base64) {
-    throw new ToolRefusal("AMBIGUOUS_INPUT", "Supply either pdf_url or pdf_base64, not both.");
+async function resolveBytes({ file, pdf_url, pdf_base64 }, fetchOptions = {}) {
+  if ([file, pdf_url, pdf_base64].filter(value => value !== undefined).length > 1) {
+    throw new ToolRefusal("AMBIGUOUS_INPUT", "Supply exactly one of file, pdf_url or pdf_base64, never more than one.");
   }
-  if (pdf_url) return fetchPdfBytes(pdf_url);
+  if (file !== undefined) {
+    if (!file || typeof file !== "object" || Array.isArray(file)
+      || Object.keys(file).some(key => !["download_url", "file_id", "mime_type", "file_name"].includes(key))
+      || typeof file.file_id !== "string" || !file.file_id || file.file_id.length > 512
+      || typeof file.download_url !== "string" || file.download_url.length > 8192
+      || (file.mime_type !== undefined && file.mime_type !== "application/pdf")
+      || (file.file_name !== undefined && (typeof file.file_name !== "string" || !file.file_name.toLowerCase().endsWith(".pdf")))) {
+      throw new ToolRefusal("INVALID_FILE", "An explicit PDF attachment with file_id and HTTPS download_url is required.");
+    }
+    let url;
+    try { url = new URL(file.download_url); } catch { /* rejected below */ }
+    if (url?.protocol !== "https:" || url.username || url.password) {
+      throw new ToolRefusal("INVALID_FILE", "The attachment must use an HTTPS download URL without embedded credentials.");
+    }
+    return fetchPdfBytes(file.download_url, fetchOptions);
+  }
+  if (pdf_url) return fetchPdfBytes(pdf_url, fetchOptions);
   if (pdf_base64) {
+    if (typeof pdf_base64 !== "string" || pdf_base64.length > 4 * Math.ceil(MAX_INLINE_PDF_BYTES / 3)) {
+      throw new ToolRefusal("TOO_LARGE_INLINE", "Inline PDF data exceeds the 3 MB limit. Use file or pdf_url for inputs up to 25 MB, or local PDF Tools: https://github.com/Open-Document-Alliance/PDF-Tools.");
+    }
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(pdf_base64)) {
+      throw new ToolRefusal("INVALID_BASE64", "PDF data must be canonical base64.");
+    }
     const bytes = new Uint8Array(Buffer.from(pdf_base64, "base64"));
+    if (Buffer.from(bytes).toString("base64") !== pdf_base64) {
+      throw new ToolRefusal("INVALID_BASE64", "PDF data must be canonical base64.");
+    }
     if (bytes.length === 0) throw new ToolRefusal("EMPTY_INPUT", "That base64 value did not decode to any bytes.");
     if (bytes.length > MAX_INLINE_PDF_BYTES) {
       throw new ToolRefusal(
@@ -83,7 +123,7 @@ async function resolveBytes({ pdf_url, pdf_base64 }) {
     }
     return bytes;
   }
-  throw new ToolRefusal("MISSING_INPUT", "Supply pdf_url or pdf_base64.");
+  throw new ToolRefusal("MISSING_INPUT", "Supply file, pdf_url or pdf_base64.");
 }
 
 /**
@@ -109,6 +149,12 @@ async function loadDocument(bytes) {
     throw new ToolRefusal("TOO_MANY_PAGES", `That document has ${pages} pages, above the ${MAX_PAGES} page limit.`);
   }
   return document;
+}
+
+function refuseSignatureFields(document) {
+  if (detectExistingSignatures(document).present) {
+    throw new ToolRefusal("ALREADY_SIGNED", "That PDF has a detected signature field. Saving could invalidate a signature; use a local review workflow.");
+  }
 }
 
 function ok(text, structured) {
@@ -172,6 +218,7 @@ const TOOLS = [
       const bytes = await resolveBytes(input);
       const document = await loadDocument(bytes);
       const xfaNotice = assertParsedXfaMutationAllowed(document);
+      refuseSignatureFields(document);
       const form = document.getForm();
       const filled = [];
       const notFilled = [];
@@ -276,12 +323,7 @@ const TOOLS = [
       const bytes = await resolveBytes(input);
       const document = await loadDocument(bytes);
       const xfaNotice = assertParsedXfaMutationAllowed(document);
-      if (detectExistingSignatures(document)?.length) {
-        throw new ToolRefusal(
-          "ALREADY_SIGNED",
-          "That PDF already carries a cryptographic signature, and saving would invalidate it.",
-        );
-      }
+      refuseSignatureFields(document);
       const auditLine = formatSigningAuditLine({
         display_name,
         statement: intent.statement,
@@ -312,6 +354,7 @@ const TOOLS = [
       const bytes = await resolveBytes(args);
       const document = await loadDocument(bytes);
       const xfaNotice = assertParsedXfaMutationAllowed(document);
+      refuseSignatureFields(document);
       document.getForm().flatten();
       const output = await document.save();
       return ok(`Flattened. The values are now page content.${xfaNotice ? `\n${xfaNotice}` : ""}`, {
@@ -322,8 +365,10 @@ const TOOLS = [
   },
 ];
 
+TOOLS.push(...createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocument, ok, ToolRefusal, MAX_PAGES, MAX_INLINE_PDF_BYTES }));
+
 export const INSTRUCTIONS =
-  "PDF form tools that run on a server. Nothing is stored: each call takes a PDF by URL or base64 and returns the result in the response. " +
+  "PDF Tools runs on a server. Each call takes an explicit PDF attachment, URL or inline PDF and returns its result without storing it. Read or convert bounded page ranges, search text, fill forms, and assemble or rotate pages. Extraction reports gaps and page coverage; no OCR is performed. " +
   "Signatures are visible stamps, not cryptographic signatures, and need the person's own words confirming intent. " +
   "Encrypted PDFs are refused here; the PDF Tools desktop extension handles those on the person's own machine.";
 
@@ -336,7 +381,27 @@ export async function callTool(name, args = {}) {
   const tool = TOOLS.find((candidate) => candidate.name === name);
   if (!tool) return refusal("UNKNOWN_TOOL", `There is no tool named ${name}.`);
   try {
-    return await tool.handler(args);
+    if (OUTPUT_TOOL_NAMES.has(name) && args.output_mode !== undefined && !["inline", "download"].includes(args.output_mode)) {
+      return refusal("INVALID_OUTPUT_MODE", "Choose download for the result card or inline for a machine-readable base64 response.");
+    }
+    const result = await tool.handler(args);
+    const output = result.structuredContent?.pdf_base64;
+    if (output && Buffer.byteLength(output, "base64") > MAX_INLINE_PDF_BYTES) {
+      return refusal("OUTPUT_TOO_LARGE", "The output exceeds the 3 MB inline transfer limit. Request fewer pages or use the local PDF Tools edition.");
+    }
+    if (output) {
+      const bytes = Buffer.from(output, "base64");
+      result.structuredContent.output = {
+        ...result.structuredContent.output,
+        sha256: createHash("sha256").update(bytes).digest("hex"), size_bytes: bytes.length,
+      };
+      if (args.output_mode === "download") {
+        result._meta = { ...result._meta, pdf_file: { pdf_base64: output, output: result.structuredContent.output } };
+        delete result.structuredContent.pdf_base64;
+        result.structuredContent.output_handoff = "result_card_download_requires_host_support";
+      }
+    }
+    return result;
   } catch (error) {
     if (error instanceof ToolRefusal || error instanceof FetchRefused) {
       return refusal(error.code, error.message);
@@ -358,22 +423,33 @@ export function listTools() {
     tools: TOOLS.map(({ name, description, inputSchema, annotations }) => ({
       name,
       description,
-      inputSchema,
-      annotations,
+      inputSchema: OUTPUT_TOOL_NAMES.has(name) ? { ...inputSchema, properties: { ...inputSchema.properties,
+        output_mode: { type: "string", enum: ["inline", "download"], default: "inline", description: "Choose download for a user-facing result card; its PDF bytes stay out of model-visible text. Inline returns base64 for machine clients and backwards compatibility. Host download support must be tested." },
+      } } : inputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, ...annotations },
+      _meta: {
+        "openai/fileParams": name === "merge_pdfs" ? ["files"] : ["file"],
+        ...(OUTPUT_TOOL_NAMES.has(name) ? { ui: { resourceUri: OUTPUT_RESOURCE_URI } } : {}),
+      },
     })),
   };
 }
 
-export function createRemoteServer() {
+export function createRemoteServer({ dispatchTool = callTool } = {}) {
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {} }, instructions: INSTRUCTIONS },
+    { capabilities: { tools: {}, resources: {} }, instructions: INSTRUCTIONS },
   );
 
   server.setRequestHandler("tools/list", async () => listTools());
 
-  server.setRequestHandler("tools/call", async (request) =>
-    callTool(request.params?.name, request.params?.arguments ?? {}));
+  server.setRequestHandler("tools/call", async (request, extra) =>
+    dispatchTool(request.params?.name, request.params?.arguments ?? {}, { signal: extra?.signal }));
+  server.setRequestHandler("resources/list", async () => ({ resources: [{ uri: OUTPUT_RESOURCE_URI, name: "PDF Tools output", mimeType: "text/html;profile=mcp-app" }] }));
+  server.setRequestHandler("resources/read", async request => {
+    if (request.params?.uri !== OUTPUT_RESOURCE_URI) throw new Error("Unknown UI resource");
+    return outputResource();
+  });
 
   return server;
 }

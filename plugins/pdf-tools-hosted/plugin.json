@@ -1,0 +1,32 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "pdf-tools-hosted",
+  "version": "0.2.0",
+  "description": "Read and search PDFs, convert selected pages to Markdown, fill forms, and select, rotate or merge pages into new PDF copies. Uses the hosted PDF Tools service, without storing documents.",
+  "author": { "name": "Open Document Alliance", "url": "https://www.opendocuments.ai" },
+  "homepage": "https://github.com/Open-Document-Alliance/PDF-Tools/blob/master/remote-mcp.md",
+  "repository": "https://github.com/Open-Document-Alliance/PDF-Tools",
+  "license": "MIT",
+  "keywords": ["pdf", "documents", "forms", "markdown"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "PDF Tools",
+        "shortDescription": "Read, edit and fill PDFs",
+        "longDescription": "Work with PDFs you explicitly supply: inspect their pages and forms, read and search selected text, convert pages to source-backed Markdown, fill form fields, select or reorder pages, rotate pages, and merge documents into a new copy. Finished copies can be presented in a download card on compatible hosts. Documents are processed remotely for each request and are not stored by PDF Tools; your assistant host's data terms still apply. Text extraction reports coverage, errors and gaps, not guaranteed completeness. No OCR. Reading is limited to 10 pages per call, inline input and output to 3 MB, fetched inputs to 25 MB, and documents to 200 pages. Encrypted documents are refused. Page copying does not preserve document-level forms, bookmarks or metadata. Optional visible signature stamps require your explicit confirmation and are not cryptographic signatures. The hosted edition does not provide local folder access, the full desktop viewer, a saved extraction workspace, profiles, or Lumin signing.",
+        "developerName": "Open Document Alliance",
+        "category": "Productivity",
+        "capabilities": ["PDF reading and search", "PDF page editing", "PDF forms"],
+        "websiteURL": "https://github.com/Open-Document-Alliance/PDF-Tools/blob/master/remote-mcp.md",
+        "supportURL": "https://github.com/Open-Document-Alliance/PDF-Tools/issues",
+        "privacyPolicyURL": "https://www.opendocuments.ai/privacy-policy",
+        "termsOfServiceURL": "https://www.opendocuments.ai/terms-of-service",
+        "logo": "./assets/pdf-tools.png",
+        "composerIcon": "./assets/pdf-tools.png",
+        "defaultPrompt": ["Read the first three pages of this PDF and tell me what is missing from the text extraction.", "Create a new PDF containing pages 3 and 1, in that order.", "List the fields in this PDF form, then fill only the values I provide."]
+      },
+      "onboardingSkill": "./skills/pdf-tools/SKILL.md",
+      "publication": { "release_notes": "Broader hosted PDF Tools submission candidate. Adds attachment-aware reading, search, Markdown and page editing to the existing forms service. Native host qualification and production deployment are separate gates." }
+    }
+  }
+}
