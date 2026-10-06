@@ -39,7 +39,7 @@ async function examplePdfBase64() {
 
 describe("P1: nothing persists", () => {
   it("the remote modules never import a filesystem module", async () => {
-    for (const file of ["server.mjs", "http.mjs", "fetch-guard.mjs"]) {
+    for (const file of ["server.mjs", "http.mjs", "fetch-guard.mjs", "document-tools.mjs"]) {
       const source = await readFile(path.join(REPO_ROOT, "remote", file), "utf8");
       expect(source, `${file} imports a filesystem module`).not.toMatch(
         /from\s+["']node:fs(\/promises)?["']|require\(["']fs["']\)/,
@@ -112,14 +112,21 @@ describe("P5: bounded inputs", () => {
 });
 
 describe("P6: the surface stays narrow", () => {
-  it("exposes exactly the paperwork tools and nothing local-only", async () => {
+  it("exposes exactly the bounded hosted PDF tools and nothing local-only", async () => {
     const { tools } = await listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       "apply_signature",
+      "convert_pdf_to_markdown",
       "detect_signature_zones",
       "fill_form",
       "flatten_form",
+      "get_pdf_info",
+      "merge_pdfs",
       "read_form_fields",
+      "read_pdf_pages",
+      "rotate_pdf_pages",
+      "search_pdf_text",
+      "select_pdf_pages",
     ]);
   });
 

@@ -29,6 +29,12 @@ filesystem, such as a hosted assistant working from a link or an attachment.
 
 ## Tools
 
+The deployed five-tool surface below remains the measured production version.
+A broader hosted PDF Tools source candidate adds attachment-aware reading,
+search, Markdown conversion and page selection, rotation and merging. It is
+not yet production or native ChatGPT acceptance; see
+[the hosted-core qualification record](docs/OPENAI_HOSTED_CORE.md).
+
 | Tool | What it does |
 |---|---|
 | `read_form_fields` | Lists form fields with names, types and current values |
