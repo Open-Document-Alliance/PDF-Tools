@@ -3,6 +3,7 @@ import { fileURLToPath } from "url";
 import { defineConfig } from "vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
 import { configDefaults } from "vitest/config";
+import { BalancedShardSequencer } from "./scripts/balanced-shard-sequencer.mjs";
 import { NODE_TEST_FILES } from "./scripts/node-test-files.mjs";
 import {
   SERIAL_NATIVE_TEST_FILES,
@@ -28,6 +29,8 @@ export default defineConfig(({ command, mode }) => ({
   root: "ui",
   test: {
     root: ".",
+    // Only changes how `--shard` splits files; see the sequencer for why.
+    sequence: { sequencer: BalancedShardSequencer },
     exclude: [
       ...configDefaults.exclude,
       ...NODE_TEST_FILES,

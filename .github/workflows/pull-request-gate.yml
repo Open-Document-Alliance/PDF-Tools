@@ -27,6 +27,12 @@
 # skip here by design and remain macOS-only evidence. A green run on this
 # workflow is not a substitute for the maintainer's local qualification run;
 # it is a floor beneath incoming changes.
+#
+# Sharding. The vitest projects run one file at a time on purpose (see
+# vite.config.mjs), so one job spent 26 to 32 minutes in `npm test` on a
+# runner with idle cores. Each Node version now splits the suite across three
+# runners, still one file at a time on each, and the release steps run in a
+# job of their own. scripts/balanced-shard-sequencer.mjs decides the split.
 name: Pull-request gate
 
 on:
@@ -44,7 +50,7 @@ concurrency:
 
 jobs:
   gate:
-    name: gate (node ${{ matrix.node }})
+    name: gate (node ${{ matrix.node }}, shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -54,6 +60,7 @@ jobs:
       fail-fast: false
       matrix:
         node: ["20.19", "22.12"]
+        shard: [1, 2, 3]
 
     steps:
       # Pinned by commit SHA, matching the two Windows workflows. A floating
@@ -81,15 +88,6 @@ jobs:
       - name: Install
         run: npm ci
 
-      # Contract checks need only the runner's Python standard library, not
-      # the optional macOS OCR engine or renderer. Actual OCR stays Mac-only.
-      - name: Local OCR proposal contract
-        run: |
-          python3 test/eval/local_ocr_proposal_test.py
-          node --test test/local-ocr-tools-native.test.js
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-
       # PDF_TOOLS_TIMING_CALIBRATED=skip stands down two suites that assert
       # wall-clock budgets calibrated to the maintainer's machine:
       # deep-malformed-campaign (15 s per call, measured at 15001-15016 ms
@@ -99,10 +97,42 @@ jobs:
       # skipped rather than filtered out, so the run states plainly that 120
       # tests did not execute. They remain maintainer-hardware evidence, the
       # same claim boundary the Windows workflows draw.
-      - name: Test suite
-        run: npm test
+      - name: Test suite (shard ${{ matrix.shard }}/3)
+        run: npm test -- --shard=${{ matrix.shard }}/3
         env:
           PDF_TOOLS_TIMING_CALIBRATED: skip
+
+  release-checks:
+    name: release checks (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20.19", "22.12"]
+
+    steps:
+      # Same checkout, Node and install as the gate job; see the comments there.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Contract checks need only the runner's Python standard library, not
+      # the optional macOS OCR engine or renderer. Actual OCR stays Mac-only.
+      - name: Local OCR proposal contract
+        run: |
+          python3 test/eval/local_ocr_proposal_test.py
+          node --test test/local-ocr-tools-native.test.js
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
 
       # Release steps that live outside `npm test`. See the header.
       - name: Share contract
