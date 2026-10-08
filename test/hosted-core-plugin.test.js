@@ -59,6 +59,10 @@ describe("broader hosted PDF Tools submission candidate", () => {
     expect(documentation).not.toMatch(/deployed five-tool surface/);
     expect(documentation).toMatch(/No OCR/);
     expect(documentation).toMatch(/does not establish native ChatGPT/);
+    expect(documentation).toMatch(/Combined merge input.*25 MB and 200 pages across all inputs/);
+    expect(documentation).toMatch(/may instead return partial results/);
+    expect(documentation).not.toMatch(/rather than a truncated/);
+    expect(documentation).toMatch(/does not\s+determine the stamp's legal validity/);
     expect(read("docs/REMOTE_CONNECT_API_KEYS.md")).toMatch(/same\s+twelve tools/);
     expect(read("remote/DEPLOY.md")).toMatch(/PDF_TOOLS_CONNECT_SIGNING_SECRET/);
   });

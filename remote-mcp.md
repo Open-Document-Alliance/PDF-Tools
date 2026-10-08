@@ -91,11 +91,12 @@ extracted text, field names, field values, filenames, or the URLs you supply.
 **It does not train anything.** No model is trained, fine-tuned or evaluated on
 documents sent to this service.
 
-**It does not sign documents in a legally binding way.** `apply_signature`
+**It creates a visible stamp, not a cryptographic signature.** `apply_signature`
 draws a visible signature onto the page and records the signer, the time and the
 person's stated intent in the document's metadata. That is a stamp, not a
-cryptographic signature and not a certificate-backed one. For binding signatures
-use a signing service built for it.
+cryptographic signature and not a certificate-backed one. PDF Tools does not
+determine the stamp's legal validity. Lumin signing is not part of this hosted
+edition.
 
 **It does not accept passwords.** Encrypted documents are refused rather than
 decrypted, because handling a password means accepting a secret. The desktop
@@ -108,6 +109,8 @@ extension handles encrypted files on your own machine.
 | Document fetched from a URL | 25 MB |
 | Document sent inline (`pdf_base64`) | 3 MB |
 | Maximum pages | 200 |
+| Merge input count | 2 to 5 PDFs |
+| Combined merge input | 25 MB and 200 pages across all inputs |
 | Reading, search or Markdown range | 10 pages per call |
 | Returned PDF copy | 3 MB |
 | Download deadline | 15 seconds across DNS, headers, redirects and body; shared across merge inputs |
@@ -130,9 +133,11 @@ The URL fetcher refuses anything other than `http` and `https`, refuses private,
 loopback, link-local and similar network ranges after resolving the name and
 again after every redirect, and refuses a response whose bytes are not a PDF.
 
-Requests that exceed a limit fail with a typed error rather than a truncated
-result. When the service cannot prove something, it says so: filling a form
-never claims the form is complete or ready to submit.
+Hard input, admission and output limits fail with typed errors. Text extraction
+may instead return partial results when item or character budgets are reached;
+preserve its status, truncation and gap warnings. When the service cannot prove
+something, it says so: filling a form never claims the form is complete or ready
+to submit.
 
 ## Fair use
 
