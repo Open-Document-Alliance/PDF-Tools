@@ -8,7 +8,7 @@ description: The hosted PDF Tools MCP endpoint for AI agents, what it does, and 
 > The endpoint is deployed and the properties below are what it does. Its
 > behavioral contract, and the tests that bind it, are in the repository.
 
-PDF Tools is an open source toolkit for working with PDF forms. It exists in two
+PDF Tools is an open source toolkit for reading and working with PDFs. It exists in two
 forms, and the difference matters:
 
 | | Where it runs | What it can reach | What it keeps |
@@ -29,23 +29,45 @@ filesystem, such as a hosted assistant working from a link or an attachment.
 
 ## Tools
 
-The deployed five-tool surface below remains the measured production version.
-A broader hosted PDF Tools source candidate adds attachment-aware reading,
-search, Markdown conversion and page selection, rotation and merging. It is
-not yet production or native ChatGPT acceptance; see
+The twelve-tool service below is deployed following the October 6 promotion.
+Direct-service checks passed for reading, forms and returned PDF copies. This
+does not establish native ChatGPT attachment/download acceptance or directory
+submission; see
 [the hosted-core qualification record](docs/OPENAI_HOSTED_CORE.md).
 
 | Tool | What it does |
 |---|---|
+| `get_pdf_info` | Reports source identity, page count and bounded document observations |
+| `read_pdf_pages` | Reads text from an explicit page range and reports coverage and gaps |
+| `search_pdf_text` | Finds literal matches within an explicit page range |
+| `convert_pdf_to_markdown` | Converts selected pages to source-backed Markdown with extraction warnings |
+| `select_pdf_pages` | Creates a copy with selected unique pages in the requested order |
+| `rotate_pdf_pages` | Creates a copy with exact pages rotated by 90, 180 or 270 degrees |
+| `merge_pdfs` | Creates a copy from 2 to 5 explicitly supplied PDFs in order |
 | `read_form_fields` | Lists form fields with names, types and current values |
 | `fill_form` | Fills named fields and returns the filled document |
 | `detect_signature_zones` | Finds where a signature, initials, printed name or date belongs, with coordinates |
 | `apply_signature` | Stamps a typed signature at a zone |
 | `flatten_form` | Makes filled values permanent page content |
 
-Each tool takes a PDF either as `pdf_url`, which the server fetches, or as
-`pdf_base64`, which you send inline. Results that produce a new document return
-it as base64 in the response.
+Single-document tools accept one input: a real host-provided `file` attachment
+descriptor, an authorized `pdf_url`, or actual inline `pdf_base64` bytes.
+`merge_pdfs` accepts a `files` array of real attachment descriptors. A filename
+or digest alone is not file access; the host must supply the bytes or a usable
+download URL. Never publish a private document just to make its URL accessible.
+
+Reading, search and Markdown cover at most 10 pages per call and default to
+page 1. No OCR is performed. Preserve reported extraction gaps and do not call
+unexamined or image-only pages complete. Selection and merging copy page content,
+not document-level forms, bookmarks or metadata; detected signature fields and
+XFA documents are refused for these page-copy operations.
+
+New document results default to inline base64 for machine clients. With
+`output_mode: "download"`, bytes are in widget metadata rather than the model
+response, and compatible hosts can show a user-initiated download card. The
+user must actually receive and reopen the file; a card or digest alone is not
+successful download proof. The hosted edition has no local-folder access,
+full desktop viewer, saved extraction workspace, profiles or Lumin signing.
 
 ## What this service does not do
 
@@ -86,6 +108,8 @@ extension handles encrypted files on your own machine.
 | Document fetched from a URL | 25 MB |
 | Document sent inline (`pdf_base64`) | 3 MB |
 | Maximum pages | 200 |
+| Reading, search or Markdown range | 10 pages per call |
+| Returned PDF copy | 3 MB |
 | Download deadline | 15 seconds across DNS, headers, redirects and body; shared across merge inputs |
 | Hosted operation deadline | 45 seconds, parent terminates the per-call worker |
 | Hosted concurrency | 2 active workers per service instance, no waiting document queue |

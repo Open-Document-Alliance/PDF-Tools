@@ -1,9 +1,10 @@
 # Deploying the remote stateless MCP endpoint
 
 Target: `https://mcp.opendocuments.ai/mcp`, on Open Document Alliance's Vercel
-account. The existing production service exposes the original five tools.
-The October 6 twelve-tool candidate is separate source preparation and must
-pass preview runtime and native host checks before promotion or submission.
+account. The twelve-tool service is live following the October 6 promotion of
+the tested preview from PR #219. Direct-service checks passed; actual ChatGPT
+attachment/download acceptance and directory submission are separate gates.
+See [`../docs/OPENAI_HOSTED_CORE.md`](../docs/OPENAI_HOSTED_CORE.md).
 
 ## Before deploying
 
@@ -52,8 +53,10 @@ allocation, documentation that matches, and a reproducible deploy.
 
 - Read the function logs for one full run and confirm no document-derived value
   appears in any line (gate 3).
-- Point Muse at the endpoint as a custom connector and complete one real
-  fill-and-sign, as evidence for the submission.
+- Test the intended host with explicitly supplied synthetic PDFs and actually
+  download and reopen edited copies. Direct HTTP results do not establish
+  ChatGPT or Muse acceptance. A signature is not required for these checks;
+  signing remains subject to explicit user intent.
 - Fill in the endpoint URL in `remote-mcp.md`, which is the documentation URL
   the submission form asks for.
 
@@ -75,8 +78,12 @@ allocation, documentation that matches, and a reproducible deploy.
 
 ## Notes
 
-- No environment variables. The service has no secrets, because it has no
-  accounts and no storage.
+- Public `/mcp` needs no caller key and stores no documents. The optional
+  `/mcp/connect` surface uses `PDF_TOOLS_CONNECT_SIGNING_SECRET` and signed
+  app keys, without adding stored documents or user accounts. It fails closed
+  when unconfigured. See [`../docs/REMOTE_CONNECT_API_KEYS.md`](../docs/REMOTE_CONNECT_API_KEYS.md)
+  for activation, credential handling and rollback. Do not remove or expose an
+  existing production secret when qualifying the public endpoint.
 - The worker's 45-second parent deadline is below the configured 60-second
   invocation cap. V8 heap limits are not a total-memory cap or OS sandbox.
   Platform packaging, worker resolution and resource behavior need deployed
