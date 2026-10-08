@@ -49,8 +49,22 @@ describe("broader hosted PDF Tools submission candidate", () => {
     expect(cases.positive).toHaveLength(7);
     expect(cases.negative).toHaveLength(4);
     expect(cases.status).toMatch(/not native host acceptance/);
-    expect(read("docs/OPENAI_HOSTED_CORE.md")).toMatch(/not deployed or submitted/);
+    expect(read("docs/OPENAI_HOSTED_CORE.md")).toMatch(/twelve-tool hosted service is live/);
+    expect(read("docs/OPENAI_HOSTED_CORE.md")).toMatch(/submission are not established/);
     expect(read("scripts/build-hosted-core-plugin.mjs")).toMatch(/native_host_accepted: false/);
+  });
+  it("documents the actual twelve-tool surface without promoting native-host acceptance", () => {
+    const documentation = read("remote-mcp.md");
+    for (const tool of listTools().tools) expect(documentation).toContain(`\`${tool.name}\``);
+    expect(documentation).not.toMatch(/deployed five-tool surface/);
+    expect(documentation).toMatch(/No OCR/);
+    expect(documentation).toMatch(/does not establish native ChatGPT/);
+    expect(documentation).toMatch(/Combined merge input.*25 MB and 200 pages across all inputs/);
+    expect(documentation).toMatch(/may instead return partial results/);
+    expect(documentation).not.toMatch(/rather than a truncated/);
+    expect(documentation).toMatch(/does not\s+determine the stamp's legal validity/);
+    expect(read("docs/REMOTE_CONNECT_API_KEYS.md")).toMatch(/same\s+twelve tools/);
+    expect(read("remote/DEPLOY.md")).toMatch(/PDF_TOOLS_CONNECT_SIGNING_SECRET/);
   });
   it("does not replace either historical forms or the full local profile", () => {
     expect(JSON.parse(read("plugins/pdf-forms/plugin.json")).name).toBe("pdf-forms");

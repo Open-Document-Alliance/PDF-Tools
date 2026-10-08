@@ -1,7 +1,16 @@
 # Hosted PDF Tools submission candidate
 
-Status: source preparation on October 6, 2026, not deployed or submitted.
+Status: the twelve-tool hosted service is live after the October 6 promotion;
+native ChatGPT attachment/download acceptance and submission are not established.
 Bead `pdf-toolkit-mcp-lbaw` owns this tranche.
+
+PR #219 merged as `39ff1fdf192220e51bc83313fc7d2506e1ded29b` after both
+full CI gates passed. The reviewed source was
+`11df11068a5773c06c324f9bca28635869d120a1`; Vercel promoted the qualified
+preview without rebuilding. Fourteen direct-service checks passed on the
+public endpoint, with returned PDFs independently reopened. This is deployment
+and direct-service evidence, not a native host test, review video or submission.
+Later source-preparation statements below describe the historical checkpoint.
 
 Mat chose a broader PDF Tools offering instead of a forms-only flagship. The
 existing hosted service is reused, not replaced with a new stored-document
@@ -50,8 +59,9 @@ dependencies. Its provenance records the exact source and unaccepted host gate.
 
 Source tests, direct HTTP protocol tests, production deployment, host discovery,
 actual attachment input, actual downloaded output, portal upload, and public
-review are distinct evidence. Do not upload this candidate while production
-still exposes only the previous five-tool surface. No public claim or comparison
+review are distinct evidence. The previous five-tool deployment is superseded;
+complete native host tests, a walkthrough and the remaining portal gates before
+submission. No public claim or comparison
 with other extraction products follows from these adapter tests.
 
 Hosted downloads pin their connection to the admitted DNS result. A single

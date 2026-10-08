@@ -19,7 +19,7 @@ Until that configuration is present, issuance and the protected route return
 
 The protected endpoint rejects missing, forged, or expired keys before loading
 the PDF handler or reading the document body. Authorized requests use the same
-five tools and document limits as the public endpoint. A key is a signed
+twelve tools and document limits as the public endpoint. A key is a signed
 capability for stateless PDF processing; it grants no access to stored
 documents, user accounts, or other callers' requests.
 
