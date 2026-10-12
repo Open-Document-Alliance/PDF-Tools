@@ -496,6 +496,7 @@ describe("MCPB static declarations", () => {
     for (const filename of [
       "accessibility-inspection.js",
       "bounded-pdf-file.js",
+      "csv-export.js",
       "document-map.js",
       "pdf-comparison.js",
       "index.js",
@@ -535,7 +536,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(34);
+    expect(mirrored).toHaveLength(35);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",

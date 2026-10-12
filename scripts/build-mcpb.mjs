@@ -79,6 +79,7 @@ const PROTECTED_PDFJS_VERSION = "5.4.624";
 export const SERVER_FILES = [
   "accessibility-inspection.js",
   "bounded-pdf-file.js",
+  "csv-export.js",
   "document-map.js",
   "download-transport.js",
   "helpers.js",

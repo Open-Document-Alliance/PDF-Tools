@@ -47,6 +47,7 @@ import {
   withToolOutputSchema,
 } from "./output-schemas.js";
 import { publicAccessibilityInspectionError } from "./accessibility-inspection.js";
+import { writeCsvExport } from "./csv-export.js";
 import {
   HOST_PDF_IMPORT_MAX_BASE64_CHARS,
   importHostPdf,
@@ -3892,7 +3893,7 @@ async function listTools(request) {
       },
       {
         name: "extract_to_csv",
-        description: "Extract form data from filled PDFs to a CSV file",
+        description: "Extract form data from filled PDFs to a new CSV file. Publishes atomically, preserves every source PDF, and refuses existing output files. Choose a new output path for each export.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5600,11 +5601,23 @@ async function handleToolCall(request) {
         const resolvedOutputCsv = resolvePath(output_csv);
         const allData = [];
         const allFieldNames = new Set();
+        const sources = [];
         
         // Extract data from each PDF
         for (const pdfPath of pdf_paths) {
           const resolvedPdfPath = resolvePath(pdfPath);
-          const pdfBytes = await fs.readFile(resolvedPdfPath);
+          const source = await readBoundedPdfFileSafely(resolvedPdfPath, PDF_MUTATION_MAX_FILE_BYTES, {
+            assertPathAllowed,
+            createSizeLimitError: pdfMutationFileLimitError,
+          });
+          const pdfBytes = source.bytes;
+          sources.push({
+            path: resolvedPdfPath,
+            canonicalPath: source.canonicalPath,
+            sizeBytes: source.sizeBytes,
+            fileIdentity: source.fileIdentity,
+            sha256: sha256Bytes(pdfBytes),
+          });
           // Read-only: this writes a CSV, never a PDF, so it may decrypt. The
           // tool takes a list of documents and no password — one password
           // could not serve a list — so the only encrypted documents it can
@@ -5654,7 +5667,12 @@ async function handleToolCall(request) {
           csvLines.push(values.map(formatCSVValue).join(','));
         }
         
-        await fs.writeFile(resolvedOutputCsv, csvLines.join('\n'));
+        await writeCsvExport({
+          outputPath: resolvedOutputCsv,
+          bytes: Buffer.from(csvLines.join("\n"), "utf8"),
+          sources,
+          assertPathAllowed,
+        });
         
         return {
           content: [{

@@ -539,6 +539,13 @@ Every user-visible PDF output follows an explicit commit policy:
 - `convert_pdf_to_markdown` uses the same replacement precondition through its
   canonical-parent transaction worker. `overwrite=true` without the exact
   current `expected_output_identity` fails before commit.
+- `extract_to_csv` reads each source through the bounded descriptor reader,
+  binds every source to its canonical path, device/inode, byte length, and
+  SHA-256, then creates a new output through the same durable transaction.
+  Existing outputs and source aliases are refused; this tool has no overwrite
+  option. Sources are rechecked under the output lock and after activation,
+  and the saved CSV is independently hashed before success. A detected source
+  change rolls the CSV back. Its quoted CSV encoding is unchanged.
 
 Successful handlers report paths and update lifecycle state only after commit.
 Existing output entries must be regular files; symlinks, directories, and other

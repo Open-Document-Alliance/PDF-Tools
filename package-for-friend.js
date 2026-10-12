@@ -57,6 +57,7 @@ export const SHARE_FILES = [
   "package.json",
   "server/accessibility-inspection.js",
   "server/bounded-pdf-file.js",
+  "server/csv-export.js",
   "server/document-map.js",
   "server/download-transport.js",
   "server/helpers.js",
