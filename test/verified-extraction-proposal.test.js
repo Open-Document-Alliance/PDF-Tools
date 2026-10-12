@@ -74,9 +74,14 @@ function sha256(bytes) {
 
 async function snapshotGenerations(workspacePath) {
   const snapshots = [];
-  for (const directory of (await fs.readdir(workspacePath)).filter(name => name.startsWith("generation-"))) {
-    for (const filename of await fs.readdir(path.join(workspacePath, directory))) {
-      const absolute = path.join(workspacePath, directory, filename);
+  const generationsPath = path.join(workspacePath, "generations");
+  const generations = (await fs.readdir(generationsPath)).filter(name => name.startsWith("generation-"));
+  expect(generations.length).toBeGreaterThan(0);
+  for (const directory of generations) {
+    const filenames = await fs.readdir(path.join(generationsPath, directory));
+    expect(filenames.length).toBeGreaterThan(0);
+    for (const filename of filenames) {
+      const absolute = path.join(generationsPath, directory, filename);
       snapshots.push([absolute, await fs.readFile(absolute)]);
     }
   }
@@ -84,6 +89,7 @@ async function snapshotGenerations(workspacePath) {
 }
 
 async function expectGenerationsUnchanged(snapshots) {
+  expect(snapshots.length).toBeGreaterThan(0);
   for (const [filename, bytes] of snapshots) expect(await fs.readFile(filename)).toEqual(bytes);
 }
 
