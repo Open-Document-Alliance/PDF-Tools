@@ -199,6 +199,12 @@ function caseFold(value) {
   return value.normalize("NFC").toLowerCase();
 }
 
+function inodeIdentity(inode) {
+  // Node can expose a high-bit inode as a signed bigint on some filesystems.
+  // Serialize the same 64 bits as unsigned decimal, as required by the schema.
+  return BigInt.asUintN(64, inode).toString();
+}
+
 export function registerPortableArtifactPathIdentity(identities, value) {
   if (!(identities instanceof Map)) throw new TypeError("Portable artifact path identities must be a Map");
   if (typeof value !== "string" || value !== value.normalize("NFC")) {
@@ -222,7 +228,7 @@ async function resolveAllowedSymlink(rootPath, relativePath, allowSymlinks) {
     if (visited.has(current)) throw new Error(`Symlink cycle detected at ${relativePath}`);
     visited.add(current);
     const absolute = path.join(rootPath, ...current.split("/"));
-    const stat = await fs.lstat(absolute);
+    const stat = await fs.lstat(absolute, { bigint: true });
     if (!stat.isSymbolicLink()) return { finalRelative: current, finalPath: absolute, stat, chain };
     const declared = allowSymlinks[current];
     if (!declared) throw new Error(`Symlink is not runner-allowlisted: ${relativePath}`);
@@ -276,7 +282,10 @@ async function readRegularFileNoFollow(filename, expectedStat, label) {
 
 export async function hashTrustedRegularFile(filename) {
   const resolved = path.resolve(filename);
-  const stat = await fs.lstat(resolved);
+  // Match the descriptor's exact integer representation. Number Stats can
+  // round 64-bit inode IDs (and represent their sign differently), producing
+  // false identity changes before an otherwise stable runtime artifact read.
+  const stat = await fs.lstat(resolved, { bigint: true });
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Trusted runtime artifact must be a real regular file");
   const retained = await readRegularFileNoFollow(resolved, stat, path.basename(resolved));
   return {
@@ -284,7 +293,7 @@ export async function hashTrustedRegularFile(filename) {
     sha256: retained.sha256,
     mode: Number(retained.stat.mode & 0o7777n),
     device: String(retained.stat.dev),
-    inode: String(retained.stat.ino),
+    inode: inodeIdentity(retained.stat.ino),
     realpath_sha256: sha256(Buffer.from(await fs.realpath(resolved))),
   };
 }
@@ -349,7 +358,7 @@ async function collectRoot(rootSpec, directoryReader) {
       const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
       registerPortableArtifactPathIdentity(names, relative);
       const itemPath = path.join(absolute, entry.name);
-      const linkStat = await fs.lstat(itemPath);
+      const linkStat = await fs.lstat(itemPath, { bigint: true });
       if (linkStat.isDirectory()) {
         await walk(itemPath, relative);
         continue;
@@ -372,13 +381,13 @@ async function collectRoot(rootSpec, directoryReader) {
         sha256: opened.sha256,
         mode: Number(after.mode & 0o7777n),
         device: String(after.dev),
-        inode: String(after.ino),
+        inode: inodeIdentity(after.ino),
         nlink: Number(after.nlink),
         link_identity: {
           directory_entry_device: String(linkStat.dev),
-          directory_entry_inode: String(linkStat.ino),
+          directory_entry_inode: inodeIdentity(linkStat.ino),
           target_device: String(after.dev),
-          target_inode: String(after.ino),
+          target_inode: inodeIdentity(after.ino),
         },
         symlink_chain: resolved.chain,
       });
@@ -424,7 +433,7 @@ async function collectRoot(rootSpec, directoryReader) {
       root_realpath_sha256: sha256(Buffer.from(rootReal)),
       mode: modeBits(rootLstat),
       device: String(rootLstat.dev),
-      inode: String(rootLstat.ino),
+      inode: inodeIdentity(rootLstat.ino),
     },
     artifacts,
   };

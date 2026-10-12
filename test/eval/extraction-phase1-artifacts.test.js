@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PHASE1_ARTIFACT_CONFIG_ID,
   PHASE1_ARTIFACT_ROLES,
   attestArtifactImmutability,
   buildArtifactInventory,
+  hashTrustedRegularFile,
   registerPortableArtifactPathIdentity,
   validateArtifactConfiguration,
   verifyArtifactInventory,
@@ -17,6 +18,7 @@ const TRUSTED = ["candidate.direct_pdf.v1"];
 const roots = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -83,6 +85,76 @@ async function fixture() {
 }
 
 describe("Phase 1 candidate artifact attestation", () => {
+  it.each([9007199254740993n, -9223372036854407366n])(
+    "compares exact large inode %s and still rejects a one-inode replacement", async inode => {
+      const { directories } = await fixture();
+      const filename = path.join(directories.adapter, "adapter.mjs");
+      let descriptorInode = inode;
+      const originalLstat = fs.lstat.bind(fs);
+      const originalOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+        const stat = await originalLstat(target, options);
+        if (target === filename) stat.ino = options?.bigint ? inode : Number(inode);
+        return stat;
+      });
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await originalOpen(...args);
+        if (args[0] === filename) {
+          const originalStat = handle.stat.bind(handle);
+          handle.stat = async options => {
+            const stat = await originalStat(options);
+            stat.ino = options?.bigint ? descriptorInode : Number(descriptorInode);
+            return stat;
+          };
+        }
+        return handle;
+      });
+      await expect(hashTrustedRegularFile(filename)).resolves.toMatchObject({ inode: BigInt.asUintN(64, inode).toString() });
+      descriptorInode = inode + 1n;
+      await expect(hashTrustedRegularFile(filename)).rejects.toThrow("Artifact identity changed before read");
+    });
+
+  it("serializes signed root, file, symlink, and runtime inode identities as unsigned decimal", async () => {
+    const { directories, config } = await fixture();
+    const filename = path.join(directories.adapter, "adapter.mjs");
+    await fs.symlink("adapter.mjs", path.join(directories.adapter, "alias.mjs"));
+    config.root_specs[0].allow_symlinks = { "alias.mjs": "adapter.mjs" };
+    const highBit = 1n << 63n;
+    const signedStat = (stat, options) => {
+      const inode = BigInt.asIntN(64, BigInt(stat.ino) | highBit);
+      stat.ino = options?.bigint ? inode : Number(inode);
+      return stat;
+    };
+    const originalLstat = fs.lstat.bind(fs);
+    const originalOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => signedStat(await originalLstat(target, options), options));
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      const originalStat = handle.stat.bind(handle);
+      handle.stat = async options => signedStat(await originalStat(options), options);
+      return handle;
+    });
+    const inventory = await buildArtifactInventory(config, { trustedCandidateIds: TRUSTED });
+    const schema = JSON.parse(await fs.readFile(new URL("../fixtures/eval/extraction/phase1/artifact-inventory.schema.json", import.meta.url)));
+    expect(assertSchema(inventory, schema, "signed inode inventory")).toBe(true);
+    const runtime = await hashTrustedRegularFile(filename);
+    const identities = [
+      ...inventory.roots.map(root => root.inode),
+      ...inventory.artifacts.flatMap(artifact => [artifact.inode, artifact.link_identity.directory_entry_inode, artifact.link_identity.target_inode]),
+      runtime.inode,
+    ];
+    for (const identity of identities) {
+      expect(identity).toMatch(/^[0-9]+$/);
+      expect(BigInt(identity)).toBeGreaterThanOrEqual(highBit);
+    }
+    const original = inventory.artifacts.find(artifact => artifact.relative_path === "adapter.mjs");
+    const alias = inventory.artifacts.find(artifact => artifact.relative_path === "alias.mjs");
+    expect(alias.inode).toBe(original.inode);
+    expect(alias.link_identity.target_inode).toBe(original.inode);
+    expect(alias.link_identity.directory_entry_inode).not.toBe(original.inode);
+    expect(runtime.inode).toBe(original.inode);
+  });
+
   it("builds strict portable and host inventories and maps unconfigured defaults to not applicable", async () => {
     const { config } = await fixture();
     expect(validateArtifactConfiguration(config, TRUSTED)).toBeTruthy();
