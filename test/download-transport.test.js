@@ -133,6 +133,49 @@ describe("bounded download lifecycle", () => {
     expect(await fs.readFile(result.path)).toEqual(PDF_BYTES);
   });
 
+  it("does not restore caller headers when a redirect returns to the original origin", async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example/document.pdf"))
+      .mockResolvedValueOnce(redirectResponse("https://document.example/final.pdf"))
+      .mockResolvedValueOnce(pdfResponse());
+    await downloadPdfFromUrl("https://document.example/first.pdf", {
+      headers: { "x-request-label": "document-review" },
+      destinationDir: directory,
+      fetchFn,
+    });
+    expect(fetchFn.mock.calls[0][1].headers).toEqual({ "x-request-label": "document-review" });
+    expect(fetchFn.mock.calls[1][1].headers).toEqual({});
+    expect(fetchFn.mock.calls[2][1].headers).toEqual({});
+  });
+
+  it("applies the byte limit after decoding a small compressed response", async () => {
+    const decoded = Buffer.from("%PDF-" + "a".repeat(128));
+    const encoded = gzipSync(decoded);
+    expect(encoded.length).toBeLessThan(64);
+    await expect(downloadPdfFromUrl("https://document.example/compressed.pdf", {
+      maxSizeMb: 64 / (1024 * 1024),
+      destinationDir: directory,
+      fetchFn: (url, options) => fetchPdfDownloadResponse(url, {
+        ...options,
+        lookupFn: async () => [{ address: "8.8.8.8", family: 4 }],
+        requestFn: (_url, _options, callback) => {
+          const request = new EventEmitter();
+          request.end = () => {
+            const incoming = Readable.from([encoded]);
+            Object.assign(incoming, {
+              statusCode: 200,
+              statusMessage: "OK",
+              rawHeaders: ["Content-Encoding", "gzip", "Content-Length", String(encoded.length)],
+            });
+            callback(incoming);
+          };
+          return request;
+        },
+      }),
+    })).rejects.toThrow(/exceeds/);
+    expect(await fs.readdir(directory)).toEqual([]);
+  });
+
   it("refuses a transport downgrade without making the next request", async () => {
     const fetchFn = vi.fn().mockResolvedValue(redirectResponse("http://document.example/document.pdf"));
     await expect(downloadPdfFromUrl("https://document.example/first.pdf", {
