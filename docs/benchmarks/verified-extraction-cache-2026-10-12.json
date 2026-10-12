@@ -1,0 +1,69 @@
+{
+  "contract": "pdf-tools.verified-extraction-cache-timing.v1",
+  "runtime": {
+    "node": "v24.19.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "note": "Single local synthetic run; in-process PDF.js extractor with production per-page limits. Timings are informational, not a quality or cross-machine speed claim. Cache-disabled baseline uses a one-byte retention budget. Workspace I/O, source hashing, map/citation replay and defensive cloning remain measured; worker startup is not measured.",
+  "results": [
+    {
+      "page_count": 20,
+      "cache_enabled": false,
+      "pdf_bytes": 9594,
+      "source_reads": 4,
+      "layout_loads": 4,
+      "page_extractions": 80,
+      "create_ms": 1231.47,
+      "first_chunk_ms": 941.26,
+      "repeat_chunk_ms": 901.95,
+      "verify_two_ms": 1296.5
+    },
+    {
+      "page_count": 20,
+      "cache_enabled": true,
+      "pdf_bytes": 9594,
+      "source_reads": 4,
+      "layout_loads": 1,
+      "page_extractions": 20,
+      "create_ms": 705.66,
+      "first_chunk_ms": 54.22,
+      "repeat_chunk_ms": 43.61,
+      "verify_two_ms": 183.8,
+      "same_path_source_drift": {
+        "rejected": true,
+        "additional_layout_loads": 1,
+        "additional_source_reads": 1
+      }
+    },
+    {
+      "page_count": 100,
+      "cache_enabled": false,
+      "pdf_bytes": 45767,
+      "source_reads": 4,
+      "layout_loads": 4,
+      "page_extractions": 400,
+      "create_ms": 5625.46,
+      "first_chunk_ms": 4173.68,
+      "repeat_chunk_ms": 4743.24,
+      "verify_two_ms": 5210.13
+    },
+    {
+      "page_count": 100,
+      "cache_enabled": true,
+      "pdf_bytes": 45767,
+      "source_reads": 4,
+      "layout_loads": 1,
+      "page_extractions": 100,
+      "create_ms": 5475.13,
+      "first_chunk_ms": 325.13,
+      "repeat_chunk_ms": 166.14,
+      "verify_two_ms": 408.43,
+      "same_path_source_drift": {
+        "rejected": true,
+        "additional_layout_loads": 1,
+        "additional_source_reads": 1
+      }
+    }
+  ]
+}

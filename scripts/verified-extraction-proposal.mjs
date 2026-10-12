@@ -7,8 +7,7 @@ import {
 } from "../server/document-map.js";
 import {
   canonicalWorkspaceJson,
-  inspectExtractionWorkspace,
-  readExtractionWorkspacePage,
+  readExtractionReviewState,
 } from "./verified-extraction-workspace.mjs";
 import { parseStrictJson } from "./eval-strict-json.mjs";
 
@@ -395,26 +394,6 @@ function validateWorkspaceIdentity(identity, documentMap, schemaBytes) {
   return identity;
 }
 
-async function readAllEvents({ rootPath, workspaceId, workspaceIdentitySha256, generationSha256 }) {
-  const events = [];
-  let cursor = null;
-  do {
-    const page = await readExtractionWorkspacePage({
-      rootPath,
-      workspaceId,
-      expectedWorkspaceIdentitySha256: workspaceIdentitySha256,
-      collection: "events",
-      limit: 100,
-      cursor,
-    });
-    assertion(page.generation_sha256 === generationSha256, "workspace generation changed during verification");
-    events.push(...page.items);
-    assertion(events.length <= MAX_EVENTS, "workspace event count exceeds the verifier bound");
-    cursor = page.next_cursor;
-  } while (cursor !== null);
-  return events;
-}
-
 function validateProposalEvent(event, workspaceIdentitySha256) {
   exactKeys(event, [
     "contract", "event_sequence", "kind", "workspace_identity_sha256", "leaf_pointer",
@@ -770,47 +749,69 @@ function validateRetainedSearchScope(scope, result) {
   return scope;
 }
 
-export async function verifyWorkspaceExtractionProposal({
-  rootPath,
-  workspaceId,
-  expectedWorkspaceIdentitySha256,
-  expectedGenerationSha256,
-  workspaceIdentity,
-  proposalEventId,
-  documentMap,
-  sourceBytes,
-  schemaBytes,
-  layouts,
-  citations,
-  method,
+async function prepareWorkspaceVerification({
+  rootPath, workspaceId, expectedWorkspaceIdentitySha256, expectedGenerationSha256,
+  workspaceIdentity, documentMap, sourceBytes, schemaBytes, layouts,
   chunkPolicy = DEFAULT_DOCUMENT_MAP_CHUNK_POLICY,
 }) {
   assertion(SHA256.test(expectedWorkspaceIdentitySha256 ?? ""),
     "expected workspace identity is invalid");
   assertion(SHA256.test(expectedGenerationSha256 ?? ""), "expected generation is invalid");
-  assertion(EVENT_ID.test(proposalEventId ?? ""), "proposal event ID is invalid");
   validateSourceBoundDocumentMap(documentMap, { sourceBytes, schemaBytes, layouts, chunkPolicy });
   validateWorkspaceIdentity(workspaceIdentity, documentMap, Buffer.from(schemaBytes));
   assertion(workspaceIdentity.workspace_identity_sha256 === expectedWorkspaceIdentitySha256,
     "expected workspace identity drifted");
-  const inspection = await inspectExtractionWorkspace({
-    rootPath,
-    workspaceId,
-    expectedWorkspaceIdentitySha256,
+  const snapshot = await readExtractionReviewState({
+    rootPath, workspaceId, expectedWorkspaceIdentitySha256,
   });
-  assertion(inspection.state === "complete"
-    && inspection.current_generation_sha256 === expectedGenerationSha256,
-  "verification requires the exact complete current generation");
-  const events = await readAllEvents({
-    rootPath,
-    workspaceId,
-    workspaceIdentitySha256: expectedWorkspaceIdentitySha256,
-    generationSha256: expectedGenerationSha256,
+  assertion(snapshot.generation_sha256 === expectedGenerationSha256,
+    "verification requires the exact complete current generation");
+  assertion(snapshot.events.length <= MAX_EVENTS, "workspace event count exceeds the verifier bound");
+  assertion(canonicalWorkspaceJson(snapshot.workspace_identity) === canonicalWorkspaceJson(workspaceIdentity),
+    "verification workspace identity differs from retained identity");
+  return { expectedWorkspaceIdentitySha256, expectedGenerationSha256, workspaceIdentity,
+    documentMap, sourceBytes, schemaBytes, layouts, chunkPolicy, events: snapshot.events };
+}
+
+export async function verifyWorkspaceExtractionProposal(input) {
+  const context = await prepareWorkspaceVerification(input);
+  return replayWorkspaceExtractionProposal({ ...context,
+    proposalEventId: input.proposalEventId, citations: input.citations, method: input.method });
+}
+
+// One immutable workspace snapshot and fresh source context for the batch.
+// Each item's cited chunks still replay against that exact source context.
+// No events are appended here; callers publish only after every item succeeds.
+export async function verifyWorkspaceExtractionBatch(input) {
+  assertion(Array.isArray(input.items) && input.items.length >= 1 && input.items.length <= 32,
+    "verification batch must contain 1 through 32 items");
+  const context = await prepareWorkspaceVerification(input);
+  const seen = new Set();
+  return input.items.map((item, index) => {
+    try {
+      exactKeys(item, ["proposal_event_id", "citations", "method"], `items[${index}]`);
+      assertion(!seen.has(item.proposal_event_id), "duplicate proposal in verification batch");
+      seen.add(item.proposal_event_id);
+      return replayWorkspaceExtractionProposal({ ...context,
+        proposalEventId: item.proposal_event_id, citations: item.citations, method: item.method });
+    } catch (error) {
+      throw new Error(`verification batch item ${index}: ${error.message}`);
+    }
   });
+}
+
+function replayWorkspaceExtractionProposal({
+  expectedWorkspaceIdentitySha256, expectedGenerationSha256, workspaceIdentity,
+  documentMap, sourceBytes, schemaBytes, layouts, chunkPolicy, events,
+  proposalEventId, citations, method,
+}) {
+  assertion(EVENT_ID.test(proposalEventId ?? ""), "proposal event ID is invalid");
   const proposals = events.filter(event => event.kind === "proposal_submitted")
     .map(event => validateProposalEvent(event, expectedWorkspaceIdentitySha256));
   const proposal = proposals.find(event => event.event_id === proposalEventId);
   assertion(proposal, "proposal event is absent from the exact workspace generation");
+  assertion(events.filter(event => event.leaf_pointer === proposal.leaf_pointer).at(-1)?.event_id
+    === proposal.event_id, "proposal is already verified or superseded for this leaf");
   assertion(workspaceIdentity.leaf_obligations.includes(proposal.leaf_pointer),
     "proposal leaf is absent from the workspace obligation inventory");
   const schema = parseSchema(Buffer.from(schemaBytes));

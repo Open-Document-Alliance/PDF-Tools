@@ -1338,6 +1338,15 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     result: workspaceVerificationResult,
     state: { const: "complete" },
   }),
+  verify_extraction_batch: object({
+    workspace_identity_sha256: workspaceDigest,
+    parent_generation_sha256: workspaceDigest,
+    generation_sha256: workspaceDigest,
+    generation_sequence: workspaceGenerationSequence,
+    events: { ...arrayOf(workspaceVerifiedEvent), minItems: 1, maxItems: 32 },
+    results: { ...arrayOf(workspaceVerificationResult), minItems: 1, maxItems: 32 },
+    state: { const: "complete" },
+  }),
   delete_extraction_workspace: object({
     state: { const: "deleted" },
     workspace_id: string,

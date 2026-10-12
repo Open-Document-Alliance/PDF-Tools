@@ -627,6 +627,15 @@ candidate execution, scoring, publication, or benchmark claim. It remains
 experimental and excluded from release artifacts until a separately reviewed
 product-integration tranche authorizes that boundary change.
 
+The shipped workspace now also supports atomic verification batches of 1–32
+pending proposals and a bounded source/context-keyed layout cache. Both retain
+fresh-byte identity checks and typed uncertainty. The offline script
+`node scripts/verified-extraction-cache-benchmark.mjs` measures repeated
+20/100-page synthetic read/verify paths and parser call counts; those timings are
+performance diagnostics, not additional quality evidence. See
+[Verified extraction workspaces](VERIFIED_EXTRACTION.md) for batching, manifest
+compatibility, and aggregate retained-history limits.
+
 ### Experimental source-replayed proposal verifier
 
 E9E.5 adds the model-free private verifier in

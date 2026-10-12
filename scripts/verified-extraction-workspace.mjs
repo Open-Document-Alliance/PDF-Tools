@@ -74,6 +74,7 @@ const STATE_FILE = "state.v1.json";
 const MANIFEST_FILE = "generation-manifest.v1.json";
 const MAX_STATIC_BYTES = 32 * 1024 * 1024;
 const MAX_GENERATION_FILE_BYTES = 64 * 1024 * 1024;
+export const MAX_RETAINED_WORKSPACE_BYTES = 256 * 1024 * 1024;
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const VERIFICATION_STATUSES = Object.freeze([
   "verified_exact",
@@ -631,9 +632,10 @@ async function inspectGenerationDirectory(generationPath, staticContext, { stagi
   exactKeys(manifest, [
     "contract", "workspace_identity_sha256", "sequence", "transaction_id",
     "parent_generation_sha256", "state", "static_artifacts", "artifacts",
+    ...(manifest.contract?.version === "1.1.0-experimental" ? ["event_count"] : []),
   ], "generation manifest");
   assertion(manifest.contract?.name === "pdf-tools.verified-extraction-workspace-generation"
-    && manifest.contract?.version === "1.0.0-experimental",
+    && ["1.0.0-experimental", "1.1.0-experimental"].includes(manifest.contract?.version),
   "generation manifest contract is unsupported");
   assertion(manifest.workspace_identity_sha256 === staticContext.identity.workspace_identity_sha256,
     "generation workspace binding drifted");
@@ -660,7 +662,14 @@ async function inspectGenerationDirectory(generationPath, staticContext, { stagi
     && canonicalWorkspaceJson(manifest.artifacts) === canonicalWorkspaceJson(expectedArtifacts),
   "generation artifact inventory drifted");
   const events = parseEvents(eventsBytes, staticContext.identity, staticContext.policy);
-  assertion(events.length === manifest.sequence, "generation event count does not match its sequence");
+  if (manifest.contract.version === "1.0.0-experimental") {
+    assertion(events.length === manifest.sequence, "generation event count does not match its sequence");
+  } else {
+    boundedInteger(manifest.event_count, "generation event count", manifest.sequence,
+      staticContext.policy.max_proposals);
+    assertion(events.length === manifest.event_count, "generation event count does not replay");
+    assertion(manifest.sequence > 0, "batch manifest cannot replace genesis");
+  }
   const state = parseCanonicalJson(stateBytes, "generation state");
   const expectedState = deriveState(staticContext.identity, events, manifest.sequence);
   assertion(canonicalWorkspaceJson(state) === canonicalWorkspaceJson(expectedState),
@@ -684,6 +693,7 @@ async function inspectGenerationDirectory(generationPath, staticContext, { stagi
     events,
     eventsBytes,
     currentState: state,
+    stateByteLength: stateBytes.length,
   };
 }
 
@@ -710,7 +720,11 @@ async function claimStatus(workspacePath) {
   }
 }
 
-async function scanWorkspace(workspacePath, staticContext, { allowClaim = false } = {}) {
+async function scanWorkspace(workspacePath, staticContext, {
+  allowClaim = false, maxRetainedWorkspaceBytes = MAX_RETAINED_WORKSPACE_BYTES,
+} = {}) {
+  boundedInteger(maxRetainedWorkspaceBytes, "retained workspace byte limit", 1,
+    MAX_RETAINED_WORKSPACE_BYTES);
   const workspaceEntries = (await readdir(workspacePath, { withFileTypes: true }))
     .sort((left, right) => compareCodePoints(left.name, right.name));
   const archivedClaimTransactions = [];
@@ -757,18 +771,47 @@ async function scanWorkspace(workspacePath, staticContext, { allowClaim = false 
   await assertPrivateDirectory(generationsPath, "generations directory");
   const entries = (await readdir(generationsPath, { withFileTypes: true }))
     .sort((left, right) => compareCodePoints(left.name, right.name));
+  // Preflight aggregate sizes before allocating any generation payloads.
+  // Abandoned directories are not replayed or retained in memory.
+  let preflightBytes = 0;
+  for (const entry of entries) {
+    if (!GENERATION_NAME.test(entry.name) && !STAGING_NAME.test(entry.name)) continue;
+    assertion(entry.isDirectory() && !entry.isSymbolicLink(), "generation is not a physical directory");
+    const generationPath = path.join(generationsPath, entry.name);
+    await assertPrivateDirectory(generationPath, "generation directory");
+    const files = await readdir(generationPath, { withFileTypes: true });
+    assertion(files.length <= 3, "generation artifact inventory is oversized");
+    for (const file of files) {
+      assertion([EVENTS_FILE, STATE_FILE, MANIFEST_FILE].includes(file.name)
+        && file.isFile() && !file.isSymbolicLink(), "generation contains an unexpected entry, type, or symlink");
+      const metadata = await lstat(path.join(generationPath, file.name));
+      assertion(metadata.isFile() && !metadata.isSymbolicLink(), "generation artifact is not a physical file");
+      preflightBytes += metadata.size;
+      assertion(preflightBytes <= maxRetainedWorkspaceBytes, "retained workspace byte limit exceeded");
+    }
+  }
   const complete = [];
   const incomplete = [];
   const abandoned = [];
+  let retainedBytes = 0;
+  const accountInspection = inspection => {
+    if (inspection.state !== "complete") return;
+    retainedBytes += inspection.eventsBytes.length + inspection.stateByteLength
+      + inspection.manifestBytes.length;
+    assertion(retainedBytes <= maxRetainedWorkspaceBytes, "retained workspace byte limit exceeded");
+  };
   for (const entry of entries) {
     assertion(entry.isDirectory() && !entry.isSymbolicLink(), "generations contains a non-directory or symlink");
     const entryPath = path.join(generationsPath, entry.name);
     if (GENERATION_NAME.test(entry.name)) {
       const inspection = await inspectGenerationDirectory(entryPath, staticContext);
       assertion(inspection.state === "complete", "published generation lacks its commit marker");
+      accountInspection(inspection);
       complete.push(inspection);
     } else if (STAGING_NAME.test(entry.name)) {
-      incomplete.push(await inspectGenerationDirectory(entryPath, staticContext, { staging: true }));
+      const inspection = await inspectGenerationDirectory(entryPath, staticContext, { staging: true });
+      accountInspection(inspection);
+      incomplete.push(inspection);
     } else if (ABANDONED_NAME.test(entry.name)) {
       await assertNoLinksRecursively(entryPath);
       abandoned.push(entry.name);
@@ -788,6 +831,9 @@ async function scanWorkspace(workspacePath, staticContext, { allowClaim = false 
       : generation.manifest.parent_generation_sha256 === complete[index - 1].generation_sha256,
     "generation parent chain drifted");
     if (index > 0) {
+      const addedEvents = generation.events.length - complete[index - 1].events.length;
+      assertion(addedEvents >= 1 && addedEvents <= 32,
+        "generation must append 1 through 32 events");
       assertion(generation.eventsBytes.subarray(0, complete[index - 1].eventsBytes.length)
         .equals(complete[index - 1].eventsBytes), "event log is not an append-only prefix");
     }
@@ -806,6 +852,7 @@ async function scanWorkspace(workspacePath, staticContext, { allowClaim = false 
   if (!allowClaim) assertion(!claim.present, "workspace has an active or crash-retained writer claim");
   return {
     complete,
+    retainedBytes: Math.max(preflightBytes, retainedBytes),
     current: complete.at(-1) ?? null,
     incomplete,
     abandoned,
@@ -822,12 +869,14 @@ async function scanWorkspace(workspacePath, staticContext, { allowClaim = false 
   };
 }
 
-function makeManifest(staticContext, sequence, transactionId, parentDigest, eventsBytes, stateBytes) {
+function makeManifest(staticContext, sequence, transactionId, parentDigest, eventsBytes, stateBytes, eventCount = sequence) {
+  const hasBatchHistory = eventCount !== sequence;
   return {
     contract: {
       name: "pdf-tools.verified-extraction-workspace-generation",
-      version: "1.0.0-experimental",
+      version: hasBatchHistory ? "1.1.0-experimental" : "1.0.0-experimental",
     },
+    ...(hasBatchHistory ? { event_count: eventCount } : {}),
     workspace_identity_sha256: staticContext.identity.workspace_identity_sha256,
     sequence,
     transaction_id: transactionId,
@@ -944,20 +993,34 @@ async function publishGeneration({
   transactionId,
   expectedParentGenerationSha256,
   faultInjector = null,
+  maxRetainedWorkspaceBytes = MAX_RETAINED_WORKSPACE_BYTES,
 }) {
   assertion(TRANSACTION_ID.test(transactionId), "transaction_id is invalid");
-  const before = await scanWorkspace(workspacePath, staticContext);
+  const before = await scanWorkspace(workspacePath, staticContext, { maxRetainedWorkspaceBytes });
   assertion(before.current.generation_sha256 === expectedParentGenerationSha256,
     "current generation differs from the exact expected parent");
   const sequence = before.current.manifest.sequence + 1;
   assertion(sequence < staticContext.policy.max_generations,
     "workspace generation retention limit reached; explicit deletion is required");
-  assertion(events.length === sequence && events.length <= staticContext.policy.max_proposals,
+  const addedEvents = events.length - before.current.events.length;
+  assertion(addedEvents >= 1 && addedEvents <= 32 && events.length <= staticContext.policy.max_proposals,
     "event sequence or proposal limit is invalid");
+  const eventsBytes = eventBytes(events);
+  const stateBytes = canonicalBytes(deriveState(staticContext.identity, events, sequence));
+  assertion(eventsBytes.subarray(0, before.current.eventsBytes.length).equals(before.current.eventsBytes),
+    "event log is not an append-only prefix");
+  assertion(eventsBytes.length <= MAX_GENERATION_FILE_BYTES
+    && stateBytes.length <= MAX_GENERATION_FILE_BYTES,
+  "generation exceeds the retained byte limit");
   assertion(!before.complete.some(item => item.manifest.transaction_id === transactionId),
     "transaction_id was already consumed");
   assertion(!before.abandonedTransactionIds.includes(transactionId),
     "transaction_id was already abandoned and cannot be replaced");
+  const manifest = makeManifest(staticContext, sequence, transactionId,
+    expectedParentGenerationSha256, eventsBytes, stateBytes, events.length);
+  const manifestBytes = canonicalBytes(manifest);
+  assertion(before.retainedBytes + eventsBytes.length + stateBytes.length + manifestBytes.length
+    <= maxRetainedWorkspaceBytes, "retained workspace byte limit exceeded");
   const claim = {
     contract: { name: "pdf-tools.verified-extraction-workspace-claim", version: "1.0.0-experimental" },
     workspace_identity_sha256: staticContext.identity.workspace_identity_sha256,
@@ -971,30 +1034,26 @@ async function publishGeneration({
     claim,
     faultInjector,
   });
-  const claimed = await scanWorkspace(workspacePath, staticContext, { allowClaim: true });
+  const claimed = await scanWorkspace(workspacePath, staticContext, {
+    allowClaim: true, maxRetainedWorkspaceBytes,
+  });
   assertion(claimed.claim.present
     && canonicalWorkspaceJson(claimed.claim.claim) === canonicalWorkspaceJson(claim),
   "writer claim changed after exclusive acquisition");
   assertion(claimed.current?.generation_sha256 === expectedParentGenerationSha256
     && claimed.current?.manifest.sequence + 1 === sequence,
   "workspace advanced before the writer claim became authoritative");
+  assertion(claimed.retainedBytes + eventsBytes.length + stateBytes.length + manifestBytes.length
+    <= maxRetainedWorkspaceBytes, "retained workspace byte limit exceeded");
   await inject(faultInjector, "after_claim", { claim });
   const generationsPath = path.join(workspacePath, "generations");
   const stagingPath = path.join(generationsPath, `.staging-${transactionId}`);
   await mkdir(stagingPath, { mode: 0o700 });
   await assertPrivateDirectory(stagingPath, "staging generation");
   await inject(faultInjector, "after_staging_directory", { stagingPath });
-  const eventsBytes = eventBytes(events);
-  const stateBytes = canonicalBytes(deriveState(staticContext.identity, events, sequence));
-  assertion(eventsBytes.length <= MAX_GENERATION_FILE_BYTES
-    && stateBytes.length <= MAX_GENERATION_FILE_BYTES,
-  "generation exceeds the retained byte limit");
   await writeExclusiveFile(path.join(stagingPath, EVENTS_FILE), eventsBytes);
   await writeExclusiveFile(path.join(stagingPath, STATE_FILE), stateBytes);
   await inject(faultInjector, "after_generation_artifacts", { stagingPath });
-  const manifest = makeManifest(staticContext, sequence, transactionId,
-    expectedParentGenerationSha256, eventsBytes, stateBytes);
-  const manifestBytes = canonicalBytes(manifest);
   const digest = generationSha256(manifestBytes);
   await writeExclusiveFile(path.join(stagingPath, MANIFEST_FILE), manifestBytes);
   await fsyncDirectory(stagingPath);
@@ -1014,7 +1073,7 @@ async function publishGeneration({
     claimPath: writerAuthority.claimPath,
   });
   await inject(faultInjector, "after_claim_cleanup", { finalPath, digest });
-  const terminal = await scanWorkspace(workspacePath, staticContext);
+  const terminal = await scanWorkspace(workspacePath, staticContext, { maxRetainedWorkspaceBytes });
   assertion(terminal.current.generation_sha256 === digest, "terminal generation drifted");
   return terminal.current;
 }
@@ -1713,53 +1772,98 @@ export async function appendVerifiedWorkspaceResult({
   transactionId = null,
   faultInjector = null,
 }) {
+  const retained = await appendVerifiedWorkspaceResults({
+    rootPath, workspaceId, expectedWorkspaceIdentitySha256, expectedParentGenerationSha256,
+    verificationResults: [verificationResult], transactionId, faultInjector,
+  });
+  return {
+    workspace_identity_sha256: retained.workspace_identity_sha256,
+    generation_sha256: retained.generation_sha256,
+    generation_sequence: retained.generation_sequence,
+    event: retained.events[0],
+    result: retained.results[0],
+    state: retained.state,
+  };
+}
+
+// All results bind the same exact parent. Validate every item before acquiring
+// publication authority, then publish all events in one atomic generation.
+export async function appendVerifiedWorkspaceResults({
+  rootPath,
+  workspaceId,
+  expectedWorkspaceIdentitySha256,
+  expectedParentGenerationSha256,
+  verificationResults,
+  transactionId = null,
+  faultInjector = null,
+  maxRetainedWorkspaceBytes = MAX_RETAINED_WORKSPACE_BYTES,
+}) {
   assertion(SHA256.test(expectedParentGenerationSha256 ?? ""),
     "expected parent generation digest is invalid");
+  assertion(Array.isArray(verificationResults) && verificationResults.length >= 1
+    && verificationResults.length <= 32, "verification batch must contain 1 through 32 results");
   const { workspacePath, staticContext } = await loadWorkspace({
     rootPath, workspaceId, expectedWorkspaceIdentitySha256,
   });
-  const scan = await scanWorkspace(workspacePath, staticContext);
+  const scan = await scanWorkspace(workspacePath, staticContext, { maxRetainedWorkspaceBytes });
   assertion(scan.current.generation_sha256 === expectedParentGenerationSha256,
     "current generation differs from the exact expected parent");
-  const result = validateRetainedVerificationResult(
-    verificationResult,
-    staticContext.identity,
-    staticContext.policy,
-  );
-  assertion(result.generation_sha256 === expectedParentGenerationSha256,
-    "verification result belongs to a different workspace generation");
-  const proposal = scan.current.events.find(event => event.kind === "proposal_submitted"
-    && event.event_id === result.proposal_event_id);
-  assertion(proposal && proposal.leaf_pointer === result.leaf_pointer,
-    "verification result proposal is absent from the exact parent generation");
-  assertion(!scan.current.events.some(event => event.kind === "proposal_verified"
-    && event.proposal_event_id === result.proposal_event_id),
-  "proposal already has a retained verification result");
-  const eventBody = {
-    contract: { name: "pdf-tools.verified-extraction-workspace-event", version: "1.1.0-experimental" },
-    event_sequence: scan.current.events.length + 1,
-    kind: "proposal_verified",
-    workspace_identity_sha256: staticContext.identity.workspace_identity_sha256,
-    leaf_pointer: result.leaf_pointer,
-    proposal_event_id: result.proposal_event_id,
-    verification_result: result,
-  };
-  const event = { ...eventBody, event_id: `event.${sha256Canonical(eventBody)}` };
-  validateStoredEvent(event, staticContext.identity, staticContext.policy, eventBody.event_sequence);
+  assertion(scan.current.events.length + verificationResults.length <= staticContext.policy.max_proposals,
+    "workspace event limit reached");
+  const proposalIds = new Set();
+  const leaves = new Set();
+  const events = verificationResults.map((verificationResult, index) => {
+    try {
+      const result = validateRetainedVerificationResult(
+        verificationResult, staticContext.identity, staticContext.policy,
+      );
+      assertion(result.generation_sha256 === expectedParentGenerationSha256,
+        "verification result belongs to a different workspace generation");
+      assertion(!proposalIds.has(result.proposal_event_id) && !leaves.has(result.leaf_pointer),
+        "verification batch contains a duplicate proposal or leaf");
+      proposalIds.add(result.proposal_event_id);
+      leaves.add(result.leaf_pointer);
+      const proposal = scan.current.events.find(event => event.kind === "proposal_submitted"
+        && event.event_id === result.proposal_event_id);
+      assertion(proposal && proposal.leaf_pointer === result.leaf_pointer,
+        "verification result proposal is absent from the exact parent generation");
+      assertion(scan.current.events.filter(event => event.leaf_pointer === result.leaf_pointer).at(-1)?.event_id
+        === result.proposal_event_id, "verification result proposal is already verified or superseded");
+      assertion(!scan.current.events.some(event => event.kind === "proposal_verified"
+        && event.proposal_event_id === result.proposal_event_id),
+      "proposal already has a retained verification result");
+      const body = {
+        contract: { name: "pdf-tools.verified-extraction-workspace-event", version: "1.1.0-experimental" },
+        event_sequence: scan.current.events.length + index + 1,
+        kind: "proposal_verified",
+        workspace_identity_sha256: staticContext.identity.workspace_identity_sha256,
+        leaf_pointer: result.leaf_pointer,
+        proposal_event_id: result.proposal_event_id,
+        verification_result: result,
+      };
+      const event = { ...body, event_id: `event.${sha256Canonical(body)}` };
+      validateStoredEvent(event, staticContext.identity, staticContext.policy, body.event_sequence);
+      return event;
+    } catch (error) {
+      fail(`verification batch item ${index}: ${error.message}`);
+    }
+  });
   const generation = await publishGeneration({
     workspacePath,
     staticContext,
-    events: [...scan.current.events, event],
+    events: [...scan.current.events, ...events],
     transactionId: normalizeTransactionId(transactionId),
     expectedParentGenerationSha256,
     faultInjector,
+    maxRetainedWorkspaceBytes,
   });
   return {
     workspace_identity_sha256: staticContext.identity.workspace_identity_sha256,
+    parent_generation_sha256: expectedParentGenerationSha256,
     generation_sha256: generation.generation_sha256,
     generation_sequence: generation.manifest.sequence,
-    event,
-    result,
+    events,
+    results: events.map(event => event.verification_result),
     state: "complete",
   };
 }
@@ -1778,6 +1882,40 @@ export async function readExtractionWorkspaceContext({
     workspace_identity: workspaceIdentity,
     document_map: structuredClone(staticContext.documentMap),
     schema_bytes: Buffer.from(staticContext.schemaBytes),
+  };
+}
+
+// Internal bounded snapshot for source replay and review adapters. The entire
+// retained chain is validated once; callers must paginate the returned data
+// before exposing it over a tool/UI transport.
+export async function readExtractionReviewState({
+  rootPath,
+  workspaceId,
+  expectedWorkspaceIdentitySha256,
+  expectedGenerationSha256 = null,
+  maxRetainedWorkspaceBytes = MAX_RETAINED_WORKSPACE_BYTES,
+}) {
+  if (expectedGenerationSha256 !== null) {
+    assertion(SHA256.test(expectedGenerationSha256), "expected generation digest is invalid");
+  }
+  const { workspacePath, staticContext } = await loadWorkspace({
+    rootPath, workspaceId, expectedWorkspaceIdentitySha256,
+  });
+  const scan = await scanWorkspace(workspacePath, staticContext, { maxRetainedWorkspaceBytes });
+  assertion(scan.state === "complete", "review requires a complete workspace");
+  const generation = expectedGenerationSha256 === null ? scan.current
+    : scan.complete.find(item => item.generation_sha256 === expectedGenerationSha256);
+  assertion(generation, "expected generation is absent from the retained workspace");
+  const workspaceIdentity = structuredClone(staticContext.identity);
+  delete workspaceIdentity.returned_chunk_ids;
+  return {
+    workspace_identity: workspaceIdentity,
+    document_map: structuredClone(staticContext.documentMap),
+    schema_bytes: Buffer.from(staticContext.schemaBytes),
+    generation_sha256: generation.generation_sha256,
+    generation_sequence: generation.manifest.sequence,
+    events: structuredClone(generation.events),
+    current_state: structuredClone(generation.currentState),
   };
 }
 
@@ -2078,6 +2216,14 @@ export async function recoverExtractionWorkspace({
     ? scan.current === null && staging.manifest.parent_generation_sha256 === null
     : scan.current?.generation_sha256 === staging.manifest.parent_generation_sha256,
   "staging generation parent is no longer current");
+  if (scan.current) {
+    assertion(staging.manifest.sequence === scan.current.manifest.sequence + 1,
+      "staging generation sequence is not the next generation");
+    const addedEvents = staging.events.length - scan.current.events.length;
+    assertion(addedEvents >= 1 && addedEvents <= 32
+      && staging.eventsBytes.subarray(0, scan.current.eventsBytes.length).equals(scan.current.eventsBytes),
+    "staging generation is not a bounded append-only successor");
+  }
   const finalPath = path.join(generationsPath,
     generationName(staging.manifest.sequence, staging.generation_sha256));
   await rename(stagingPath, finalPath);

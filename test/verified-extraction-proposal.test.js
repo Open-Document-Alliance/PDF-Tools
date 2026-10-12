@@ -12,9 +12,13 @@ import {
   compileExtractionLeafObligations,
   validateExtractionProposalVerificationResult,
   verifyWorkspaceExtractionProposal,
+  verifyWorkspaceExtractionBatch,
 } from "../scripts/verified-extraction-proposal.mjs";
 import {
   appendVerifiedWorkspaceResult,
+  appendVerifiedWorkspaceResults,
+  readExtractionReviewState,
+  recoverExtractionWorkspace,
   appendUnverifiedWorkspaceProposal,
   canonicalWorkspaceJson,
   createExtractionWorkspace,
@@ -405,6 +409,56 @@ describe("source-replayed verified extraction proposals", () => {
     await expect(append({ ...calculationCreated, generation_sha256: retainedCalculation.generation_sha256 }, {
       leafPointer: "/computed", proposedValue: 0, transactionId: "4".repeat(32),
     })).rejects.toThrow(/already settled/u);
+  });
+
+  it("bounds aggregate history before writes and recovers an entire batch after a commit-marker crash", async () => {
+    const created = await create();
+    const first = await append(created, { leafPointer: "/invoice_id", proposedValue: "INV-1001" });
+    const second = await append({ ...created, generation_sha256: first.generation_sha256 }, {
+      leafPointer: "/vendor", proposedValue: "Northwind Paper", transactionId: "3".repeat(32),
+    });
+    const results = await verifyWorkspaceExtractionBatch({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedGenerationSha256: second.generation_sha256,
+      workspaceIdentity: created.workspaceIdentity,
+      documentMap, sourceBytes, schemaBytes: SCHEMA_BYTES, layouts,
+      items: [
+        { proposal_event_id: first.event.event_id, citations: [citation("INV-1001")],
+          method: { kind: "exact_projection", citation_index: 0, normalization: "identity" } },
+        { proposal_event_id: second.event.event_id, citations: [citation("Northwind Paper")],
+          method: { kind: "source_supported", reason: "semantic label assignment" } },
+      ],
+    });
+    const before = await snapshotGenerations(created.workspace_path);
+    const total = before.reduce((sum, [, bytes]) => sum + bytes.length, 0);
+    const readArgs = { rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256 };
+    await expect(readExtractionReviewState({ ...readArgs, maxRetainedWorkspaceBytes: total }))
+      .resolves.toMatchObject({ generation_sha256: second.generation_sha256 });
+    await expect(readExtractionReviewState({ ...readArgs, maxRetainedWorkspaceBytes: total - 1 }))
+      .rejects.toThrow(/retained workspace byte limit exceeded/);
+    const appendArgs = { ...readArgs, expectedParentGenerationSha256: second.generation_sha256,
+      verificationResults: results, transactionId: "4".repeat(32) };
+    await expect(appendVerifiedWorkspaceResults({ ...appendArgs, maxRetainedWorkspaceBytes: total }))
+      .rejects.toThrow(/retained workspace byte limit exceeded/);
+    expect(await fs.readdir(created.workspace_path)).not.toContain("writer-claim.v1.json");
+    expect(await snapshotGenerations(created.workspace_path)).toHaveLength(before.length);
+    await expectGenerationsUnchanged(before);
+    await expect(appendVerifiedWorkspaceResults({ ...appendArgs,
+      faultInjector: phase => { if (phase === "after_commit_marker") throw new Error("batch crash"); },
+    })).rejects.toThrow("batch crash");
+    await expect(readExtractionReviewState(readArgs)).rejects.toThrow(/writer claim/);
+    const recovered = await recoverExtractionWorkspace({ ...readArgs,
+      transactionId: appendArgs.transactionId, action: "publish_if_complete" });
+    expect(recovered.state).toBe("recovered_complete");
+    const snapshot = await readExtractionReviewState(readArgs);
+    expect(snapshot.generation_sequence).toBe(3);
+    expect(snapshot.events.map(event => event.event_sequence)).toEqual([1, 2, 3, 4]);
+    expect(snapshot.events.slice(-2).map(event => event.verification_result)).toEqual(results);
+    expect(snapshot.current_state.pending_leaves).not.toContain("/invoice_id");
+    expect(snapshot.current_state.pending_leaves).toContain("/vendor");
+    await expectGenerationsUnchanged(before);
   });
 
   it("types semantic support, ambiguity, and unverified reasoning without promoting them", async () => {
