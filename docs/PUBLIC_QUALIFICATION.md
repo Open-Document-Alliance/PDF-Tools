@@ -144,7 +144,17 @@ planned denominator, including failures and unattempted tests.
 
 The report retains the full request, per-test upstream output, exact source and
 response digests, Python package inventory, original candidate binding, and
-current-checkout comparison. `current_head_score_complete` additionally
+current-checkout comparison. Scorer diagnostics are drained without an
+unbounded in-memory buffer: at most 64 KiB per stream is retained as an exact
+base64 prefix, with total byte counts, full-stream SHA-256 and omitted-byte
+counts. Verbose diagnostics cannot change the test denominator or terminate
+scoring by filling a buffer. The process still has a 60-minute deadline;
+timeout, cancellation, nonzero exit or cleanup failure cannot produce a
+completed score. POSIX scorer descendants are reaped when their root exits.
+The exclusive JSON response file, not stdout, supplies all test verdicts.
+Existing annotated baseline tests are not duplicated; the corpus receives one
+baseline test per PDF, including those already present in the annotations.
+`current_head_score_complete` additionally
 requires a matching clean HEAD. `benchmark_claim_ready` stays false: this is a
 test-class adapter, not proof of an independently replicated public leaderboard
 result. It does not reproduce upstream bootstrap confidence intervals or

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -8,12 +8,99 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual, promisify } from "node:util";
 import { runOlmocrBench, validateRunReport, canonicalJson } from "./eval-olmocr-bench.mjs";
 import { parseStrictJson } from "./eval-strict-json.mjs";
+import { terminateWindowsTree } from "./test-process-control.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MANIFEST = path.join(ROOT, "test/fixtures/eval/olmocr/manifest.v1.json");
 const exec = promisify(execFile);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 export const UPSTREAM_REVISION = "f7cfe4c22098b154c76b6ec950d1c0a464eecf8d";
+
+// Upstream diagnostics are not the score protocol (the exclusive response
+// file is). Drain them without retaining an unbounded execFile buffer or
+// killing a valid full-corpus run merely because it is verbose.
+export function runScorerProcess(command, args, { environment, timeoutMs = 60 * 60 * 1000,
+  diagnosticBytes = 64 * 1024, abortSignal } = {}) {
+  if (typeof command !== "string" || !command.length
+    || !Array.isArray(args) || !args.every(value => typeof value === "string")
+    || !environment || typeof environment !== "object" || Array.isArray(environment)
+    || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60 * 60 * 1000
+    || !Number.isSafeInteger(diagnosticBytes) || diagnosticBytes < 0 || diagnosticBytes > 64 * 1024) {
+    throw new Error("Invalid bounded scorer process options");
+  }
+  if (abortSignal?.aborted) throw new Error("Scorer process was cancelled before start");
+  const capture = () => {
+    const digest = createHash("sha256"), prefixes = [];
+    let bytes = 0, retained = 0;
+    return {
+      consume(chunk) {
+        digest.update(chunk);
+        bytes += chunk.length;
+        const prefix = chunk.subarray(0, Math.max(0, diagnosticBytes - retained));
+        if (prefix.length) { prefixes.push(Buffer.from(prefix)); retained += prefix.length; }
+      },
+      finish: () => ({ bytes, sha256: digest.digest("hex"), retained_bytes: retained,
+        omitted_bytes: bytes - retained, prefix_base64: Buffer.concat(prefixes).toString("base64") }),
+    };
+  };
+  const stdout = capture(), stderr = capture();
+  const startedAt = new Date().toISOString();
+  const child = spawn(command, args, { env: environment, detached: process.platform !== "win32",
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  return new Promise(resolve => {
+    let timedOut = false, cancelledSignal = null, startError = null, cleanupError = null;
+    let windowsTermination = null, settled = false;
+    const killGroup = () => {
+      if (!Number.isSafeInteger(child.pid) || child.pid < 2) return;
+      if (process.platform === "win32") {
+        windowsTermination ??= terminateWindowsTree(child, { environment, timeoutMs: 1000 });
+        return;
+      }
+      try { process.kill(-child.pid, "SIGKILL"); }
+      catch (error) { if (error.code !== "ESRCH") cleanupError = error.message; }
+    };
+    const timeout = setTimeout(() => { timedOut = true; killGroup(); }, timeoutMs);
+    const handlers = new Map(["SIGINT", "SIGTERM"].map(signal => [signal, () => {
+      cancelledSignal ??= signal;
+      killGroup();
+    }]));
+    const abort = () => { cancelledSignal ??= "ABORT"; killGroup(); };
+    abortSignal?.addEventListener("abort", abort, { once: true });
+    for (const [signal, handler] of handlers) process.on(signal, handler);
+    child.stdout.on("data", chunk => stdout.consume(chunk));
+    child.stderr.on("data", chunk => stderr.consume(chunk));
+    child.once("error", error => { startError = error.message; });
+    // Reap descendants holding the diagnostic pipes even when their leader
+    // exits normally, so the next corpus cannot inherit an orphan renderer.
+    child.once("exit", () => { if (process.platform !== "win32") killGroup(); });
+    child.once("close", async (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      abortSignal?.removeEventListener("abort", abort);
+      for (const [name, handler] of handlers) process.removeListener(name, handler);
+      if (windowsTermination) {
+        const termination = await windowsTermination;
+        if (!termination.verified) cleanupError = termination.reason;
+      }
+      resolve({ schema: "pdf-tools.olmocr-scorer-process.v1", started_at: startedAt,
+        completed_at: new Date().toISOString(), timeout_ms: timeoutMs,
+        diagnostic_limit_bytes_per_stream: diagnosticBytes, exit_code: code, signal,
+        timed_out: timedOut, cancelled_signal: cancelledSignal, start_error: startError,
+        cleanup_error: cleanupError, stdout: stdout.finish(), stderr: stderr.finish() });
+    });
+  });
+}
+
+export function requireScorerProcessSuccess(execution) {
+  if (execution.exit_code !== 0 || execution.signal || execution.timed_out
+    || execution.cancelled_signal || execution.start_error || execution.cleanup_error) {
+    throw new Error(`Scorer process did not complete: ${JSON.stringify({
+      exit_code: execution.exit_code, signal: execution.signal, timed_out: execution.timed_out,
+      cancelled_signal: execution.cancelled_signal, start_error: execution.start_error,
+      cleanup_error: execution.cleanup_error })}`);
+  }
+}
 
 export function scorerEnvironment(destination, { environment = process.env, platform = process.platform, home = os.homedir() } = {}) {
   const browserCache = platform === "darwin"
@@ -168,8 +255,10 @@ export async function runUpstream(options) {
     report.runtime = { python: pythonVersion.trim(), packages: JSON.parse(packages) };
     let response;
     try {
-      await exec(python, [path.join(ROOT, "scripts/eval-olmocr-upstream.py"), path.resolve(upstream), requestPath, responsePath],
-        { env: environment, timeout: 60 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 });
+      report.scorer_execution = await runScorerProcess(python,
+        [path.join(ROOT, "scripts/eval-olmocr-upstream.py"), path.resolve(upstream), requestPath, responsePath],
+        { environment });
+      requireScorerProcessSuccess(report.scorer_execution);
       const bytes = await fs.readFile(responsePath);
       report.response_sha256 = hash(bytes);
       response = parseStrictJson(bytes.toString(), "upstream response");

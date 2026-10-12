@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildUpstreamRequest, scorerEnvironment, summarizeUpstream } from "../../scripts/eval-olmocr-upstream.mjs";
+import { buildUpstreamRequest, requireScorerProcessSuccess, runScorerProcess, scorerEnvironment, summarizeUpstream } from "../../scripts/eval-olmocr-upstream.mjs";
 import { WORKFLOW_OBLIGATIONS, scoreWorkflow } from "../../scripts/eval-workflow-score.mjs";
 
 const exec = promisify(execFile);
@@ -14,6 +15,81 @@ const tests = [{ id: "alpha", tests: [{ id: "a", pdf: "one.pdf", page: 1, type: 
   { id: "beta", tests: [{ id: "b", pdf: "two.pdf", page: 1, type: "absent", text: "B" }, { id: "c", pdf: "two.pdf", page: 1, type: "present", text: "C" }] }];
 const records = [{ pdf: "one.pdf", ok: true, outcome: "converted", markdown: "**A**\n" },
   { pdf: "two.pdf", ok: true, outcome: "converted", markdown: "C" }];
+
+describe("bounded upstream scorer process", () => {
+  const environment = { PATH: path.dirname(process.execPath) };
+  it("drains diagnostics beyond the former 8 MiB cap with exact bounded prefixes and stream hashes", async () => {
+    const count = 9 * 1024 * 1024;
+    const result = await runScorerProcess(process.execPath, ["-e",
+      `process.stdout.write(Buffer.alloc(${count}, 65)); process.stderr.write(Buffer.alloc(${count}, 66));`],
+    { environment, timeoutMs: 3000 });
+    expect(() => requireScorerProcessSuccess(result)).not.toThrow();
+    for (const [stream, byte] of [["stdout", 65], ["stderr", 66]]) {
+      expect(result[stream]).toMatchObject({ bytes: count, retained_bytes: 65536,
+        omitted_bytes: count - 65536,
+        sha256: createHash("sha256").update(Buffer.alloc(count, byte)).digest("hex") });
+      expect(Buffer.from(result[stream].prefix_base64, "base64")).toEqual(Buffer.alloc(65536, byte));
+    }
+  });
+  it("refuses nonzero exit even when the child wrote an apparent response", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-scorer-failed-response-")); cleanup.push(root);
+    const response = path.join(root, "response.json");
+    const result = await runScorerProcess(process.execPath, ["-e",
+      `require('node:fs').writeFileSync(${JSON.stringify(response)}, '{"status":"completed"}'); process.exitCode = 7;`],
+    { environment, timeoutMs: 3000 });
+    expect(result.exit_code).toBe(7);
+    expect(JSON.parse(await fs.readFile(response, "utf8")).status).toBe("completed");
+    expect(() => requireScorerProcessSuccess(result)).toThrow("did not complete");
+  });
+  it("reports startup failure and refuses invalid or enlarged bounds", async () => {
+    const result = await runScorerProcess(path.join(os.tmpdir(), "nonexistent-pdf-scorer-executable"), [],
+      { environment, timeoutMs: 500 });
+    expect(result.start_error).toBeTruthy();
+    expect(() => requireScorerProcessSuccess(result)).toThrow();
+    for (const invalid of [{ timeoutMs: 3600001 }, { timeoutMs: 0 }, { diagnosticBytes: 65537 }]) {
+      expect(() => runScorerProcess(process.execPath, [], { environment, ...invalid })).toThrow();
+    }
+  });
+  it("retains timeout and cancellation as failures", async () => {
+    const timed = await runScorerProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
+      { environment, timeoutMs: 100 });
+    expect(timed.timed_out).toBe(true);
+    expect(() => requireScorerProcessSuccess(timed)).toThrow();
+    const controller = new AbortController();
+    const running = runScorerProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"],
+      { environment, timeoutMs: 3000, abortSignal: controller.signal });
+    controller.abort();
+    const cancelled = await running;
+    expect(cancelled.cancelled_signal).toBe("ABORT");
+    expect(() => requireScorerProcessSuccess(cancelled)).toThrow();
+    expect(() => runScorerProcess(process.execPath, [],
+      { environment, abortSignal: controller.signal })).toThrow("before start");
+  });
+  it.skipIf(process.platform === "win32")("reaps a descendant holding output pipes after its root exits", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-scorer-descendant-")); cleanup.push(root);
+    const pidFile = path.join(root, "child.pid");
+    const script = `const child = require('node:child_process').spawn(process.execPath,
+      ['-e', 'setInterval(() => {}, 1000)'], { stdio: ['ignore', 1, 2] });
+      require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(child.pid)); process.exit(0);`;
+    const result = await runScorerProcess(process.execPath, ["-e", script], { environment, timeoutMs: 3000 });
+    expect(() => requireScorerProcessSuccess(result)).not.toThrow();
+    const pid = Number(await fs.readFile(pidFile, "utf8"));
+    const running = async () => {
+      try {
+        if (process.platform === "linux") {
+          const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+          return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+        }
+        process.kill(pid, 0);
+        return true;
+      } catch (error) { if (["ESRCH", "ENOENT"].includes(error.code)) return false; throw error; }
+    };
+    for (let attempt = 0; attempt < 50 && await running(); attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    expect(await running()).toBe(false);
+  });
+});
 
 describe("pinned upstream bridge denominator", () => {
   it("retains the installed browser while isolating equation caches and ambient credentials", () => {
@@ -30,6 +106,15 @@ describe("pinned upstream bridge denominator", () => {
     expect(request.tests).toHaveLength(5);
     expect(request.tests[0].markdown).toBe("**A**\n");
     expect(request.tests.slice(3).map(row => row.id)).toEqual(["one.pdf_baseline", "two.pdf_baseline"]);
+  });
+  it("does not duplicate baseline tests already present in the upstream annotations", () => {
+    const request = buildUpstreamRequest([{ id: "annotated", tests: [
+      { id: "existing-base", pdf: "one.pdf", page: 1, type: "baseline" },
+      { id: "text", pdf: "two.pdf", page: 1, type: "present", text: "C" },
+    ] }], records);
+    expect(request.tests).toHaveLength(3);
+    expect(request.tests.filter(row => row.test.type === "baseline").map(row => row.test.pdf))
+      .toEqual(["one.pdf", "two.pdf"]);
   });
   it("uses the upstream category macro-average instead of a micro-average", () => {
     const request = buildUpstreamRequest(tests, records);
