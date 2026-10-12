@@ -288,8 +288,10 @@ ordinary conversions remain fail-closed and emit no inferred table.
 Filesystem operations and rasterization happen locally, and PDF Tools does not
 upload files to a separate PDF service. Text, images, and metadata returned
 through MCP may still be processed under the selected host or model provider's
-data terms. Treat optional local OCR as planned work until its runtime,
-packaging, tests, and release evidence ship together.
+data terms. Optional local OCR adapters and resumable proposal jobs require a
+separately installed engine and explicit configuration. Their output remains
+unverified; ordinary text reads do not invoke them. See [Local OCR](LOCAL_OCR.md)
+for platform limits and the validation required before release claims.
 
 ## Tool inventory (current)
 

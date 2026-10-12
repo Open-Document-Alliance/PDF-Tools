@@ -206,7 +206,7 @@ describe("documentation capability claims", () => {
       expect(dependencyNames, relativePath).not.toContain("pdf-parse");
       expect(
         dependencyNames.some(name => /(?:^|[-_/])ocr(?:$|[-_/])/i.test(name)),
-        `${relativePath} must not silently add an OCR package while docs describe OCR as unshipped`,
+        `${relativePath} must not silently add an OCR package while docs state no OCR engine is bundled`,
       ).toBe(false);
     }
 

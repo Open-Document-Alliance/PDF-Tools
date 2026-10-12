@@ -446,7 +446,9 @@ complete Markdown.
 PDF Tools performs filesystem operations and rasterization locally and does not
 upload files to a separate PDF service. Content returned through MCP can be
 processed by the selected host or model under that provider's data terms. A
-future local OCR engine is optional planned work, not a current capability.
+separately installed engine can be explicitly configured for optional local OCR
+adapters and resumable proposal jobs. These produce unverified proposals and do
+not change ordinary text reads; see [Local OCR](docs/LOCAL_OCR.md).
 
 ## Signature Architecture (v0.8.0)
 

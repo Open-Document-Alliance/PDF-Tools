@@ -173,8 +173,9 @@ text layer. If the selected `read_pdf_content` result contains no text, the tool
 may return a rendered image of page 1 for vision-capable host/model inspection.
 Page and region rendering produces raster images, not recognized text. A mixed
 text/raster PDF, or raster pages after page 1, may therefore contain content the
-broad text read does not recognize. Optional local OCR remains a planned
-improvement rather than a shipped capability.
+broad text read does not recognize. Optional local OCR adapters and resumable
+proposal jobs require a separately installed engine and explicit configuration;
+their output remains unverified until reviewed. See [Local OCR](docs/LOCAL_OCR.md).
 
 `get_pdf_info` binds these observations to the exact race-aware source
 SHA-256, keeps widget annotations separate from ordinary annotations, and
