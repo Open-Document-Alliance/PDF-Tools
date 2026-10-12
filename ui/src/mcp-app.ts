@@ -217,6 +217,9 @@ let pendingLoadResultKey = "";
 // preloader from a previous generation aborts instead of polluting caches
 // belonging to the new doc.
 let pdfGeneration = 0;
+let thumbnailObserver: IntersectionObserver | null = null;
+let thumbnailGridVersion = 0;
+const thumbnailRenderTasks = new Set<{ cancel: () => void; promise: Promise<unknown> }>();
 
 // ─── DOM ─────────────────────────────────────────────────────────────────────
 
@@ -548,6 +551,7 @@ function retirePdfSession() {
   preloadPaused = false;
   currentViewport = null;
   currentViewportPage = 0;
+  const thumbnailDisposals = stopThumbnailRendering();
   const previousDocument = pdfDocument;
   pdfDocument = null;
   const loadingTasks = [...activePdfLoadingTasks];
@@ -562,6 +566,7 @@ function retirePdfSession() {
   pdfSessionDisposal = Promise.allSettled([
     pdfSessionDisposal,
     ...(renderTask ? [renderTask.promise] : []),
+    ...thumbnailDisposals,
     ...loadingTasks.map(destroyPdfLoadingTask),
     ...(previousDocument ? [Promise.resolve().then(() => previousDocument.destroy())] : []),
   ]).then(() => {});
@@ -3214,9 +3219,27 @@ function updateManageActions() {
   hostPdfSession.refresh();
 }
 
-async function renderThumbnail(pageNum: number): Promise<string> {
-  if (!pdfDocument) return "";
-  const page = await pdfDocument.getPage(pageNum);
+function stopThumbnailRendering() {
+  thumbnailGridVersion++;
+  thumbnailObserver?.disconnect();
+  thumbnailObserver = null;
+  const tasks = [...thumbnailRenderTasks];
+  thumbnailRenderTasks.clear();
+  for (const task of tasks) {
+    try { task.cancel(); } catch { /* best-effort */ }
+  }
+  return tasks.map(task => task.promise.catch(() => {}));
+}
+
+async function renderThumbnail(pageNum: number, generation: number, gridVersion: number): Promise<string> {
+  const renderDocument = pdfDocument;
+  const assertCurrent = () => {
+    assertPdfGeneration(generation);
+    if (!renderDocument || renderDocument !== pdfDocument || gridVersion !== thumbnailGridVersion) throw new ViewerLifecycleEndedError();
+  };
+  assertCurrent();
+  const page = await renderDocument!.getPage(pageNum);
+  assertCurrent();
   const baseViewport = page.getViewport({ scale: 1 });
   const thumbScale = 120 / baseViewport.width;
   const viewport = page.getViewport({ scale: thumbScale });
@@ -3228,7 +3251,11 @@ async function renderThumbnail(pageNum: number): Promise<string> {
   ctx.fillStyle = "white";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  await page.render({ canvasContext: ctx, viewport }).promise;
+  const task = page.render({ canvasContext: ctx, viewport });
+  thumbnailRenderTasks.add(task);
+  try { await task.promise; }
+  finally { thumbnailRenderTasks.delete(task); }
+  assertCurrent();
   return canvas.toDataURL("image/jpeg", 0.7);
 }
 
@@ -3328,44 +3355,37 @@ function createThumbItem(ps: PageState, idx: number, observer: IntersectionObser
 }
 
 function renderManageGrid() {
+  stopThumbnailRendering();
   clearChildren(manageGridEl);
-
-  if (totalPages <= 1) {
-    const empty = document.createElement("div");
-    empty.className = "manage-empty";
-    const text = document.createElement("div");
-    text.className = "manage-empty-text";
-    text.textContent = "Only 1 page \u2014 nothing to rearrange.";
-    const btn = document.createElement("button");
-    btn.className = "manage-empty-btn";
-    btn.textContent = "Back to View";
-    btn.addEventListener("click", () => switchMode("view"));
-    empty.appendChild(text);
-    empty.appendChild(btn);
-    manageGridEl.appendChild(empty);
-    updateManageActions();
-    return;
-  }
-
+  const generation = pdfGeneration;
+  const gridVersion = thumbnailGridVersion;
+  const isCurrent = () => !isTearingDown && generation === pdfGeneration && gridVersion === thumbnailGridVersion;
   const observer = new IntersectionObserver((entries) => {
+    if (!isCurrent()) return;
     for (const entry of entries) {
       if (entry.isIntersecting) {
         const el = entry.target as HTMLElement;
         const idx = parseInt(el.dataset.idx!, 10);
         const ps = pageStates[idx];
-        if (!ps.thumbnailDataUrl) {
-          renderThumbnail(ps.originalIndex).then(url => {
+        if (ps && !ps.thumbnailDataUrl) {
+          void renderThumbnail(ps.originalIndex, generation, gridVersion).then(url => {
+            if (!isCurrent()) return;
             ps.thumbnailDataUrl = url;
             const img = el.querySelector(".manage-thumb-img") as HTMLImageElement;
             if (img) { img.src = url; img.style.display = ""; }
             const placeholder = el.querySelector(".manage-thumb-placeholder");
             if (placeholder) placeholder.remove();
+          }).catch(error => {
+            if (!isCurrent() || error instanceof ViewerLifecycleEndedError || error?.name === "RenderingCancelledException") return;
+            const placeholder = el.querySelector(".manage-thumb-placeholder");
+            if (placeholder) placeholder.textContent = "Preview unavailable";
           });
         }
         observer.unobserve(el);
       }
     }
   }, { rootMargin: "100px" });
+  thumbnailObserver = observer;
 
   pageStates.forEach((ps, idx) => {
     manageGridEl.appendChild(createThumbItem(ps, idx, observer));

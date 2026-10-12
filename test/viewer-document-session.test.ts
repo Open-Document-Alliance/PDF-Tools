@@ -84,6 +84,7 @@ class Element {
 }
 
 let elements: Map<string, Element>;
+let observers: any[];
 let documents: any[];
 let tasks: any[];
 let bytes: string;
@@ -125,7 +126,15 @@ beforeEach(async () => {
   vi.stubGlobal("window", { devicePixelRatio: 1, getSelection: () => null });
   vi.stubGlobal("getComputedStyle", () => ({ paddingTop: "0", paddingBottom: "0", visibility: "visible" }));
   vi.stubGlobal("requestAnimationFrame", (callback: Function) => queueMicrotask(() => callback(0)));
-  vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+  observers = [];
+  vi.stubGlobal("IntersectionObserver", class {
+    observed: Element[] = [];
+    disconnect = vi.fn();
+    constructor(public callback: Function) { observers.push(this); }
+    observe(element: Element) { this.observed.push(element); }
+    unobserve() {}
+    fire() { this.callback(this.observed.map(target => ({ target, isIntersecting: true }))); }
+  });
   vi.stubGlobal("localStorage", { getItem: () => null });
   documents = [];
   tasks = [];
@@ -181,6 +190,7 @@ describe("viewer document sessions", () => {
     element("mode-manage-btn").click();
     expect(element("manage-panel").style.display).toBe("flex");
     expect(element("manage-grid").children).toHaveLength(1);
+    expect((element("manage-grid").children[0] as any).className).toBe("manage-thumb-item");
   });
 
   it("reloads changed same-path bytes for a new view and destroys the previous document", async () => {
@@ -284,6 +294,29 @@ describe("viewer document sessions", () => {
     await vi.waitFor(() => expect(element("text-layer").textContent).toBe("NEW"));
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(documents[0].destroy).toHaveBeenCalledTimes(1);
+    expect(element("error").style.display).toBe("none");
+  });
+
+  it("cancels a held thumbnail render and disconnects its observer on replacement", async () => {
+    await harness.app.ontoolresult(result("first"));
+    await vi.waitFor(() => expect(element("text-layer").textContent).toBe("OLD"));
+    const held = deferred();
+    const oldPage = await documents[0].getPage(1);
+    const cancel = vi.fn(() => held.reject(Object.assign(new Error("Cancelled"), { name: "RenderingCancelledException" })));
+    const render = vi.fn(() => ({ promise: held.promise, cancel }));
+    oldPage.render = render;
+    documents[0].getPage = async () => oldPage;
+    element("mode-manage-btn").click();
+    const observer = observers[0];
+    observer.fire();
+    await vi.waitFor(() => expect(render).toHaveBeenCalled());
+    bytes = "NEW";
+    await harness.app.ontoolresult(result("second"));
+    await vi.waitFor(() => expect(element("text-layer").textContent).toBe("NEW"));
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(observer.disconnect).toHaveBeenCalled();
+    observer.fire();
+    expect(render).toHaveBeenCalledTimes(1);
     expect(element("error").style.display).toBe("none");
   });
 
