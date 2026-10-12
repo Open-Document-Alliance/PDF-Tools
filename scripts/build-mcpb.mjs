@@ -86,6 +86,7 @@ export const SERVER_FILES = [
   "host-pdf-import.js",
   "index.js",
   "layout-extraction.js",
+  "local-ocr-jobs.js",
   "local-ocr-tools.js",
   "lumin-client-identity.js",
   "lumin-oauth-loopback.js",

@@ -1,0 +1,42 @@
+{
+  "schema": "pdf-tools.local-ocr-jobs-smoke.v1",
+  "status": "passed",
+  "fixture": "generated-two-page-raster-invoices",
+  "platform": "linux",
+  "architecture": "x64",
+  "node": "v24.19.0",
+  "engine": {
+    "language": "eng",
+    "name": "tesseract",
+    "pillow_version": "12.3.0",
+    "pypdfium2_version": "5.13.0",
+    "tesseract_version": "tesseract 5.3.4"
+  },
+  "helper_sha256": "a66ec8fe3d77f846cabac126812425dfe5a6ed2b2b533bb863fdcf6e05c999c0",
+  "source_sha256": "54ab0664a0e50e744482ed7c83f366e7f0d2c8f3d3e0252f6eb41395ddadf2cb",
+  "pages": [
+    {
+      "page_number": 1,
+      "observation_count": 9,
+      "proposal_sha256": "a440f3002c1813986110371ed728af9e1ef1f150dc3a6706edf3e5506c608e52",
+      "render_png_sha256": "72c44d971f13ba9ab41de216c1c70facf1a9151b327493c55286da7e9f85d87e"
+    },
+    {
+      "page_number": 2,
+      "observation_count": 9,
+      "proposal_sha256": "6b056f0a4d8575d8476099ea8ef3dc11dc19603c73418fc17d53c6a60795067c",
+      "render_png_sha256": "a459b575dc60a50ec789aced42dde48716537975c1bcf557c65c2ecb2690dfb6"
+    }
+  ],
+  "duration_ms": 5115,
+  "checks": {
+    "resumed_across_handler_instances": true,
+    "completed_pages_not_rerun": true,
+    "invoice_ids_recognized": true,
+    "totals_recognized": true,
+    "review_hashes_match": true,
+    "source_unchanged": true,
+    "words_remain_unverified": true
+  },
+  "limitation": "Two synthetic pages; not general OCR accuracy or installed-host qualification."
+}

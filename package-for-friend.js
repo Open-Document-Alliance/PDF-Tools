@@ -70,6 +70,7 @@ export const SHARE_FILES = [
   "server/lumin-sign-v1-operation.js",
   "server/lumin-sign-v1-transport.js",
   "server/lumin-signing-tools.js",
+  "server/local-ocr-jobs.js",
   "server/local-ocr-tools.js",
   "server/markdown-conversion.js",
   "server/markdown-output-transaction.js",

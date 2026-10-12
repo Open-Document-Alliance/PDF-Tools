@@ -1,7 +1,8 @@
 # Experimental opt-in local OCR
 
 The default PDF Tools package does not install or bundle an OCR engine.
-Its normal tool list is unchanged. The optional `propose_pdf_ocr` tool is
+Its normal tool list is unchanged. The optional `propose_pdf_ocr` tool and
+`start_pdf_ocr_job`, `resume_pdf_ocr_job`, `read_pdf_ocr_job` job tools are
 exposed only when an administrator explicitly supplies `localOCR` in the
 existing local PDF Tools configuration file. This source feature is not yet
 a qualified installed desktop release.
@@ -114,8 +115,10 @@ are not accepted as completed proposals and are not silently deleted.
 
 ## Limits
 
-- One active OCR request per server, one page per request, and a shared
-  120-second generation/replay budget with process-group termination.
+- One active OCR page operation per server and a shared 120-second
+  generation/replay budget per page with process-group termination. The
+  single-page tool keeps its existing contract; a job resume handles at most
+  two pages sequentially, for at most two page-attempt budgets.
 - No provider credentials or host Python import paths are passed to the
   adapter. Its configured local interpreter and system frameworks remain
   trusted, and no operating-system network audit is claimed.
@@ -126,3 +129,78 @@ are not accepted as completed proposals and are not silently deleted.
 - Windows is not supported by the private-file/process-group adapter boundary.
   Linux uses the explicitly configured Tesseract adapter; macOS can use either
   engine. A source implementation is not installed-host qualification.
+
+## Resumable multipage jobs
+
+1. Obtain the source SHA-256 with `get_pdf_identity`.
+2. Call `start_pdf_ocr_job` with `pdf_path`, `expected_source_sha256`, an
+   explicit `pages` list and `confirm_local_ocr: true`. The list must contain
+   1–20 distinct page numbers from 1–10000. Creation records the job but does
+   not run an engine; page existence is checked by each later page attempt.
+3. Save the returned `job_id` and `job_identity_sha256`. Resume with
+   `resume_pdf_ocr_job({ job_id, expected_job_identity_sha256:
+   job_identity_sha256, confirm_local_ocr: true })`. Default work is one
+   unfinished page; `max_pages: 2` permits two. Each call needs fresh explicit
+   confirmation. Page order is ascending.
+4. `read_pdf_ocr_job` accepts the same ID and expected identity without
+   confirmation. It returns progress and private review paths without OCR.
+   Completion means every selected page has a retained, replayed proposal;
+   it does **not** mean the words are correct.
+
+Jobs pin the canonical source path and SHA, configured engine, exact reviewed
+helper bytes, configured executable invocation paths, resolved executable
+paths and filesystem identities. Every read/resume rechecks these bindings
+through the existing source allowlist. A missing or changed source or
+configuration refuses reuse; start a new job after intentional changes.
+Executable filesystem identity is not an attestation of the entire Python
+environment: installed libraries, language data and OS frameworks remain
+trusted host configuration.
+
+Private job directories (0700) contain an immutable manifest and independent
+page checkpoints (0600). A checkpoint is published atomically only after a
+successful single-page generation/replay and validation of the retained
+files. Failed or interrupted pages have no completed checkpoint and may be
+retried. A process restart preserves completed checkpoints and skips those
+pages. A crash after producing proposal files but before publishing its
+checkpoint can rerun that unfinished page; orphaned attempts remain private.
+Completed file hashes are checked at checkpoint creation. Subsequent
+read/resume calls check exact descriptor metadata, including inode and
+nanosecond change/modification times, before reusing a checkpoint. Changed,
+missing or nonprivate retained artifacts refuse reuse.
+File and directory durability barriers complete before success is reported.
+If a barrier fails after a checkpoint becomes visible, the call reports
+uncertain durability; a later read/resume validates and syncs that checkpoint
+without rerunning the completed page.
+
+One job resume runs at a time per server, and it calls the same single-page
+handler used by `propose_pdf_ocr`, preserving that handler's active-operation
+lock. A per-job filesystem lock also protects against competing server
+processes. Dead owners can be recovered using process birth identity;
+unidentifiable live owners are never reclaimed. Job state is for a local
+filesystem shared within one host PID namespace, not a network filesystem or
+cross-container distributed queue.
+
+Responses contain at most 20 page summaries and no word/image payloads.
+`completed_count`, `remaining_count`, `processed_this_call`, `remaining_pages`
+and `next_action` make continuation explicit. `failed_page` and
+`failure_code: "page_attempt_failed"` mean that page did not complete; inspect
+the selected page and configured engine before retrying. Every response has
+`verification_status: "unverified_ocr_proposals"`. Review paths refer to the
+same private proposal and HTML files used by the single-page tool.
+
+Page count, per-call work, artifact size and returned metadata are bounded;
+there is no automatic retention cleanup or aggregate disk quota. Each page
+retains its own source/helper snapshot, and failed attempts may also consume
+space. The subprocess deadline and output limits are not a hard RSS limit or
+an OS parser sandbox.
+
+The optional local two-page qualification command is:
+
+```sh
+node scripts/smoke-local-ocr-jobs.mjs --python /absolute/venv/bin/python --tesseract /absolute/path/to/tesseract --report /absolute/new-report.json
+```
+
+It generates a nonprivate two-page raster fixture, resumes between fresh
+handler instances, checks retained reviews and verifies that a completed job
+runs no additional pages. It is a small engine smoke check, not a general OCR
+accuracy evaluation or installed-desktop qualification.

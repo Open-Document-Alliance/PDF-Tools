@@ -71,6 +71,44 @@ export function validateLocalOcrResult(result) {
   }
 }
 
+const ocrJobPage = { type: "integer", minimum: 1, maximum: 10000 };
+const LOCAL_OCR_JOB_OUTPUT_SCHEMA = object({
+  status: enumString(["ocr_job_ready", "ocr_job_paused", "ocr_job_complete"]),
+  job_id: { type: "string", pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$" },
+  job_identity_sha256: ocrDigestSchema, source_pdf_sha256: ocrDigestSchema, helper_sha256: ocrDigestSchema,
+  configured_engine: enumString(["vision", "tesseract"]),
+  verification_status: { const: "unverified_ocr_proposals" },
+  page_count: { type: "integer", minimum: 1, maximum: 20 },
+  completed_count: { type: "integer", minimum: 0, maximum: 20 },
+  remaining_count: { type: "integer", minimum: 0, maximum: 20 },
+  completed_pages: { type: "array", maxItems: 20, items: object({
+    page_number: ocrJobPage, observation_count: { type: "integer", minimum: 0, maximum: 1000 },
+    proposal_sha256: ocrDigestSchema, render_png_sha256: ocrDigestSchema, review_html_sha256: ocrDigestSchema,
+    review_html_path: { type: "string", minLength: 1, maxLength: 8192 },
+    proposal_directory: { type: "string", minLength: 1, maxLength: 8192 },
+  }) },
+  remaining_pages: { type: "array", maxItems: 20, uniqueItems: true, items: ocrJobPage },
+  processed_this_call: { type: "integer", minimum: 0, maximum: 2 },
+  max_pages_per_call: { const: 2 }, failed_page: nullable(ocrJobPage),
+  failure_code: nullable({ const: "page_attempt_failed" }),
+  next_action: enumString(["resume_pdf_ocr_job", "review_unverified_proposals"]),
+});
+
+export function validateLocalOcrJobResult(result) {
+  const completed = result.completed_pages.map(page => page.page_number);
+  const pages = [...completed, ...result.remaining_pages];
+  const expectedStatus = result.remaining_count === 0 ? "ocr_job_complete"
+    : result.completed_count === 0 ? "ocr_job_ready" : "ocr_job_paused";
+  if (result.completed_count !== completed.length || result.remaining_count !== result.remaining_pages.length
+    || result.page_count !== pages.length || new Set(pages).size !== pages.length
+    || result.processed_this_call > result.completed_count || result.status !== expectedStatus
+    || result.next_action !== (result.remaining_count ? "resume_pdf_ocr_job" : "review_unverified_proposals")
+    || (result.failed_page === null) !== (result.failure_code === null)
+    || (result.failed_page !== null && !result.remaining_pages.includes(result.failed_page))) {
+    throw new Error("Local OCR job progress accounting is invalid.");
+  }
+}
+
 const fieldValue = {
   anyOf: [string, boolean, stringArray],
 };
@@ -1264,6 +1302,9 @@ const workspacePageRange = object({
 
 export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
   propose_pdf_ocr: LOCAL_OCR_OUTPUT_SCHEMA,
+  start_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,
+  resume_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,
+  read_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,
   create_extraction_workspace: object({
     workspace_id: string,
     workspace_path: string,
@@ -2109,6 +2150,9 @@ const semanticSuccessValidators = new Map([
     }
   }],
   ["propose_pdf_ocr", validateLocalOcrResult],
+  ["start_pdf_ocr_job", validateLocalOcrJobResult],
+  ["resume_pdf_ocr_job", validateLocalOcrJobResult],
+  ["read_pdf_ocr_job", validateLocalOcrJobResult],
   ["compare_pdfs", validatePdfComparisonSemantics],
   ["inspect_pdf_accessibility", validateAccessibilityInspectionResult],
   ["read_pdf_layout", validatePdfLayoutSemantics],
