@@ -6,6 +6,8 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { PDFDocument, StandardFonts } from "pdf-lib";
+import { createExtractionReviewToolHandler } from "../server/extraction-review.js";
+import { evidenceFixture } from "../test/helpers/evidence-review-fixture.js";
 
 const { chromium } = await import(process.env.PDF_TOOLS_PLAYWRIGHT_MODULE || "playwright");
 const viewer = await fs.readFile(path.resolve(process.argv[2] || "dist-ui/index.html"));
@@ -24,9 +26,23 @@ const size = Math.max(original.length, replacement.length);
 const oldBytes = Buffer.concat([original, Buffer.alloc(size - original.length, 32)]);
 const newBytes = Buffer.concat([replacement, Buffer.alloc(size - replacement.length, 32)]);
 assert.equal(oldBytes.length, newBytes.length, "The reload must exercise equal-size files");
+const evidence = evidenceFixture(oldBytes, 1);
+evidence.args.pdf_path = "/fixture.pdf";
+evidence.retained.events = [];
+evidence.verify(evidence.propose("/field_0", "ORIGINAL-VIEW-MARKER"), "source_supported", "ORIGINAL-VIEW-MARKER");
+const review = createExtractionReviewToolHandler({
+  workspaceRoot: "/fixtures", resolvePdfPath: value => value,
+  readPdfBytes: async () => oldBytes, readReviewState: async () => evidence.retained,
+});
+const reviewResponses = {
+  leaves: await review(evidence.args),
+  pages: await review({ ...evidence.args, view: "pages" }),
+  history: await review({ ...evidence.args, view: "history", leaf_pointer: "/field_0" }),
+};
 const html = `<!doctype html><html><body><iframe id="viewer" src="/viewer" style="width:1000px;height:900px;border:0"></iframe><script>
 const frame = document.getElementById('viewer');
 const fixtures = ${JSON.stringify([oldBytes.toString("base64"), newBytes.toString("base64")])};
+const evidenceResponses = ${JSON.stringify(reviewResponses)};
 let fixture = 0, holding = false, invalid = false;
 const held = [];
 window.state = { initialized: false, reads: 0, held: 0, errors: [] };
@@ -36,6 +52,10 @@ window.view = (next, uuid, options = {}) => {
   send({ method: 'ui/notifications/tool-result', params: { content: [], structuredContent: { pdfPath: '/fixture.pdf', totalBytes: atob(fixtures[fixture]).length, initialPage: 1 }, _meta: { viewUUID: uuid } } });
 };
 window.release = () => held.splice(0).forEach(reply => reply());
+window.openEvidence = () => {
+  fixture = 0; holding = false; invalid = false;
+  send({ method: 'ui/notifications/tool-result', params: evidenceResponses.leaves });
+};
 window.addEventListener('message', event => {
   if (event.source !== frame.contentWindow) return;
   const request = event.data;
@@ -55,6 +75,8 @@ window.addEventListener('message', event => {
       if (holding) { state.held++; held.push(() => reply(response)); } else reply(response);
     } else if (name === 'detect_signature_zones') {
       reply({ content: [], structuredContent: { zones: [], pages: [], warnings: [] } });
+    } else if (name === 'review_extraction_workspace') {
+      reply(evidenceResponses[args.view || 'leaves']);
     } else reply({ content: [], structuredContent: {} });
   } else if (request.method === 'ui/update-model-context') reply({});
   else send({ id: request.id, error: { code: -32601, message: 'Unsupported test method' } });
@@ -103,8 +125,16 @@ try {
   await page.evaluate(() => window.view(0, "bad-range", { invalid: true }));
   await frame.locator("#error").waitFor({ state: "visible" });
   assert.match(await frame.locator("#error-message").textContent(), /does not match the current document range/);
+  await page.evaluate(() => window.openEvidence());
+  await frame.locator("#evidence-panel").getByText("Loaded PDF bytes match the extraction source.", { exact: true }).waitFor();
+  await frame.getByRole("button", { name: "History and citations (1)", exact: true }).click();
+  await frame.getByRole("button", { name: "View citation on page 1", exact: true }).click();
+  await frame.locator(".evidence-citation-highlight").waitFor();
+  assert.match(await frame.locator("#evidence-panel").textContent(), /source_supported/);
+  await frame.getByRole("button", { name: "Page coverage", exact: true }).click();
+  await frame.locator("#evidence-panel").getByText("Visual inspection needed", { exact: true }).waitFor();
   assert.deepEqual(pageErrors, []);
-  console.log(JSON.stringify({ result: "passed", cases: ["one-page-visible-sign", "one-page-rotation", "same-path-equal-size-reload", "cancelled-range-late-response", "invalid-range-fails-visibly"], ...await page.evaluate(() => window.state) }, null, 2));
+  console.log(JSON.stringify({ result: "passed", cases: ["one-page-visible-sign", "one-page-rotation", "same-path-equal-size-reload", "cancelled-range-late-response", "invalid-range-fails-visibly", "evidence-source-byte-binding", "evidence-quote-highlight", "evidence-page-coverage"], ...await page.evaluate(() => window.state) }, null, 2));
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

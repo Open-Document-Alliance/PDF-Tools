@@ -26,6 +26,7 @@ import {
 import { buildManagedPdfPath, getHostBaseName } from "./path-utils";
 import { isPdfWorkspaceResult, PDF_WORKSPACE_TASKS } from "./workspace";
 import { HostPdfSession, HostPdfSessionEndedError, parseHostPdfInput } from "./host-pdf";
+import { EvidenceReviewPanel } from "./evidence-review";
 import {
   LatestPathRequestState,
   getCanvasBufferSize,
@@ -85,7 +86,7 @@ let currentViewport: any = null;
 let currentViewportPage = 0;
 
 // Manage pages state
-type ManageMode = "view" | "manage" | "sign";
+type ManageMode = "view" | "manage" | "sign" | "evidence";
 let manageMode: ManageMode = "view";
 
 // Signature zones (Sign mode)
@@ -322,6 +323,36 @@ let fallbackLoad:
   | { key: string; pdfPath: string; promise: Promise<boolean> }
   | null = null;
 
+const evidencePanel = new EvidenceReviewPanel({
+  panel: $("evidence-panel"),
+  textLayer: textLayerEl,
+  currentGeneration: () => pdfGeneration,
+  currentPage: () => currentViewportPage,
+  currentPath: () => pdfPath,
+  navigate: page => goToPage(page),
+  callTool: request => callServerToolDuringLifecycle(request),
+  sendPrompt: async prompt => {
+    if (!app.getHostCapabilities()?.message?.text || isTearingDown) return false;
+    try {
+      const result = await app.sendMessage({ role: "user", content: [{ type: "text", text: prompt }] });
+      return !result.isError;
+    } catch { return false; }
+  },
+  verifySource: async (source, generation) => {
+    assertPdfGeneration(generation);
+    const loadedDocument = pdfDocument;
+    if (!loadedDocument || !globalThis.crypto?.subtle) throw new Error("Source verification is unavailable in this viewer. Evidence actions are disabled.");
+    // Hash the bytes owned by the renderer, not a second filesystem read. This
+    // detects mixed ranges if the file was edited during progressive loading.
+    const bytes = await loadedDocument.getData();
+    assertPdfGeneration(generation);
+    const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
+    assertPdfGeneration(generation);
+    const sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    if (bytes.length !== source.size_bytes || sha256 !== source.sha256) throw new Error("The loaded PDF bytes do not match this extraction workspace. Reopen the original source before reviewing evidence.");
+  },
+});
+
 // ─── UI State ────────────────────────────────────────────────────────────────
 
 function showLoading(text: string) {
@@ -541,6 +572,7 @@ function retainPdfDisposal(disposal: Promise<unknown>) {
 /** Invalidate synchronously; a replacement waits for all earlier disposal. */
 function retirePdfSession() {
   const generation = ++pdfGeneration;
+  evidencePanel.clear();
   const renderTask = currentRenderTask;
   currentRenderTask = null;
   try { renderTask?.cancel(); } catch { /* best-effort */ }
@@ -815,6 +847,7 @@ async function renderPage() {
 
     if (searchOpen && searchQuery) renderHighlights();
     if (manageMode === "sign") renderZoneOverlay();
+    evidencePanel.afterPageRendered();
 
     updateControls();
     updatePageContext();
@@ -3157,6 +3190,8 @@ function switchMode(mode: ManageMode) {
   modeViewBtn.classList.toggle("active", mode === "view");
   modeManageBtn.classList.toggle("active", mode === "manage");
   modeSignBtn.classList.toggle("active", mode === "sign");
+  $("mode-evidence-btn").classList.toggle("active", mode === "evidence");
+  evidencePanel.setActive(mode === "evidence");
 
   const canvasContainer = document.querySelector(".canvas-container") as HTMLElement;
   const pageWrapper = document.querySelector(".page-wrapper") as HTMLElement;
@@ -3187,6 +3222,10 @@ function switchMode(mode: ManageMode) {
     canvasContainer.style.display = "";
     managePanelEl.style.display = "none";
     signPanelEl.style.display = "none";
+    if (mode === "evidence") {
+      sidebarEl.style.display = "none";
+      searchBar.style.display = "none";
+    }
     clearZoneOverlay();
     renderPage();
   }
@@ -3591,6 +3630,7 @@ sidebarToggleBtn.addEventListener("click", toggleSidebar);
 modeViewBtn.addEventListener("click", () => switchMode("view"));
 modeManageBtn.addEventListener("click", () => switchMode("manage"));
 modeSignBtn.addEventListener("click", () => switchMode("sign"));
+$("mode-evidence-btn").addEventListener("click", () => switchMode("evidence"));
 
 // Confirm modal wiring
 signModalNameEl.addEventListener("input", () => {
@@ -3994,7 +4034,14 @@ async function loadPdfFromToolResult(
   if (!parsed.ok) return false;
   const payload = parsed.data;
   const nextPdfPath = payload.activePath || payload.pdfPath;
-  if (payload.key === lastLoadedResultKey && pdfDocument && pdfPath === nextPdfPath) return true;
+  const review = (result.structuredContent as Record<string, unknown> | undefined)?.extractionReview;
+  if (payload.key === lastLoadedResultKey && pdfDocument && pdfPath === nextPdfPath) {
+    if (review !== undefined) {
+      switchMode("evidence");
+      await evidencePanel.open(review, pdfGeneration);
+    }
+    return true;
+  }
   if (payload.key === pendingLoadResultKey) return true;
 
   lastLoadedResultKey = payload.key;
@@ -4058,6 +4105,11 @@ async function loadPdfFromToolResult(
     manageStatusEl.textContent = "";
     manageApplyBtn.textContent = "Save as new file";
     switchMode("view");
+    if (review !== undefined) {
+      switchMode("evidence");
+      await evidencePanel.open(review, loadGeneration);
+      assertPdfGeneration(loadGeneration);
+    }
     syncActiveDocumentState();
     startPreloading();
   } catch (err: any) {
