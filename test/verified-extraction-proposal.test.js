@@ -72,6 +72,21 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+async function snapshotGenerations(workspacePath) {
+  const snapshots = [];
+  for (const directory of (await fs.readdir(workspacePath)).filter(name => name.startsWith("generation-"))) {
+    for (const filename of await fs.readdir(path.join(workspacePath, directory))) {
+      const absolute = path.join(workspacePath, directory, filename);
+      snapshots.push([absolute, await fs.readFile(absolute)]);
+    }
+  }
+  return snapshots;
+}
+
+async function expectGenerationsUnchanged(snapshots) {
+  for (const [filename, bytes] of snapshots) expect(await fs.readFile(filename)).toEqual(bytes);
+}
+
 describe("source-replayed verified extraction proposals", () => {
   let sourceBytes;
   let pdfjsLib;
@@ -375,6 +390,15 @@ describe("source-replayed verified extraction proposals", () => {
         input_normalization: "decimal_ascii",
       },
     })).rejects.toThrow(/divides by zero/u);
+    const retainedCalculation = await appendVerifiedWorkspaceResult({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: calculationCreated.workspace_identity_sha256,
+      expectedParentGenerationSha256: calculation.generation_sha256,
+      verificationResult: calculated, transactionId: "3".repeat(32),
+    });
+    await expect(append({ ...calculationCreated, generation_sha256: retainedCalculation.generation_sha256 }, {
+      leafPointer: "/computed", proposedValue: 0, transactionId: "4".repeat(32),
+    })).rejects.toThrow(/already settled/u);
   });
 
   it("types semantic support, ambiguity, and unverified reasoning without promoting them", async () => {
@@ -400,7 +424,7 @@ describe("source-replayed verified extraction proposals", () => {
     }
   });
 
-  it("accepts not-found only over the complete returned and admitted search scope", async () => {
+  it("retains a complete-scope absence declaration as unverified reasoning", async () => {
     const created = await create();
     const appended = await append(created, {
       leafPointer: "/missing",
@@ -412,7 +436,8 @@ describe("source-replayed verified extraction proposals", () => {
       method: { kind: "not_found" },
     });
     expect(result).toMatchObject({
-      status: "not_found",
+      status: "unverified_reasoning",
+      reason_codes: ["ABSENCE_NOT_MECHANICALLY_PROVEN"],
       citations: [],
       derived_value: null,
       search_scope: {
@@ -440,6 +465,132 @@ describe("source-replayed verified extraction proposals", () => {
       citations: [],
       method: { kind: "not_found" },
     })).rejects.toThrow(/document map is stale|document-map digest/u);
+  });
+
+  it.each([
+    { anyOf: [{ type: "string" }, { type: "string", minLength: 1 }] },
+    { title: "Invoice identifier", anyOf: [
+      { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
+      { type: "string", maxLength: 20 },
+    ] },
+  ])("accepts overlapping anyOf branches for the same exact source value: %j", async leaf => {
+    const schemaBytes = Buffer.from(JSON.stringify({
+      type: "object", properties: { invoice_id: leaf },
+    }), "utf8");
+    const { created, appended, workspaceIdentity, customMap, customChunk } = await createCustomProposal({
+      customSchemaBytes: schemaBytes, leafPointer: "/invoice_id", proposedValue: "INV-1001",
+    });
+    await expect(verifyWorkspaceExtractionProposal({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedGenerationSha256: appended.generation_sha256,
+      workspaceIdentity, proposalEventId: appended.event.event_id,
+      documentMap: customMap, sourceBytes, schemaBytes, layouts,
+      citations: [citationFromChunk(customChunk, "INV-1001")],
+      method: { kind: "exact_projection", citation_index: 0, normalization: "identity" },
+    })).resolves.toMatchObject({ status: "verified_exact", derived_value: "INV-1001" });
+  });
+
+  it("rejects an anyOf value that satisfies no branch", async () => {
+    const schemaBytes = Buffer.from(JSON.stringify({
+      type: "object", properties: { invoice_id: {
+        anyOf: [{ type: "string", minLength: 20 }, { type: "null" }],
+      } },
+    }), "utf8");
+    const { created, appended, workspaceIdentity, customMap, customChunk } = await createCustomProposal({
+      customSchemaBytes: schemaBytes, leafPointer: "/invoice_id", proposedValue: "INV-1001",
+    });
+    await expect(verifyWorkspaceExtractionProposal({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedGenerationSha256: appended.generation_sha256,
+      workspaceIdentity, proposalEventId: appended.event.event_id,
+      documentMap: customMap, sourceBytes, schemaBytes, layouts,
+      citations: [citationFromChunk(customChunk, "INV-1001")],
+      method: { kind: "exact_projection", citation_index: 0, normalization: "identity" },
+    })).rejects.toThrow(/does not conform/u);
+  });
+
+  it.each([
+    { type: "string" }, { minLength: 20 }, { enum: ["a different value"] },
+    { pattern: "^different" }, { allOf: [{ type: "null" }] },
+  ])("rejects unsupported anyOf sibling constraints rather than bypassing them: %j", sibling => {
+    const schemaBytes = Buffer.from(JSON.stringify({
+      type: "object", properties: { invoice_id: {
+        anyOf: [{ type: "string" }, { type: "null" }], ...sibling,
+      } },
+    }), "utf8");
+    expect(() => compileExtractionLeafObligations(schemaBytes)).toThrow(/keys are invalid/u);
+  });
+
+  it("does not prove absence of a present invoice and permits a source-cited correction", async () => {
+    const schemaBytes = Buffer.from(JSON.stringify({
+      type: "object", properties: { invoice_id: { anyOf: [{ type: "string" }, { type: "null" }] } },
+    }), "utf8");
+    const { created, appended, workspaceIdentity, customMap, customChunk } = await createCustomProposal({
+      customSchemaBytes: schemaBytes, leafPointer: "/invoice_id", proposedValue: null,
+    });
+    expect(customChunk.content).toContain("INV-1001");
+    const verifyInput = {
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedGenerationSha256: appended.generation_sha256,
+      workspaceIdentity, proposalEventId: appended.event.event_id,
+      documentMap: customMap, sourceBytes, schemaBytes, layouts,
+      citations: [], method: { kind: "not_found" },
+    };
+    const result = await verifyWorkspaceExtractionProposal(verifyInput);
+    expect(result).toMatchObject({
+      contract: { version: "1.1.0-experimental" },
+      status: "unverified_reasoning", reason_codes: ["ABSENCE_NOT_MECHANICALLY_PROVEN"],
+      derived_value: null, source_replayed: true,
+    });
+    for (const mutate of [
+      value => { value.status = "not_found"; value.reason_codes = []; },
+      value => { value.status = "verified_exact"; },
+      value => { value.reason_codes = []; },
+      value => { value.search_scope = null; },
+    ]) {
+      const forged = structuredClone(result);
+      mutate(forged);
+      const { verification_sha256: ignored, ...body } = forged;
+      void ignored;
+      forged.verification_sha256 = sha256(Buffer.from(canonicalWorkspaceJson(body), "utf8"));
+      expect(() => validateExtractionProposalVerificationResult(forged)).toThrow();
+    }
+    const retained = await appendVerifiedWorkspaceResult({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedParentGenerationSha256: appended.generation_sha256,
+      verificationResult: result, transactionId: "a".repeat(32),
+    });
+    const pendingInput = { rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      collection: "pending_leaves", limit: 10 };
+    expect((await readExtractionWorkspacePage(pendingInput)).items).toEqual(["/invoice_id"]);
+    const corrected = await appendUnverifiedWorkspaceProposal({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedParentGenerationSha256: retained.generation_sha256,
+      leafPointer: "/invoice_id", proposedValue: "INV-1001",
+      chunkIds: [customChunk.chunk_id], transactionId: "b".repeat(32),
+    });
+    const exact = await verifyWorkspaceExtractionProposal({
+      ...verifyInput, expectedGenerationSha256: corrected.generation_sha256,
+      proposalEventId: corrected.event.event_id,
+      citations: [citationFromChunk(customChunk, "INV-1001")],
+      method: { kind: "exact_projection", citation_index: 0, normalization: "identity" },
+    });
+    expect(exact.status).toBe("verified_exact");
+    await appendVerifiedWorkspaceResult({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedParentGenerationSha256: corrected.generation_sha256,
+      verificationResult: exact, transactionId: "c".repeat(32),
+    });
+    expect((await readExtractionWorkspacePage(pendingInput)).items).toEqual([]);
+    expect((await readExtractionWorkspacePage({ ...pendingInput, collection: "results" })).items)
+      .toEqual([result, exact]);
   });
 
   it("rejects stale source, schema, layout, generation, and fabricated proposal bindings", async () => {
@@ -529,6 +680,102 @@ describe("source-replayed verified extraction proposals", () => {
       proposedValue: "INV-1001",
       transactionId: "6".repeat(32),
     })).rejects.toThrow(/already settled/u);
+  });
+
+  it.each([
+    { kind: "source_supported", reason: "field assignment still requires judgment" },
+    { kind: "ambiguous", reason: "two assignments remain plausible", alternative_count: 2 },
+    { kind: "unverified_reasoning", reason: "field assignment has not been checked" },
+  ])("permits append-only correction after an uncertain %j result", async method => {
+    const created = await create();
+    const first = await append(created, { leafPointer: "/invoice_id", proposedValue: "Northwind Paper" });
+    const uncertainResult = await verify(created, first, { citations: [citation("Northwind Paper")], method });
+    const uncertain = await appendVerifiedWorkspaceResult({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedParentGenerationSha256: first.generation_sha256,
+      verificationResult: uncertainResult, transactionId: "3".repeat(32),
+    });
+    const snapshots = await snapshotGenerations(created.workspace_path);
+    const readInput = { rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256, limit: 20 };
+    expect((await readExtractionWorkspacePage({ ...readInput, collection: "pending_leaves" })).items)
+      .toContain("/invoice_id");
+    await expect(append({ ...created, generation_sha256: first.generation_sha256 }, {
+      leafPointer: "/invoice_id", proposedValue: "INV-1001", transactionId: "4".repeat(32),
+    })).rejects.toThrow(/exact expected parent/u);
+    const retry = await append({ ...created, generation_sha256: uncertain.generation_sha256 }, {
+      leafPointer: "/invoice_id", proposedValue: "INV-1001", transactionId: "4".repeat(32),
+    });
+    await expect(append({ ...created, generation_sha256: retry.generation_sha256 }, {
+      leafPointer: "/invoice_id", proposedValue: "INV-1001", transactionId: "5".repeat(32),
+    })).rejects.toThrow(/unverified pending proposal/u);
+    const correctedResult = await verify(created, retry);
+    const corrected = await appendVerifiedWorkspaceResult({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedParentGenerationSha256: retry.generation_sha256,
+      verificationResult: correctedResult, transactionId: "5".repeat(32),
+    });
+    expect((await readExtractionWorkspacePage({ ...readInput, collection: "results" })).items)
+      .toEqual([uncertainResult, correctedResult]);
+    expect((await readExtractionWorkspacePage({ ...readInput, collection: "pending_leaves" })).items)
+      .not.toContain("/invoice_id");
+    await expect(append({ ...created, generation_sha256: corrected.generation_sha256 }, {
+      leafPointer: "/invoice_id", proposedValue: "different", transactionId: "6".repeat(32),
+    })).rejects.toThrow(/already settled/u);
+    await expectGenerationsUnchanged(snapshots);
+  });
+
+  it("preserves a legacy absence generation while permitting an append-only correction", async () => {
+    const schemaBytes = Buffer.from(JSON.stringify({
+      type: "object", properties: { invoice_id: { anyOf: [{ type: "string" }, { type: "null" }] } },
+    }), "utf8");
+    const { created, appended, workspaceIdentity, customMap, customChunk } = await createCustomProposal({
+      customSchemaBytes: schemaBytes, leafPointer: "/invoice_id", proposedValue: null,
+    });
+    const current = await verifyWorkspaceExtractionProposal({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedGenerationSha256: appended.generation_sha256,
+      workspaceIdentity, proposalEventId: appended.event.event_id,
+      documentMap: customMap, sourceBytes, schemaBytes, layouts,
+      citations: [], method: { kind: "not_found" },
+    });
+    // Reproduce the exact pre-v1.1 result fields; the historical generation
+    // must stay readable, not be rewritten with today's interpretation.
+    const legacy = structuredClone(current);
+    legacy.contract.version = "1.0.0-experimental";
+    legacy.status = "not_found";
+    legacy.reason_codes = [];
+    legacy.claim_boundary = "Citations are reconstructed from fresh source-bound chunks. Exact projections and allowlisted calculations are mechanically replayed. Source-supported, ambiguous, and unverified-reasoning statuses preserve semantic uncertainty. Caller text, geometry, confidence, and table topology are never accepted as proof.";
+    const { verification_sha256: ignored, ...legacyBody } = legacy;
+    void ignored;
+    legacy.verification_sha256 = sha256(Buffer.from(canonicalWorkspaceJson(legacyBody), "utf8"));
+    expect(() => validateExtractionProposalVerificationResult(legacy)).toThrow(/contract is unsupported/u);
+    const retained = await appendVerifiedWorkspaceResult({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedParentGenerationSha256: appended.generation_sha256,
+      verificationResult: legacy, transactionId: "a".repeat(32),
+    });
+    const readInput = { rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256, limit: 20 };
+    expect((await readExtractionWorkspacePage({ ...readInput, collection: "pending_leaves" })).items)
+      .toEqual([]);
+    const snapshots = await snapshotGenerations(created.workspace_path);
+    await appendUnverifiedWorkspaceProposal({
+      rootPath, workspaceId: "proposal-verifier",
+      expectedWorkspaceIdentitySha256: created.workspace_identity_sha256,
+      expectedParentGenerationSha256: retained.generation_sha256,
+      leafPointer: "/invoice_id", proposedValue: "INV-1001",
+      chunkIds: [customChunk.chunk_id], transactionId: "b".repeat(32),
+    });
+    expect((await readExtractionWorkspacePage({ ...readInput, collection: "pending_leaves" })).items)
+      .toEqual(["/invoice_id"]);
+    expect((await readExtractionWorkspacePage({ ...readInput, collection: "results" })).items)
+      .toEqual([legacy]);
+    await expectGenerationsUnchanged(snapshots);
   });
 
   it("rejects schema-invalid arrays and does not let caller metadata or table claims become proof", async () => {
@@ -929,7 +1176,7 @@ describe("source-replayed verified extraction proposals", () => {
     unreachableChunkFailure.citations[0].error = "missing chunk";
     unreachableChunkFailure.method = { kind: "not_found" };
     expect(() => validateExtractionProposalVerificationResult(resign(unreachableChunkFailure)))
-      .toThrow(/deterministically replay|chunk-missing result semantics/u);
+      .toThrow(/deterministically replay|chunk-missing result semantics|unverified absence result semantics/u);
 
     await fs.rm(parentPath, { recursive: true, force: true });
     parentPath = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-e9e5-"));

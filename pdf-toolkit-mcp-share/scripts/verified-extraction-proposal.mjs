@@ -14,7 +14,7 @@ import { parseStrictJson } from "./eval-strict-json.mjs";
 
 export const EXTRACTION_PROPOSAL_VERIFIER = Object.freeze({
   name: "pdf-tools.verified-extraction-proposal-verifier",
-  version: "1.0.0-experimental",
+  version: "1.1.0-experimental",
 });
 
 export const EXTRACTION_PROPOSAL_STATUSES = Object.freeze([
@@ -22,14 +22,18 @@ export const EXTRACTION_PROPOSAL_STATUSES = Object.freeze([
   "source_supported",
   "computed_with_inputs",
   "ambiguous",
-  "not_found",
   "citation_mismatch",
   "unverified_reasoning",
   "chunk_missing",
 ]);
 
 export const EXTRACTION_PROPOSAL_CLAIM_BOUNDARY =
-  "Citations are reconstructed from fresh source-bound chunks. Exact projections and allowlisted calculations are mechanically replayed. Source-supported, ambiguous, and unverified-reasoning statuses preserve semantic uncertainty. Caller text, geometry, confidence, and table topology are never accepted as proof.";
+  "Citations are reconstructed from fresh source-bound chunks. Exact projections and allowlisted calculations are mechanically replayed. Source-supported, ambiguous, and unverified-reasoning statuses preserve semantic uncertainty. A caller-declared absence remains unverified reasoning even when the complete source scope is available. Caller text, geometry, confidence, and table topology are never accepted as proof.";
+
+function unverifiedAbsence() {
+  return { status: "unverified_reasoning", derived_value: null, calculation: null,
+    reasons: ["ABSENCE_NOT_MECHANICALLY_PROVEN"] };
+}
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const EVENT_ID = /^event\.[a-f0-9]{64}$/u;
@@ -311,7 +315,9 @@ function resolveSchemaLeaf(schema, pointer) {
 function valueMatchesSchema(value, schema, depth = 0) {
   if (depth > 24 || !schema || typeof schema !== "object" || Array.isArray(schema)) return false;
   if (Array.isArray(schema.anyOf)) {
-    return schema.anyOf.filter(candidate => valueMatchesSchema(value, candidate, depth + 1)).length === 1;
+    // Schema admission permits only annotation siblings beside anyOf. Do not
+    // silently bypass sibling validation constraints if that subset expands.
+    return schema.anyOf.some(candidate => valueMatchesSchema(value, candidate, depth + 1));
   }
   if (Object.hasOwn(schema, "const")
     && canonicalWorkspaceJson(value) !== canonicalWorkspaceJson(schema.const)) return false;
@@ -824,7 +830,9 @@ export async function verifyWorkspaceExtractionProposal({
       === canonicalWorkspaceJson([...allReturnedChunkIds].sort()),
     "not-found proposal does not bind the complete returned chunk scope");
     assertion(completeSearchScope(documentMap), "not-found requires complete admitted search scope");
-    replay = { status: "not_found", derived_value: null, calculation: null, reasons: [] };
+    // Complete coverage establishes what the caller could inspect, not what
+    // they searched or whether the requested fact is absent from that source.
+    replay = unverifiedAbsence();
   } else {
     const normalizedCitations = normalizeCitations(citations, proposal.chunk_ids);
     replayedCitations = replayCitations({
@@ -1030,6 +1038,13 @@ export function validateExtractionProposalVerificationResult(result) {
     assertion(result.method.kind === "calculation" && result.reason_codes.length === 0
       && allCitationsReplayed && result.citations.length >= 2 && result.calculation !== null
       && result.derived_value !== null, "computed result semantics are invalid");
+  } else if (result.method.kind === "not_found") {
+    assertion(result.status === "unverified_reasoning"
+      && canonicalWorkspaceJson(result.reason_codes)
+        === canonicalWorkspaceJson(unverifiedAbsence().reasons)
+      && result.proposed_value === null && result.citations.length === 0
+      && result.calculation === null && result.derived_value === null,
+    "unverified absence result semantics are invalid");
   } else if (["source_supported", "ambiguous", "unverified_reasoning"].includes(result.status)) {
     const semanticReason = {
       source_supported: "SEMANTIC_ASSIGNMENT_NOT_MECHANICALLY_PROVEN",
@@ -1040,11 +1055,6 @@ export function validateExtractionProposalVerificationResult(result) {
       && canonicalWorkspaceJson(result.reason_codes) === canonicalWorkspaceJson([semanticReason])
       && allCitationsReplayed && result.citations.length >= 1 && result.calculation === null
       && result.derived_value === null, "semantic result semantics are invalid");
-  } else if (result.status === "not_found") {
-    assertion(result.method.kind === "not_found" && result.reason_codes.length === 0
-      && result.proposed_value === null && result.citations.length === 0
-      && result.calculation === null && result.derived_value === null,
-    "not-found result semantics are invalid");
   } else {
     assertion(result.reason_codes.length === 1 && result.citations.length >= 1,
       "failed result reason semantics are invalid");
@@ -1069,7 +1079,7 @@ export function validateExtractionProposalVerificationResult(result) {
       "calculation-mismatch result semantics are invalid");
     }
   }
-  if (result.status === "not_found") {
+  if (result.method.kind === "not_found") {
     validateRetainedSearchScope(result.search_scope, result);
   } else {
     assertion(result.search_scope === null, "non-not-found result cannot retain a search scope");
@@ -1078,7 +1088,7 @@ export function validateExtractionProposalVerificationResult(result) {
     )), "verification citations do not cover the proposal chunk inventory");
   }
   const expectedReplay = result.method.kind === "not_found"
-    ? { status: "not_found", derived_value: null, calculation: null, reasons: [] }
+    ? unverifiedAbsence()
     : firstCitationFailure !== null
       ? { status: firstCitationFailure.status, derived_value: null, calculation: null,
         reasons: [firstCitationFailure.error] }

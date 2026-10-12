@@ -652,11 +652,17 @@ replayed exactly as a rational calculation; its retained input-selection status
 remains `unverified_reasoning` because arithmetic replay does not prove that the
 right business inputs were chosen. `source_supported`, `ambiguous`,
 and `unverified_reasoning` retain exact source citations while explicitly
-preserving the semantic judgment that this layer cannot prove. `not_found`
-requires a null proposal, no citations, every returned chunk ID, complete
+preserving the semantic judgment that this layer cannot prove. The `not_found`
+method requires a null proposal, no citations, every returned chunk ID, complete
 accounting, no omitted admitted bytes or chunk material, complete page
-extraction, and no visual-inspection flag. It cannot turn missing or truncated
-scope into an absence claim.
+extraction, and no visual-inspection flag. Verifier v1.1 returns
+`unverified_reasoning` with `ABSENCE_NOT_MECHANICALLY_PROVEN`: complete scope is
+not proof that the caller searched correctly or that a fact is absent. It
+cannot turn missing or truncated scope into an absence declaration. New
+uncertain results remain pending and permit append-only correction; exact and
+computed results retain their existing closure behavior. Legacy v1.0 results
+and generation bytes remain historical and can be followed by a new proposal
+when their result is uncertain.
 
 `decimal_ascii` never converts source text to a floating-point value before
 comparison. It compares the bounded source decimal and the canonical JSON
@@ -665,9 +671,9 @@ representations that require exponent or otherwise unsupported numeric syntax.
 
 The canonical result retains and replays the complete content-addressed proposal
 event, including its workspace identity, leaf, proposal value, chunk inventory,
-and unverified state, as well as the proposal value digest. A `not_found` result
-also retains the exact map digest, returned chunk inventory, page states, and
-zero-omission accounting that authorized the complete search. Standalone result
+and unverified state, as well as the proposal value digest. A `not_found` method
+result also retains the exact map digest, returned chunk inventory, page states,
+and zero-omission accounting that described the available scope. Standalone result
 validation deterministically replays those bindings and the method over retained
 citation bytes, and requires the status, reasons, derived value, and every
 calculation field to match that replay. These hashes prove internal binding, not

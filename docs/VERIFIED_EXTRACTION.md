@@ -27,9 +27,10 @@ chunks, and asks PDF Tools to replay the claim deterministically.
    bytes, derives the typed result, and appends that result as a new immutable
    generation.
 6. Read `results` and `pending_leaves`, or call
-   `inspect_extraction_state`. A citation or missing-chunk failure leaves the
-   leaf pending so a corrected proposal can be submitted. A settled result
-   closes the leaf and rejects later replacement.
+   `inspect_extraction_state`. Citation failures and uncertain results leave
+   the leaf pending so a corrected proposal can be submitted against the new
+   current generation. Exact projections and computed results close the leaf
+   and reject later replacement. Earlier proposals and results remain intact.
 7. Call `delete_extraction_workspace` only with the exact current workspace
    identity, exact current generation, and `confirm: "DELETE"`.
 
@@ -38,16 +39,44 @@ chunks, and asks PDF Tools to replay the claim deterministically.
 - `exact_projection`: a value is projected from one replayed citation using a
   supported literal normalization.
 - `calculation`: an exact rational calculation is derived from replayed inputs.
-- `interpretation`: a typed, source-supported interpretation remains visibly
+- `source_supported`: a typed, source-supported interpretation remains visibly
   distinct from an exact projection.
 - `ambiguous`: competing replayed values are retained as typed uncertainty.
-- `not_found`: allowed only with `null`, no citations, the complete returned
-  chunk set, and complete admitted page/search coverage.
+- `unverified_reasoning`: retain a cited proposal whose semantic assignment has
+  no accepted deterministic verifier.
+- `not_found`: retain a caller's absence declaration only with `null`, no
+  citations, the complete returned chunk set, and complete admitted page/search
+  coverage. The result is `unverified_reasoning` with
+  `ABSENCE_NOT_MECHANICALLY_PROVEN`. Complete scope proves what was available
+  to inspect, not that a fact is absent. The leaf stays open for correction.
 
 The verifier returns typed statuses such as `verified_exact`,
-`computed_with_inputs`, `source_supported`, `ambiguous`, `not_found`,
+`computed_with_inputs`, `source_supported`, `ambiguous`,
 `citation_mismatch`, `chunk_missing`, and `unverified_reasoning`. It does not
 return numeric confidence.
+
+The verifier contract is `1.1.0-experimental`. Historical `1.0.0-experimental`
+results may contain `not_found`; they remain historical caller declarations,
+not mechanically proven absence. Reading a retained workspace preserves its
+original generations and their original pending counts. A new proposal can
+reopen a legacy uncertain leaf, including one previously marked `not_found`.
+
+## Reading correction history
+
+`events`, `proposals`, and `results` are append-only chronological histories.
+Group events by `leaf_pointer`; the latest proposal is the active attempt and
+its matching `proposal_event_id` identifies its result, if one exists. An
+earlier result is historical once a later proposal exists, even before that
+later proposal is verified. Do not display an earlier result as the current
+answer while a correction is pending. `pending_leaves` reports unresolved
+leaves; for new results, only `verified_exact` and `computed_with_inputs` close
+a leaf. Their source-presence or arithmetic claims still do not prove the
+semantic choice of field or calculation inputs.
+
+Submit a correction through the ordinary proposal/verification calls using the
+exact latest generation. One unverified proposal per leaf is allowed at a time;
+stale-generation and concurrent-proposal checks still apply. Correction never
+deletes a prior result, mutates source bytes, or bypasses citation replay.
 
 ## Privacy and boundaries
 
@@ -70,7 +99,12 @@ return numeric confidence.
 - The source PDF must remain inside the configured allowed-directory boundary.
   The private workspace root cannot widen that boundary.
 - This surface does not run OCR. Raster-only or truncated evidence stays a gap;
-  `not_found` cannot pass when admitted search coverage is incomplete.
+  even a caller's `not_found` declaration is rejected when admitted search
+  coverage is incomplete.
+- The supported JSON Schema subset gives `anyOf` its inclusive meaning: one or
+  more branches may match. Only annotation keys may appear beside `anyOf`;
+  sibling validation constraints and other unsupported keywords are rejected,
+  not ignored.
 - Arrays are one leaf obligation in this first version. It verifies the array
   value as a whole and supports exact uniqueness or keyed-item schema checks;
   it does not expose per-index editing.

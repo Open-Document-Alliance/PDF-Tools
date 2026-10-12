@@ -87,8 +87,14 @@ const VERIFICATION_STATUSES = Object.freeze([
 ]);
 const SETTLED_VERIFICATION_STATUSES = new Set([
   "verified_exact",
-  "source_supported",
   "computed_with_inputs",
+]);
+// Retained v1.0 generations must replay byte-for-byte under their original
+// policy. New uncertain results remain pending, and a new proposal may reopen
+// legacy uncertainty without rewriting its result or generation.
+const LEGACY_SETTLED_VERIFICATION_STATUSES = new Set([
+  ...SETTLED_VERIFICATION_STATUSES,
+  "source_supported",
   "ambiguous",
   "not_found",
   "unverified_reasoning",
@@ -473,9 +479,14 @@ function deriveState(identity, events, generationSequence) {
     verification: event.verification,
   }));
   const results = verificationEvents.map(event => event.verification_result);
-  const settledLeaves = new Set(results
-    .filter(result => SETTLED_VERIFICATION_STATUSES.has(result.status))
-    .map(result => result.leaf_pointer));
+  const latestEvents = new Map(events.map(event => [event.leaf_pointer, event]));
+  const settledLeaves = new Set([...latestEvents.values()]
+    .filter(event => event.kind === "proposal_verified")
+    .filter(({ verification_result: result }) => (
+      result.contract?.version === "1.0.0-experimental"
+        ? LEGACY_SETTLED_VERIFICATION_STATUSES : SETTLED_VERIFICATION_STATUSES
+    ).has(result.status))
+    .map(event => event.leaf_pointer));
   const pendingLeaves = identity.leaf_obligations.filter(pointer => !settledLeaves.has(pointer));
   return {
     contract: {

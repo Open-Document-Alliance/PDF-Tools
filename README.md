@@ -163,7 +163,7 @@ proposal. No signup tracking or analytics reporting is enabled by this work.
 - Inspect page-level details like orientation, text presence, images, and likely blank pages
 - Review source-bound page geometry, bounded metadata, form widgets, ordinary annotations, and file identity
 - Inspect exactly eight shallow catalog-level accessibility signals with explicit missing or unavailable states and required human review
-- Build a private schema-bound extraction workspace, cite source chunks, and retain exact, computed, ambiguous, not-found, or failed verification states without numeric confidence
+- Build a private schema-bound extraction workspace, cite source chunks, and retain exact, computed, ambiguous, unverified, or failed results without numeric confidence; absence declarations remain unverified and uncertain results allow append-only correction
 
 See [Verified extraction workspaces](docs/VERIFIED_EXTRACTION.md) for the
 complete lifecycle, supported methods, privacy boundary, and current limits.
