@@ -109,7 +109,7 @@ Once installed, ask Claude in Cursor:
 - *"Rotate page 3 by 90 degrees"*
 
 ## Tools Available
-This page names a selection, not the whole surface: the server registers 56
+This page names a selection, not the whole surface: the server registers 58
 tools. The root `README.md` lists every one, and `docs/OUTPUT_SCHEMAS.md`
 carries their structured output contracts.
 

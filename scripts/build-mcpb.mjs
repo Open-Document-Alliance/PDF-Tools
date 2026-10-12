@@ -82,6 +82,7 @@ export const SERVER_FILES = [
   "csv-export.js",
   "document-map.js",
   "download-transport.js",
+  "extraction-review.js",
   "helpers.js",
   "host-pdf-import.js",
   "index.js",

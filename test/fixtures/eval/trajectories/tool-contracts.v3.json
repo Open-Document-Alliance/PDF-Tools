@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "2794ad7a9ac3a2248afb0e9cf87b49819e250e76f60c46c16ffc1b64fd10ae7c",
+  "tools_sha256": "d78d5d5621685adddd30f4db45bc4c0d49530acd75db9f138c897e2a6abb578c",
   "tools": [
     {
       "name": "add_signature_field",
@@ -1937,6 +1937,56 @@
       }
     },
     {
+      "name": "review_extraction_workspace",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
+          },
+          "workspace_identity_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "expected_generation_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "leaves",
+              "pages",
+              "history"
+            ]
+          },
+          "leaf_pointer": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          },
+          "cursor": {
+            "type": "string",
+            "maxLength": 4096
+          }
+        },
+        "required": [
+          "pdf_path",
+          "workspace_id",
+          "workspace_identity_sha256"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "rotate_pdf_pages",
       "input_schema": {
         "type": "object",
@@ -2248,6 +2298,94 @@
         "required": [
           "pdf_path"
         ]
+      }
+    },
+    {
+      "name": "verify_extraction_batch",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          },
+          "workspace_identity_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "parent_generation_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "proposal_event_id": {
+                  "type": "string",
+                  "pattern": "^event\\.[a-f0-9]{64}$"
+                },
+                "citations": {
+                  "type": "array",
+                  "maxItems": 32,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "chunk_id": {
+                        "type": "string",
+                        "pattern": "^chunk\\.[a-f0-9]{64}$"
+                      },
+                      "start_utf8_byte": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "end_utf8_byte": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "quote_sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$"
+                      }
+                    },
+                    "required": [
+                      "chunk_id",
+                      "start_utf8_byte",
+                      "end_utf8_byte",
+                      "quote_sha256"
+                    ]
+                  }
+                },
+                "method": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "proposal_event_id",
+                "citations",
+                "method"
+              ]
+            }
+          }
+        },
+        "required": [
+          "pdf_path",
+          "workspace_id",
+          "workspace_identity_sha256",
+          "parent_generation_sha256",
+          "items"
+        ],
+        "additionalProperties": false
       }
     },
     {

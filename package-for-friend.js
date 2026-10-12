@@ -60,6 +60,7 @@ export const SHARE_FILES = [
   "server/csv-export.js",
   "server/document-map.js",
   "server/download-transport.js",
+  "server/extraction-review.js",
   "server/helpers.js",
   "server/host-pdf-import.js",
   "server/index.js",

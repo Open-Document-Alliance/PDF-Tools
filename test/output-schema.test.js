@@ -77,6 +77,8 @@ const STRUCTURED_TOOLS = [
   "start_lumin_authorization",
   "validate_pdf",
   "verify_extraction_proposal",
+  "verify_extraction_batch",
+  "review_extraction_workspace",
   "verify_table_proposal",
 ].sort();
 const TEXT_ONLY_TOOLS = [
@@ -166,11 +168,11 @@ describe("output schema definitions", () => {
     expect(rejected.structuredContent.error.code).toBe("internal_validation_error");
   });
 
-  it("covers the exact 56 structured schemas including optional OCR", () => {
+  it("covers the exact 61 structured schemas including optional OCR", () => {
     expect(Object.keys(TOOL_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
-    expect(STRUCTURED_TOOLS).toHaveLength(59);
+    expect(STRUCTURED_TOOLS).toHaveLength(61);
     expect(TEXT_ONLY_TOOLS).toHaveLength(4);
   });
 

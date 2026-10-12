@@ -7,6 +7,7 @@ import {
 } from "./pdf-observations.js";
 import { validatePdfComparisonSemantics } from "./pdf-comparison.js";
 import { validateAccessibilityInspectionResult } from "./accessibility-inspection.js";
+import { EXTRACTION_REVIEW_OUTPUT_SCHEMA } from "./extraction-review.js";
 import {
   TABLE_PROPOSAL_CLAIM_BOUNDARY,
   TABLE_PROPOSAL_REASON_CODES,
@@ -1301,6 +1302,7 @@ const workspacePageRange = object({
 });
 
 export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
+  review_extraction_workspace: EXTRACTION_REVIEW_OUTPUT_SCHEMA,
   propose_pdf_ocr: LOCAL_OCR_OUTPUT_SCHEMA,
   start_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,
   resume_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,

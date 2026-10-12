@@ -33,7 +33,7 @@ const textFixture = path.join(fixtureDirectory, "synthetic-text-two-page.pdf");
 const rasterFixture = path.join(fixtureDirectory, "synthetic-raster-only.pdf");
 const mutationDirectory = path.join(fixtureDirectory, "mutation-output");
 const toolNames = [];
-const EXPECTED_TOOL_CONTRACT_SHA256 = "cef623a1a7236f82bf7f68c8c500d38d7e73ee9767c08267dc4d4a0a6bf975cc";
+const EXPECTED_TOOL_CONTRACT_SHA256 = "639189a0677085df0ef8d8ee92d23c5a5c1c3121a779e926ebe36f266c3de84c";
 const ACCESSIBILITY_CONCLUSION_KEYS = Object.freeze([
   "certification",
   "document_accessibility",
@@ -80,8 +80,8 @@ let rasterHash;
 try {
   const tools = await first.client.listTools();
   toolNames.push(...tools.tools.map(tool => tool.name).sort());
-  assert(toolNames.length === 59, `Expected 59 tools, received ${toolNames.length}`);
-  assert(new Set(toolNames).size === 59, "Tool names were not unique");
+  assert(toolNames.length === 61, `Expected 61 tools, received ${toolNames.length}`);
+  assert(new Set(toolNames).size === 61, "Tool names were not unique");
   toolContractSha256 = createHash("sha256")
     .update(JSON.stringify(tools.tools))
     .digest("hex");
@@ -90,7 +90,7 @@ try {
     `Tool contract digest drifted: ${toolContractSha256}`,
   );
   structuredToolCount = tools.tools.filter(tool => tool.outputSchema).length;
-  assert(structuredToolCount === 55, `Expected 55 structured tools, received ${structuredToolCount}`);
+  assert(structuredToolCount === 57, `Expected 57 structured tools, received ${structuredToolCount}`);
 
   const listed = await first.client.callTool({
     name: "list_pdfs",
@@ -244,7 +244,7 @@ assert(mutationFiles.length === 2, `Expected two mutation outputs, received ${mu
 const fresh = await connect("fresh-session");
 try {
   const tools = await fresh.client.listTools();
-  assert(tools.tools.length === 59, "Fresh session did not discover 59 tools");
+  assert(tools.tools.length === 61, "Fresh session did not discover 61 tools");
   const info = await fresh.client.callTool({
     name: "get_pdf_info",
     arguments: { pdf_path: path.join(mutationDirectory, mutationFiles[1]) },

@@ -112,6 +112,9 @@ import {
   terminateLocalOcrAdapters,
   forceTerminateLocalOcrAdapters,
 } from "./local-ocr-tools.js";
+import { LOCAL_OCR_JOB_TOOL_DEFINITIONS, createLocalOcrJobHandlers } from "./local-ocr-jobs.js";
+import { EXTRACTION_REVIEW_TOOL_DEFINITION, createExtractionReviewToolHandler } from "./extraction-review.js";
+import { readExtractionReviewState } from "../scripts/verified-extraction-workspace.mjs";
 
 export const READ_CONTENT_ROUTING_GUIDANCE =
   "Use render_pdf_page to inspect pages flagged as textless, suspect, or containing invisible text. Invisible text may be accurate, but its agreement with the visible page has not been verified. Unavailable visibility measurements do not establish that text is visible. Routing fields cover only successfully-read pages; unread pages are not classified. No OCR or visual transcription was performed.";
@@ -1790,6 +1793,7 @@ const PDFJS_TOOL_NAMES = new Set([
   "create_extraction_workspace",
   "read_extraction_chunk",
   "verify_extraction_proposal",
+  "verify_extraction_batch",
 ]);
 
 async function bindPdfjsSubprocessSource(resolvedPath) {
@@ -1887,6 +1891,20 @@ const handleLocalOcrTool = createLocalOcrToolHandler({
   stateRoot: path.join(PROFILES_DIR, "local-ocr-proposals"),
   resolvePdfPath: resolvePath,
   readPdfBytes: readCurrentPdfMutationBytes,
+});
+const localOcrJobHandlers = createLocalOcrJobHandlers({
+  configuration: LOCAL_OCR_CONFIGURATION,
+  stateRoot: path.join(PROFILES_DIR, "local-ocr-jobs"),
+  proposalStateRoot: path.join(PROFILES_DIR, "local-ocr-proposals"),
+  resolvePdfPath: resolvePath,
+  readPdfBytes: readCurrentPdfMutationBytes,
+  runPage: handleLocalOcrTool,
+});
+const handleExtractionReview = createExtractionReviewToolHandler({
+  workspaceRoot: VERIFIED_EXTRACTION_WORKSPACES_DIR,
+  resolvePdfPath: candidate => resolveCanonicalPath(resolvePath(candidate)),
+  readPdfBytes: readCurrentPdfMutationBytes,
+  readReviewState: readExtractionReviewState,
 });
 
 const handleLuminSigningTool = createLuminSigningToolHandler({
@@ -4818,7 +4836,8 @@ async function listTools(request) {
       },
       ...LUMIN_SIGNING_TOOL_DEFINITIONS,
       ...VERIFIED_EXTRACTION_TOOL_DEFINITIONS,
-      ...(LOCAL_OCR_CONFIGURATION ? [LOCAL_OCR_TOOL_DEFINITION] : []),
+      EXTRACTION_REVIEW_TOOL_DEFINITION,
+      ...(LOCAL_OCR_CONFIGURATION ? [LOCAL_OCR_TOOL_DEFINITION, ...LOCAL_OCR_JOB_TOOL_DEFINITIONS] : []),
     ].map(withToolOutputSchema),
   };
 }
@@ -4830,6 +4849,12 @@ async function handleToolCall(request) {
   try {
     if (name === LOCAL_OCR_TOOL_DEFINITION.name) {
       return await handleLocalOcrTool(args ?? {});
+    }
+    if (Object.hasOwn(localOcrJobHandlers, name)) {
+      return await localOcrJobHandlers[name](args ?? {});
+    }
+    if (name === EXTRACTION_REVIEW_TOOL_DEFINITION.name) {
+      return await handleExtractionReview(args ?? {});
     }
     if (LUMIN_SIGNING_TOOL_NAME_SET.has(name)) {
       const structuredContent = await handleLuminSigningTool(name, args ?? {});
@@ -4845,6 +4870,8 @@ async function handleToolCall(request) {
         ? `Created verified extraction workspace ${structuredContent.workspace_identity_sha256} at generation ${structuredContent.generation_sha256}.`
         : name === "verify_extraction_proposal"
           ? `Retained ${structuredContent.result.status} verification for ${structuredContent.result.leaf_pointer} at generation ${structuredContent.generation_sha256}.`
+          : name === "verify_extraction_batch"
+            ? `Retained ${structuredContent.results.length} per-proposal results in one generation ${structuredContent.generation_sha256}. Inspect each result status; completion does not mean every proposal is verified.`
           : `${name} completed.`;
       return {
         content: [{ type: "text", text: summary }],
