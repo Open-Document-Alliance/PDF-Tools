@@ -55,6 +55,8 @@ content; review it before external publication. A dirty run is useful during
 development but is not exact-commit release evidence. Source bindings are
 captured before starting the server and after completing the run; drift keeps
 `source_stable` and `qualified` false even when individual assertions passed.
+Tracked runtime/script bytes are also compared directly with Git objects, so
+an index flag that hides working-tree edits cannot grant qualification.
 The CLI exits nonzero for drift, dirty source, or unmet obligations. This
 pre/post check is not a signed runtime attestation. Run again from the clean
 integrated commit for the final PR/release record.
@@ -124,7 +126,8 @@ or macOS sandbox prerequisite and missing Python packages. It does not download
 dependencies, grant namespaces, or relax containment. The actual scoring path
 also verifies clean pinned scorer source, every corpus byte through the
 existing verifier, the run's independently supplied digest and structural
-bindings, and the manifest/corpus identity. Scoring retained outputs needs no
+bindings, and the manifest/corpus identity. Scorer source bytes are compared
+with the pinned Git objects both before and after scoring. Scoring retained outputs needs no
 new conversion; unavailable local conversion containment is recorded even
 when scoring an already-retained valid run from a qualifying host.
 

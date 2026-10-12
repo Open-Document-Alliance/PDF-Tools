@@ -5,7 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
+import { isDeepStrictEqual, promisify } from "node:util";
 import { runOlmocrBench, validateRunReport, canonicalJson } from "./eval-olmocr-bench.mjs";
 import { parseStrictJson } from "./eval-strict-json.mjs";
 
@@ -87,7 +87,11 @@ async function verifyUpstream(upstream) {
   const { stdout: names } = await exec("git", ["ls-files"], { cwd: upstream });
   const files = [];
   for (const name of names.trim().split("\n").filter(name => /\.(py|js|css|toml)$/.test(name))) {
-    files.push({ path: name, sha256: hash(await fs.readFile(path.join(upstream, name))) });
+    const bytes = await fs.readFile(path.join(upstream, name));
+    const { stdout: pinned } = await exec("git", ["show", `${UPSTREAM_REVISION}:${name}`],
+      { cwd: upstream, encoding: "buffer", maxBuffer: Math.max(bytes.length * 2, 1024 * 1024) });
+    if (!bytes.equals(pinned)) throw new Error(`Upstream source differs from pinned Git bytes: ${name}`);
+    files.push({ path: name, sha256: hash(bytes) });
   }
   return { repository: "https://github.com/allenai/olmocr", revision: UPSTREAM_REVISION,
     source_sha256: hash(canonicalJson(files)), files };
@@ -170,6 +174,9 @@ export async function runUpstream(options) {
       report.response_sha256 = hash(bytes);
       response = parseStrictJson(bytes.toString(), "upstream response");
     } catch (error) { response = { status: "unavailable", reason: error.message }; }
+    report.upstream_after = await verifyUpstream(path.resolve(upstream));
+    report.upstream_source_stable = isDeepStrictEqual(report.upstream, report.upstream_after);
+    if (!report.upstream_source_stable) throw new Error("Upstream scorer source changed during execution");
     report.metrics = summarizeUpstream(request, response);
     report.status = report.metrics.complete ? "completed" : "incomplete";
     if (response.reason) report.reasons.push(response.reason);

@@ -21,10 +21,18 @@ async function sourceBinding() {
   const { stdout: status } = await exec("git", ["status", "--porcelain"], { cwd: ROOT });
   const { stdout: filenames } = await exec("git", ["ls-files", "server", "scripts", "package.json", "package-lock.json"], { cwd: ROOT });
   const entries = [];
+  let gitTreeVerified = !status.trim();
   for (const filename of filenames.trim().split("\n").filter(Boolean)) {
-    entries.push({ path: filename, sha256: digest(await fs.readFile(path.join(ROOT, filename))) });
+    const bytes = await fs.readFile(path.join(ROOT, filename));
+    entries.push({ path: filename, sha256: digest(bytes) });
+    if (gitTreeVerified) {
+      const { stdout: pinned } = await exec("git", ["show", `${revision.trim()}:${filename}`],
+        { cwd: ROOT, encoding: "buffer", maxBuffer: Math.max(bytes.length * 2, 1024 * 1024) });
+      if (!bytes.equals(pinned)) gitTreeVerified = false;
+    }
   }
-  return { revision: revision.trim(), clean: !status.trim(), files_sha256: digest(JSON.stringify(entries)), files: entries };
+  return { revision: revision.trim(), clean: !status.trim(), git_tree_verified: gitTreeVerified,
+    files_sha256: digest(JSON.stringify(entries)), files: entries };
 }
 
 async function sampleProcessTree(rootPid) {
@@ -219,7 +227,7 @@ export async function runWorkflows({ output, seed = "qualification-v1", python =
     oracle_sha256: digest(await fs.readFile(path.join(ROOT, "scripts/eval-workflow-oracle.py"))),
     oracle_version: oracleVersion, source: initialSource, source_after: source,
     source_stable: sourceStable,
-    qualified: metrics.passed_all && sourceStable && initialSource.clean,
+    qualified: metrics.passed_all && sourceStable && initialSource.clean && initialSource.git_tree_verified,
     claim_boundary: { benchmark_claim_ready: false, native_host_accepted: false, unseen_holdout: false,
       real_signature_executed: false, model_calls: 0, note: "Public generator, deterministic fixtures, no extraction superiority or native UI claim." },
     runtime: { node: process.version, platform: process.platform, architecture: process.arch },
