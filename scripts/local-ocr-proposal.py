@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental, opt-in macOS OCR proposal for one PDF page.
+"""Opt-in local Vision or Tesseract OCR proposal for one PDF page.
 
 This is not registered as an MCP tool and is not included in either package.
 It retains the rendered image and labels recognized text as an unverified
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 from decimal import Decimal
 import html
 import hashlib
@@ -20,8 +21,12 @@ import math
 import os
 from pathlib import Path
 import re
+import selectors
 import stat
 import sys
+import subprocess
+import tempfile
+import time
 
 
 SCHEMA = "pdf-tools.local-ocr-proposal.v1"
@@ -303,9 +308,14 @@ def verify_retained(folder: Path, source: bytes, expected_proposal: str, render,
         raise ValueError("proposal page is outside the PDF")
     replay_png, width, height, page_count, renderer = render(source, body["page_number"])
     engine = body["engine"]
+    engine_fields = {
+        "ocrmac-vision": {"name", "ocrmac_version", "pypdfium2_version", "pillow_version"},
+        "tesseract": {"name", "tesseract_version", "language", "pypdfium2_version", "pillow_version"},
+    }
     if (not isinstance(engine, dict)
-            or set(engine) != {"name", "ocrmac_version", "pypdfium2_version", "pillow_version"}
-            or engine["name"] != "ocrmac-vision"
+            or engine.get("name") not in engine_fields
+            or set(engine) != engine_fields[engine["name"]]
+            or (engine["name"] == "tesseract" and engine.get("language") != "eng")
             or any(not isinstance(value, str) or not value or len(value) > 100 for value in engine.values())
             or any(engine.get(key) != value for key, value in renderer.items())):
         raise ValueError("proposal renderer identity does not match")
@@ -397,11 +407,88 @@ def render_page(source: bytes, page_number: int):
     return png, width, height, page_count, renderer
 
 
+def tesseract_observations(tsv: str, width: int, height: int) -> list[tuple]:
+    """Convert bounded word boxes to the proposal's normalized coordinates."""
+    observations = []
+    reader = csv.DictReader(io.StringIO(tsv), delimiter="\t", quoting=csv.QUOTE_NONE)
+    expected = ["level", "page_num", "block_num", "par_num", "line_num", "word_num",
+                "left", "top", "width", "height", "conf", "text"]
+    if reader.fieldnames != expected:
+        raise ValueError("Tesseract returned an unsupported TSV header")
+    for row in reader:
+        if None in row or any(value is None for value in row.values()):
+            raise ValueError("Tesseract returned a malformed TSV row")
+        if row["level"] != "5" or not row["text"].strip():
+            continue
+        x, y, w, h = (int(row[key]) for key in ("left", "top", "width", "height"))
+        confidence = float(row["conf"])
+        if (not math.isfinite(confidence) or not 0 <= confidence <= 100
+                or min(x, y) < 0 or min(w, h) <= 0 or x + w > width or y + h > height):
+            raise ValueError("Tesseract returned an invalid word observation")
+        observations.append((row["text"], confidence / 100,
+                             [x / width, max(0, (height - y - h) / height), w / width, h / height]))
+        if len(observations) > MAX_OBSERVATIONS:
+            raise ValueError("OCR observation ceiling exceeded")
+    return observations
+
+
+def bounded_command(arguments: list[str], ceiling: int, timeout: int) -> bytes:
+    """No shell, inherited credentials, or unbounded captured output."""
+    with subprocess.Popen(arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, env={"PATH": "/usr/bin:/bin"}) as child:
+        deadline = time.monotonic() + timeout
+        output = bytearray()
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(child.stdout, selectors.EVENT_READ)
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(arguments, timeout)
+                    if not selector.select(remaining):
+                        raise subprocess.TimeoutExpired(arguments, timeout)
+                    block = os.read(child.stdout.fileno(), min(65536, ceiling + 1 - len(output)))
+                    if not block:
+                        selector.unregister(child.stdout)
+                        break
+                    output.extend(block)
+                    if len(output) > ceiling:
+                        raise ValueError("Local OCR engine output exceeded its limit")
+            code = child.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except BaseException:
+            child.kill()
+            child.wait()
+            raise
+        if code != 0:
+            raise RuntimeError("Local OCR engine failed; check its separate installation")
+        return bytes(output)
+
+
+def recognize_tesseract(png: bytes, width: int, height: int, executable: Path, scratch_parent: Path):
+    if not executable.is_absolute() or not executable.is_file() or not os.access(executable, os.X_OK):
+        raise ValueError("Tesseract requires an absolute configured executable path")
+    version = bounded_command([str(executable), "--version"], 4096, 5).decode("utf-8").splitlines()[0]
+    if not version.startswith("tesseract ") or len(version) > 100:
+        raise ValueError("Tesseract version could not be established")
+    # Keep interrupted artifacts inside the caller-owned attempt directory.
+    # SIGKILL cannot run Python cleanup, so global /tmp would orphan page data.
+    with tempfile.TemporaryDirectory(prefix="tesseract-", dir=scratch_parent) as folder:
+        image_path = Path(folder) / "page.png"
+        write_exclusive(image_path, png)
+        output = bounded_command([str(executable), str(image_path), "stdout", "-l", "eng", "tsv"],
+                                 MAX_PROPOSAL_BYTES, 90)
+    return tesseract_observations(output.decode("utf-8"), width, height), {
+        "name": "tesseract", "tesseract_version": version, "language": "eng",
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pdf", type=Path, required=True)
     parser.add_argument("--page", type=int)
     parser.add_argument("--expect-source-sha256", required=True)
+    parser.add_argument("--engine", choices=["vision", "tesseract"], default="vision")
+    parser.add_argument("--tesseract-path", type=Path)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--output-dir", type=Path)
     mode.add_argument("--verify-proposal-dir", type=Path)
@@ -426,24 +513,27 @@ def main() -> None:
         return
     if args.page is None or args.expect_proposal_sha256 is not None:
         parser.error("generation requires --page and no proposal digest")
-    if sys.platform != "darwin":
+    if args.engine == "vision" and sys.platform != "darwin":
         raise RuntimeError("Optional OCR adapter requires macOS Vision; no OCR output was created")
 
     # Optional dependencies are imported only after explicit invocation and
     # source verification. Nothing is added to the default PDF Tools package.
-    try:
-        from ocrmac.ocrmac import text_from_image
-        from PIL import Image
-    except ImportError as error:
-        raise RuntimeError("Optional OCR adapter unavailable; install ocrmac, pypdfium2 and Pillow in a separate environment") from error
     png, width, height, page_count, renderer = render_page(source, args.page)
-    with Image.open(io.BytesIO(png)) as image:
-        observations = text_from_image(image, recognition_level="accurate", detail=True)
-    engine = {
-        "name": "ocrmac-vision",
-        "ocrmac_version": importlib.metadata.version("ocrmac"),
-        **renderer,
-    }
+    if args.engine == "tesseract":
+        if args.tesseract_path is None:
+            parser.error("Tesseract requires --tesseract-path")
+        observations, engine = recognize_tesseract(png, width, height, args.tesseract_path,
+                                                  args.output_dir.parent)
+    else:
+        try:
+            from ocrmac.ocrmac import text_from_image
+            from PIL import Image
+        except ImportError as error:
+            raise RuntimeError("Optional OCR adapter unavailable; install ocrmac, pypdfium2 and Pillow in a separate environment") from error
+        with Image.open(io.BytesIO(png)) as image:
+            observations = text_from_image(image, recognition_level="accurate", detail=True)
+        engine = {"name": "ocrmac-vision", "ocrmac_version": importlib.metadata.version("ocrmac")}
+    engine.update(renderer)
     proposal = proposal_from_observations(source, args.page, page_count, png,
                                           width, height, observations, engine)
 

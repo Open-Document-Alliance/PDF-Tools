@@ -99,6 +99,34 @@ test("valid fixture snapshots source/helper, replays, returns image and explicit
   validateLocalOcrResult(result.structuredContent);
 });
 
+test("explicit Tesseract configuration supports Linux without executable tool arguments", async t => {
+  const f = await fixture(t);
+  const invoke = f.options.invokeAdapter;
+  f.options.platform = "linux";
+  f.options.configuration.engine = "tesseract";
+  f.options.configuration.tesseractPath = process.execPath;
+  f.options.invokeAdapter = async (python, helper, arguments_, deadline) => {
+    if (arguments_.includes("--output-dir")) {
+      assert.equal(arguments_[arguments_.indexOf("--engine") + 1], "tesseract");
+      assert.equal(arguments_[arguments_.indexOf("--tesseract-path") + 1], process.execPath);
+    }
+    return invoke(python, helper, arguments_, deadline);
+  };
+  const result = await createLocalOcrToolHandler(f.options)(args);
+  assert.equal(result.structuredContent.status, "source_render_replayed_ocr_unverified");
+  validateLocalOcrResult(result.structuredContent);
+});
+
+test("Tesseract requires an explicit host executable and rejects unknown engines", async t => {
+  const f = await fixture(t);
+  f.options.platform = "linux";
+  f.options.configuration.engine = "tesseract";
+  await assert.rejects(createLocalOcrToolHandler(f.options)(args), /tesseractPath/);
+  f.options.configuration.engine = "ambient";
+  await assert.rejects(createLocalOcrToolHandler(f.options)(args), /engine/);
+  assert.deepEqual(f.counts(), { readCount: 0, invokeCount: 0 });
+});
+
 test("empty result is explicit, not invented", async t => {
   const result = await (await fixture(t, { observations: 0 })).handler(args);
   assert.equal(result.structuredContent.observation_count, 0);

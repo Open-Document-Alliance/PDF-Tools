@@ -6,8 +6,8 @@ exposed only when an administrator explicitly supplies `localOCR` in the
 existing local PDF Tools configuration file. This source feature is not yet
 a qualified installed desktop release.
 
-The first adapter supports macOS Vision through separately installed
-`ocrmac`, PDFium and Pillow. It proposes words for one selected page, then
+The adapters support macOS Vision through separately installed `ocrmac`,
+and Tesseract on Linux/macOS. Both use separately installed PDFium and Pillow. It proposes words for one selected page, then
 replays the retained image from the exact source bytes and creates a private
 offline review. Replay proves source/image identity, not word correctness.
 It does not change the PDF, replace its native text, recover table structure,
@@ -24,7 +24,7 @@ Install the reviewed `scripts/local-ocr-proposal.py` outside the extension
 bundle. This helper version has SHA-256:
 
 ```text
-2991b9e68dd7327813292126f8ae4398546662187799ff92b6446b591e825991
+a66ec8fe3d77f846cabac126812425dfe5a6ed2b2b533bb863fdcf6e05c999c0
 ```
 
 Use `get_allowed_directories` to find the active configuration file. Preserve
@@ -39,6 +39,37 @@ its existing folder policy and add:
   }
 }
 ```
+
+For Tesseract, configure the engine and exact executable explicitly:
+
+```json
+{
+  "localOCR": {
+    "engine": "tesseract",
+    "pythonPath": "/absolute/separate-venv/bin/python",
+    "helperPath": "/absolute/separate-adapter/local-ocr-proposal.py",
+    "tesseractPath": "/absolute/path/to/tesseract"
+  }
+}
+```
+
+Install Tesseract and its English language data separately with your operating
+system's package manager. This adapter currently recognizes English only.
+It does not discover executables, download language models or switch engines.
+The default engine is `vision`, preserving existing macOS configuration.
+Tesseract's version and the renderer versions are retained in each proposal.
+
+After installing the optional dependencies, run a real-engine smoke check on a
+generated raster invoice:
+
+```bash
+node scripts/smoke-local-ocr.mjs --python /absolute/venv/bin/python --tesseract /absolute/path/to/tesseract --report /absolute/new-report.json
+```
+
+This checks recognition of two known values, source preservation, replay and
+unverified status. It is one synthetic fixture, not a general accuracy score.
+The Linux execution receipt is retained in
+`docs/evidence/tesseract-local-smoke-2026-10-12.json`.
 
 Paths are configured by the host user, never by a model tool argument.
 The server checks the helper against its frozen digest, snapshots those
@@ -92,5 +123,6 @@ are not accepted as completed proposals and are not silently deleted.
   `FLIGIM` for visible `FLIGHT` even with a score of 1.0.
 - The same bounded helper rejects excessive pixels, PNG bytes, observation
   counts, text lengths, malformed boxes and mismatched replay identities.
-- Windows and Linux do not run this macOS adapter. A separate cross-platform
-  recognizer would need its own implementation and evidence.
+- Windows is not supported by the private-file/process-group adapter boundary.
+  Linux uses the explicitly configured Tesseract adapter; macOS can use either
+  engine. A source implementation is not installed-host qualification.

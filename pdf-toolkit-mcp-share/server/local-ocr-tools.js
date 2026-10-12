@@ -7,7 +7,7 @@ import { parseStrictJson } from "../scripts/eval-strict-json.mjs";
 
 // The adapter is separately installed, never supplied by a model argument.
 // Change this pin only with the reviewed first-party Python adapter.
-export const LOCAL_OCR_HELPER_SHA256 = "2991b9e68dd7327813292126f8ae4398546662187799ff92b6446b591e825991";
+export const LOCAL_OCR_HELPER_SHA256 = "a66ec8fe3d77f846cabac126812425dfe5a6ed2b2b533bb863fdcf6e05c999c0";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const MAX_SOURCE = 50 * 1024 * 1024;
 const MAX_PNG = 25 * 1024 * 1024;
@@ -19,7 +19,7 @@ const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 
 export const LOCAL_OCR_TOOL_DEFINITION = Object.freeze({
   name: "propose_pdf_ocr",
-  description: "Explicitly opt in to separately installed local macOS OCR for ONE PDF page. Requires the exact get_pdf_identity SHA and confirm_local_ocr=true. Returns unverified word proposals, a source-render replay and a private offline review file. Engine scores are not correctness. Never replaces native text or edits the PDF. At most 200 words are returned; the full bounded proposal is retained for review. Optional adapter setup is required; no engine is bundled.",
+  description: "Explicitly opt in to separately installed local OCR for ONE PDF page. The host configures macOS Vision or Tesseract on Linux/macOS. Requires the exact get_pdf_identity SHA and confirm_local_ocr=true. Returns unverified word proposals, a source-render replay and a private offline review file. Engine scores are not correctness. Never replaces native text or edits the PDF. At most 200 words are returned; the full bounded proposal is retained for review. Optional adapter setup is required; no engine is bundled.",
   inputSchema: {
     type: "object", additionalProperties: false,
     properties: {
@@ -126,7 +126,7 @@ export function runLocalOcrAdapter(python, helper, args, deadline) {
       killAdapter(child);
       clearTimeout(timer); children.delete(record); finish();
       if (failure) reject(failure);
-      else if (code !== 0) reject(new Error("Optional local OCR adapter failed. Check the separate macOS installation, supported PDF and page; no verified OCR result was returned."));
+      else if (code !== 0) reject(new Error("Optional local OCR adapter failed. Check the separately configured engine installation, supported PDF and page; no verified OCR result was returned."));
       else {
         try { resolve(parseStrictJson(Buffer.concat(chunks).toString("utf8"), "Local OCR adapter output")); }
         catch (error) { reject(error); }
@@ -143,7 +143,10 @@ export function createLocalOcrToolHandler({
   let busy = false;
   return async args => {
     requireThat(configuration, "Local OCR is not configured. It is optional and disabled by default.");
-    requireThat(platform === "darwin", "This optional local OCR adapter currently requires macOS.");
+    const engine = configuration.engine ?? "vision";
+    requireThat(["vision", "tesseract"].includes(engine), "Local OCR engine must be vision or tesseract.");
+    requireThat(engine === "vision" ? platform === "darwin" : ["darwin", "linux"].includes(platform),
+      "Local OCR requires macOS for Vision, or Linux/macOS for Tesseract.");
     requireThat(args && typeof args === "object" && !Array.isArray(args)
       && Object.keys(args).every(key => ["pdf_path", "page", "expected_source_sha256", "confirm_local_ocr"].includes(key)),
     "Local OCR arguments are invalid.");
@@ -164,6 +167,15 @@ export function createLocalOcrToolHandler({
       const pythonStat = await fs.stat(await fs.realpath(python));
       requireThat(pythonStat.isFile() && (pythonStat.mode & 0o111) !== 0,
         "The configured local OCR Python must be an executable file.");
+      const engineArgs = ["--engine", engine];
+      if (engine === "tesseract") {
+        requireThat(typeof configuration.tesseractPath === "string" && path.isAbsolute(configuration.tesseractPath),
+          "Configure an absolute localOCR.tesseractPath in the host configuration.");
+        const executable = await fs.stat(await fs.realpath(configuration.tesseractPath));
+        requireThat(executable.isFile() && (executable.mode & 0o111) !== 0,
+          "The configured Tesseract must be an executable file.");
+        engineArgs.push("--tesseract-path", configuration.tesseractPath);
+      }
       const helper = await readPhysicalFile(configuration.helperPath, 128 * 1024);
       requireThat(sha(helper) === expectedHelperSha256, "The separately installed local OCR helper does not match this reviewed version.");
       const sourcePath = resolvePdfPath(args.pdf_path); // Enforces the existing folder allowlist.
@@ -184,7 +196,7 @@ export function createLocalOcrToolHandler({
       const deadline = Date.now() + 120_000;
       const generated = await invokeAdapter(python, helperPath, ["--pdf", snapshotPath,
         "--page", String(args.page), "--expect-source-sha256", args.expected_source_sha256,
-        "--output-dir", proposalDirectory], deadline);
+        "--output-dir", proposalDirectory, ...engineArgs], deadline);
       requireThat(generated?.status === "unverified_ocr_proposal"
         && generated.source_pdf_sha256 === args.expected_source_sha256
         && SHA256.test(generated.proposal_sha256 ?? ""), "Local OCR generation binding is invalid.");

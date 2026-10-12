@@ -23,6 +23,44 @@ ENGINE = {"name": "ocrmac-vision", "ocrmac_version": "synthetic",
 
 
 class LocalOcrProposalTests(unittest.TestCase):
+    def test_tesseract_words_preserve_pixel_geometry_and_uncalibrated_scores(self):
+        header = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        tsv = header + "1\t1\t0\t0\t0\t0\t0\t0\t100\t200\t-1\t\n" + \
+            "5\t1\t1\t1\t1\t1\t10\t20\t30\t40\t95.5\tInvoice\n"
+        observations = MODULE.tesseract_observations(tsv, 100, 200)
+        self.assertEqual(observations, [("Invoice", 0.955, [0.1, 0.7, 0.3, 0.2])])
+        proposal = MODULE.proposal_from_observations(PDF, 1, 2, PNG, 100, 200, observations,
+                                                     {"name": "tesseract", "tesseract_version": "tesseract 5.0",
+                                                      "language": "eng", "pypdfium2_version": "synthetic",
+                                                      "pillow_version": "synthetic"})
+        self.assertEqual(proposal["proposals"][0]["box_top_left_pixels"], [10.0, 20.0, 30.0, 40.0])
+
+    def test_tesseract_rejects_malformed_or_out_of_page_words(self):
+        with self.assertRaises(ValueError):
+            MODULE.tesseract_observations("not\ta\ttsv", 100, 200)
+        header = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        for box, confidence in [("90\t20\t30\t40", "95"), ("10\t20\t30\t40", "nan")]:
+            with self.subTest(box=box, confidence=confidence), self.assertRaises(ValueError):
+                MODULE.tesseract_observations(header + f"5\t1\t1\t1\t1\t1\t{box}\t{confidence}\tInvoice\n", 100, 200)
+
+    def test_engine_command_enforces_output_and_whole_operation_deadline(self):
+        self.assertEqual(MODULE.bounded_command([sys.executable, "-c", "print('ok')"], 10, 2), b"ok\n")
+        with self.assertRaises(ValueError):
+            MODULE.bounded_command([sys.executable, "-c", "print('x'*100)"], 10, 2)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            MODULE.bounded_command([sys.executable, "-c", "import time; time.sleep(10)"], 10, 0.05)
+
+    def test_tesseract_proposal_replay_keeps_text_unverified(self):
+        with tempfile.TemporaryDirectory() as root:
+            engine = {"name": "tesseract", "tesseract_version": "tesseract 5.0", "language": "eng",
+                      "pypdfium2_version": "synthetic", "pillow_version": "synthetic"}
+            proposal = MODULE.proposal_from_observations(PDF, 1, 2, PNG, 100, 200,
+                                                        [("Invoice", 0.9, [0.1, 0.2, 0.3, 0.1])], engine)
+            folder = Path(root) / "output"
+            MODULE.retain_proposal(folder, PNG, proposal)
+            result = MODULE.verify_retained(folder, PDF, proposal["proposal_sha256"], self.replay)
+            self.assertEqual(result["status"], "source_render_replayed_ocr_unverified")
+
     def test_empty_password_encryption_is_refused_before_page_access(self):
         closed = []
         document = SimpleNamespace(close=lambda: closed.append(True))
