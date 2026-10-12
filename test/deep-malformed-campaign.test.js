@@ -43,7 +43,7 @@ import {
   makeDeepMalformedFixture,
   makeDeepMalformedFixtures,
 } from "./helpers/deep-malformed-fixtures.js";
-import { captureChildPeakRssReader } from "./helpers/child-peak-rss.js";
+import { captureChildPeakRssReader } from "../scripts/child-process-rss.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FULL_SCALE = process.env.DEEP_FUZZ === "1";

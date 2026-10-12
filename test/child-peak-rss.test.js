@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { captureChildPeakRssReader } from "./helpers/child-peak-rss.js";
+import {
+  captureChildCurrentRssReader,
+  captureChildPeakRssReader,
+  maximumRssOrUnavailable,
+} from "../scripts/child-process-rss.mjs";
 
 function procFixture({ parent = 700, localParent = 10, child = 701, localChild = 11, namespaces = true } = {}) {
   const files = new Map();
@@ -21,9 +25,13 @@ function procFixture({ parent = 700, localParent = 10, child = 701, localChild =
     },
     readdirSync: () => [...new Set([...files.keys()].map(file => file.split("/")[2]))],
   };
-  return { files, status, stat, put, read: () => captureChildPeakRssReader(localChild, {
+  const options = {
     fileSystem, parentPid: localParent, platform: "linux",
-  }) };
+  };
+  return { files, status, stat, put,
+    read: () => captureChildPeakRssReader(localChild, options),
+    readCurrent: () => captureChildCurrentRssReader(localChild, options),
+  };
 }
 
 describe("identity-bound child peak RSS", () => {
@@ -98,5 +106,43 @@ describe("identity-bound child peak RSS", () => {
 
   it("returns unavailable on platforms without Linux proc", () => {
     expect(captureChildPeakRssReader(11, { platform: "darwin" })()).toBeNull();
+  });
+
+  it("reads current RSS separately from the kernel high-water mark", () => {
+    const fixture = procFixture();
+    fixture.put(11, 1, 11, 999_999);
+    const read = fixture.readCurrent();
+    expect(read()).toBe(20 * 1024);
+    fixture.files.set("/proc/701/status", fixture.status(701, 700, 11, 100, 10));
+    expect(read()).toBe(10 * 1024);
+    fixture.put(701, 700, 11, 100, "9999");
+    expect(read()).toBeNull();
+  });
+
+  it("does not substitute VmHWM when current RSS is unavailable", () => {
+    const fixture = procFixture();
+    const read = fixture.readCurrent();
+    fixture.files.set("/proc/701/status", fixture.status(701, 700, 11).replace(/^VmRSS:.*$/m, ""));
+    expect(read()).toBeNull();
+  });
+});
+
+describe("sampled RSS aggregation", () => {
+  it("retains the maximum when every supplied observation is measured", () => {
+    expect(maximumRssOrUnavailable([20, 100, 50])).toBe(100);
+  });
+
+  it.each([[], [null], [null, null], [100, null], [null, 100], [0], [-1], [NaN]].map(samples => ({ samples })))(
+    "keeps missing or invalid observations unavailable: $samples", ({ samples }) => {
+      expect(maximumRssOrUnavailable(samples)).toBeNull();
+    },
+  );
+
+  it("does not erase a missing call or sample when later values are available", () => {
+    let peak = maximumRssOrUnavailable([100]);
+    peak = maximumRssOrUnavailable([peak, null]);
+    peak = maximumRssOrUnavailable([peak, 200]);
+    expect(peak).toBeNull();
+    expect(maximumRssOrUnavailable([100, peak, 300])).toBeNull();
   });
 });

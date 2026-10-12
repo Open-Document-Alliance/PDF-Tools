@@ -29,12 +29,12 @@ function startTime(text, pid) {
   return value;
 }
 
-/** Capture one direct child's identity, then read its lifetime peak RSS only.
+/** Capture one direct child's identity before observing its RSS.
  * /proc can expose outer PIDs while child_process returns inner PIDs. Match
  * both the actual parent and its namespace depth; never trust a bare PID.
- * No child-tree aggregation or sampled VmRSS substitutes for VmHWM here.
+ * The caller chooses VmRSS or VmHWM explicitly; neither includes descendants.
  */
-export function captureChildPeakRssReader(childPid, {
+function captureChildRssReader(childPid, field, {
   fileSystem = fs,
   parentPid = process.pid,
   platform = process.platform,
@@ -52,10 +52,11 @@ export function captureChildPeakRssReader(childPid, {
       const identity = statusIdentity(status);
       const lastStart = startTime(fileSystem.readFileSync(`/proc/${pid}/stat`, "utf8"), pid);
       if (identity.pid !== pid || firstStart !== lastStart) throw new Error("Process changed during observation.");
-      const peakKiB = status.match(/^VmHWM:\s+(\d+)\s+kB$/m)?.[1];
-      const peak = peakKiB === undefined ? null : Number(peakKiB) * 1024;
+      const kib = status.match(field === "VmHWM"
+        ? /^VmHWM:\s+(\d+)\s+kB$/m : /^VmRSS:\s+(\d+)\s+kB$/m)?.[1];
+      const bytes = kib === undefined ? null : Number(kib) * 1024;
       return { ...identity, start: firstStart,
-        peak: Number.isSafeInteger(peak) && peak > 0 ? peak : null };
+        bytes: Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null };
     };
     const candidates = [];
     for (const name of fileSystem.readdirSync("/proc")) {
@@ -75,8 +76,24 @@ export function captureChildPeakRssReader(childPid, {
         const observed = observe(captured.pid);
         return matchesChild(observed) && observed.start === captured.start
           && observed.namespacePids.every((pid, index) => pid === captured.namespacePids[index])
-          ? observed.peak : null;
+          ? observed.bytes : null;
       } catch { return null; }
     };
   } catch { return unavailable; }
+}
+
+/** Kernel lifetime high-water mark for one identity-bound child. */
+export function captureChildPeakRssReader(childPid, options) {
+  return captureChildRssReader(childPid, "VmHWM", options);
+}
+
+/** Current resident bytes for one identity-bound child, for sampled metrics. */
+export function captureChildCurrentRssReader(childPid, options) {
+  return captureChildRssReader(childPid, "VmRSS", options);
+}
+
+/** A missing observation makes the combined sampled maximum unavailable. */
+export function maximumRssOrUnavailable(samples) {
+  if (samples.length === 0 || samples.some(value => !Number.isSafeInteger(value) || value <= 0)) return null;
+  return samples.reduce((maximum, value) => Math.max(maximum, value), 0);
 }
