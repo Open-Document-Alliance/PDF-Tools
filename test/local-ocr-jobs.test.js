@@ -19,7 +19,9 @@ const roots = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true }))); });
 
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-ocr-jobs-test-"));
+  // Match the production resolver's physical path on macOS (/var aliases
+  // /private/var), while keeping the fixture's exact-path assertion intact.
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-ocr-jobs-test-")));
   roots.push(root);
   const input = path.join(root, "input.pdf");
   const helperPath = path.join(root, "helper.py");
