@@ -10,6 +10,37 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
 const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 const TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVQIW2NgYGD4z8DAwMAAAAwAAwH1oUt1AAAAAElFTkSuQmCC";
+const MALFORMED_SIGNATURE_RECORDS = [
+  {
+    slug: "bad-typed",
+    record: { name: "bad-typed", style: "typed", display_name: 123 },
+  },
+  {
+    slug: "unrenderable-typed",
+    record: { name: "unrenderable-typed", style: "typed", display_name: "Signer 💥" },
+  },
+  {
+    slug: "bad-base64",
+    record: { name: "bad-base64", style: "image", image_mime: "image/png", image_data_b64: "not-base64" },
+  },
+  {
+    slug: "bad-mime",
+    record: { name: "bad-mime", style: "image", image_mime: "image/jpeg", image_data_b64: TINY_PNG_B64 },
+  },
+  {
+    slug: "truncated-png",
+    record: {
+      name: "truncated-png",
+      style: "image",
+      image_mime: "image/png",
+      image_data_b64: Buffer.from("89504e470d0a1a0a", "hex").toString("base64"),
+    },
+  },
+  {
+    slug: "identity-confused",
+    record: { name: "different-signature", style: "typed", display_name: "Wrong Signer" },
+  },
+];
 const RUNTIMES = [
   { name: "source runtime", root: REPO_ROOT },
   { name: "share runtime", root: path.join(REPO_ROOT, "pdf-toolkit-mcp-share") },
@@ -166,7 +197,10 @@ describe.each(RUNTIMES)("$name pre-mutation input validation", ({ root }) => {
     await expectMissing(outputPath);
   });
 
-  it("rejects malformed saved signatures before loading or mutating the active PDF", async () => {
+  // Each malformed record is one independent scenario with the ordinary test
+  // budget. Active-state inspection now runs in a fresh isolated PDF worker;
+  // one loop must not combine all six scenarios' worker starts into one budget.
+  it.each(MALFORMED_SIGNATURE_RECORDS)("rejects malformed saved signature $slug before loading or mutating the active PDF", async ({ slug, record }) => {
     const initialized = await client.callTool({
       name: "set_active_document",
       arguments: {
@@ -176,77 +210,55 @@ describe.each(RUNTIMES)("$name pre-mutation input validation", ({ root }) => {
       },
     });
     expect(initialized.isError).not.toBe(true);
-    const before = await client.callTool({ name: "get_active_document", arguments: {} });
+    // Both set/get_active_document return buildActiveDocumentPayload(path).
+    // The setter already supplies the exact pre-operation payload to compare.
+    const before = initialized.structuredContent;
 
     const signaturesDir = path.join(stateRoot, "profiles", "signatures");
     await fs.mkdir(signaturesDir, { recursive: true });
-    const malformedRecords = [
-      {
-        slug: "bad-typed",
-        record: { name: "bad-typed", style: "typed", display_name: 123 },
+    await fs.writeFile(path.join(signaturesDir, `${slug}.json`), JSON.stringify(record));
+    const outputPath = path.join(stateRoot, `${slug}.pdf`);
+    const result = await client.callTool({
+      name: "apply_signature",
+      arguments: {
+        pdf_path: EXAMPLE_PDF,
+        output_path: outputPath,
+        signature_name: slug,
+        page: 1,
+        x: 72,
+        y: 600,
+        width: 180,
+        height: 40,
+        user_intent_statement: "I intend to sign this automated validation document.",
+        user_confirmed_at: new Date().toISOString(),
       },
-      {
-        slug: "unrenderable-typed",
-        record: { name: "unrenderable-typed", style: "typed", display_name: "Signer 💥" },
-      },
-      {
-        slug: "bad-base64",
-        record: { name: "bad-base64", style: "image", image_mime: "image/png", image_data_b64: "not-base64" },
-      },
-      {
-        slug: "bad-mime",
-        record: { name: "bad-mime", style: "image", image_mime: "image/jpeg", image_data_b64: TINY_PNG_B64 },
-      },
-      {
-        slug: "truncated-png",
-        record: {
-          name: "truncated-png",
-          style: "image",
-          image_mime: "image/png",
-          image_data_b64: Buffer.from("89504e470d0a1a0a", "hex").toString("base64"),
-        },
-      },
-      {
-        slug: "identity-confused",
-        record: { name: "different-signature", style: "typed", display_name: "Wrong Signer" },
-      },
-    ];
+    });
+    expect(result.isError, slug).toBe(true);
+    await expectMissing(outputPath);
 
-    for (const { slug, record } of malformedRecords) {
+    const after = await client.callTool({ name: "get_active_document", arguments: {} });
+    expect(after.structuredContent, slug).toEqual(before);
+
+    const loaded = await client.callTool({
+      name: "load_signature",
+      arguments: { signature_name: slug },
+    });
+    expect(loaded.isError, slug).toBe(true);
+  });
+
+  it("excludes every malformed saved signature from the signature list", async () => {
+    // Populate the complete inventory here as well, so this aggregate check
+    // remains meaningful when run alone or with a test-name filter.
+    const signaturesDir = path.join(stateRoot, "profiles", "signatures");
+    await fs.mkdir(signaturesDir, { recursive: true });
+    for (const { slug, record } of MALFORMED_SIGNATURE_RECORDS) {
       await fs.writeFile(path.join(signaturesDir, `${slug}.json`), JSON.stringify(record));
-      const outputPath = path.join(stateRoot, `${slug}.pdf`);
-      const result = await client.callTool({
-        name: "apply_signature",
-        arguments: {
-          pdf_path: EXAMPLE_PDF,
-          output_path: outputPath,
-          signature_name: slug,
-          page: 1,
-          x: 72,
-          y: 600,
-          width: 180,
-          height: 40,
-          user_intent_statement: "I intend to sign this automated validation document.",
-          user_confirmed_at: new Date().toISOString(),
-        },
-      });
-      expect(result.isError, slug).toBe(true);
-      await expectMissing(outputPath);
-
-      const after = await client.callTool({ name: "get_active_document", arguments: {} });
-      expect(after.structuredContent, slug).toEqual(before.structuredContent);
-
-      const loaded = await client.callTool({
-        name: "load_signature",
-        arguments: { signature_name: slug },
-      });
-      expect(loaded.isError, slug).toBe(true);
     }
 
     const listed = await client.callTool({ name: "list_signatures", arguments: {} });
     expect(listed.isError).not.toBe(true);
     const listedNames = listed.structuredContent.signatures.map(signature => signature.name);
-    for (const { slug } of malformedRecords) {
+    for (const { slug } of MALFORMED_SIGNATURE_RECORDS) {
       expect(listedNames).not.toContain(slug);
     }
     expect(listedNames).not.toContain("different-signature");
