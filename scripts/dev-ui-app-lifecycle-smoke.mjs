@@ -299,6 +299,7 @@ function hostHtml() {
         reply(message.id, {
           content: [{ type: "text", text: "Read PDF bytes." }],
           structuredContent: {
+            pdfPath: args.pdf_path,
             bytes: encodeBase64(bytes.subarray(begin, end)),
             totalBytes: bytes.length,
             offset: begin,

@@ -76,7 +76,8 @@ let totalPages = 0;
 let scale = 1.0;
 let pdfPath = "";
 let viewUUID: string | undefined;
-let currentRenderTask: { cancel: () => void } | null = null;
+let currentRenderTask: { cancel: () => void; promise: Promise<unknown> } | null = null;
+let currentTextLayer: TextLayer | null = null;
 let isRendering = false;
 let pendingPage: number | null = null;
 let currentDisplayMode: "inline" | "fullscreen" = "inline";
@@ -477,6 +478,19 @@ const rangeCache = new Map<string, { bytes: Uint8Array; totalBytes: number }>();
 const inflightRequests = new Map<string, Promise<{ bytes: Uint8Array; totalBytes: number }>>();
 const pathCacheEpochs = new Map<string, number>();
 const activePdfLoadingTasks = new Set<pdfjsLib.PDFDocumentLoadingTask>();
+const activePdfLoadCancellations = new Map<pdfjsLib.PDFDocumentLoadingTask, (reason: unknown) => void>();
+const pdfLoadingTaskDisposals = new WeakMap<pdfjsLib.PDFDocumentLoadingTask, Promise<void>>();
+let pdfSessionDisposal: Promise<void> = Promise.resolve();
+
+interface PdfRangeSession {
+  path: string;
+  size: number;
+  generation: number;
+  canonicalPath?: string;
+}
+// This binds ranges to one viewer session and checks their returned metadata.
+// The current byte API does not pin a filesystem snapshot: a same-size external
+// edit during one load still requires a future server-side identity contract.
 
 class ViewerLifecycleEndedError extends Error {
   constructor() {
@@ -504,6 +518,56 @@ function isViewerLifecycleEnded(err: unknown) {
   return isTearingDown || err instanceof ViewerLifecycleEndedError;
 }
 
+function assertPdfGeneration(generation: number) {
+  if (isTearingDown || generation !== pdfGeneration) throw new ViewerLifecycleEndedError();
+}
+
+function destroyPdfLoadingTask(task: pdfjsLib.PDFDocumentLoadingTask) {
+  let disposal = pdfLoadingTaskDisposals.get(task);
+  if (!disposal) {
+    disposal = Promise.resolve().then(() => task.destroy());
+    pdfLoadingTaskDisposals.set(task, disposal);
+  }
+  return disposal;
+}
+
+function retainPdfDisposal(disposal: Promise<unknown>) {
+  pdfSessionDisposal = Promise.allSettled([pdfSessionDisposal, disposal]).then(() => {});
+}
+
+/** Invalidate synchronously; a replacement waits for all earlier disposal. */
+function retirePdfSession() {
+  const generation = ++pdfGeneration;
+  const renderTask = currentRenderTask;
+  currentRenderTask = null;
+  try { renderTask?.cancel(); } catch { /* best-effort */ }
+  try { currentTextLayer?.cancel(); } catch { /* best-effort */ }
+  currentTextLayer = null;
+  isRendering = false;
+  pendingPage = null;
+  preloadPaused = false;
+  currentViewport = null;
+  currentViewportPage = 0;
+  const previousDocument = pdfDocument;
+  pdfDocument = null;
+  const loadingTasks = [...activePdfLoadingTasks];
+  activePdfLoadingTasks.clear();
+  for (const task of loadingTasks) activePdfLoadCancellations.get(task)?.(new ViewerLifecycleEndedError());
+  activePdfLoadCancellations.clear();
+  rangeCache.clear();
+  inflightRequests.clear();
+  pathCacheEpochs.clear();
+  pageTextCache.clear();
+  pagesLoaded = 0;
+  pdfSessionDisposal = Promise.allSettled([
+    pdfSessionDisposal,
+    ...(renderTask ? [renderTask.promise] : []),
+    ...loadingTasks.map(destroyPdfLoadingTask),
+    ...(previousDocument ? [Promise.resolve().then(() => previousDocument.destroy())] : []),
+  ]).then(() => {});
+  return { generation, disposed: pdfSessionDisposal };
+}
+
 type ServerToolRequest = Parameters<typeof app.callServerTool>[0];
 
 async function callServerToolDuringLifecycle(
@@ -520,8 +584,8 @@ function getPathCacheEpoch(filePath: string) {
   return pathCacheEpochs.get(filePath) ?? 0;
 }
 
-function buildRangeCacheKey(filePath: string, begin: number, end: number, epoch = getPathCacheEpoch(filePath)) {
-  return `${filePath}@${epoch}:${begin}-${end}`;
+function buildRangeCacheKey(filePath: string, begin: number, end: number, generation: number, epoch = getPathCacheEpoch(filePath)) {
+  return `${filePath}@${epoch}:${generation}:${begin}-${end}`;
 }
 
 function invalidateRangeCacheForPath(filePath: string) {
@@ -536,10 +600,11 @@ function invalidateRangeCacheForPath(filePath: string) {
   }
 }
 
-async function fetchChunk(path: string, begin: number, end: number) {
-  if (isTearingDown) throw new ViewerLifecycleEndedError();
+async function fetchChunk(session: PdfRangeSession, begin: number, end: number) {
+  const { path, generation, size } = session;
+  assertPdfGeneration(generation);
   const epoch = getPathCacheEpoch(path);
-  const key = buildRangeCacheKey(path, begin, end, epoch);
+  const key = buildRangeCacheKey(path, begin, end, generation, epoch);
   if (rangeCache.has(key)) return rangeCache.get(key)!;
   if (inflightRequests.has(key)) return inflightRequests.get(key)!;
 
@@ -549,7 +614,7 @@ async function fetchChunk(path: string, begin: number, end: number) {
         name: "read_pdf_bytes",
         arguments: { pdf_path: path, offset: begin, byteCount: end - begin },
       });
-      if (isTearingDown || getPathCacheEpoch(path) !== epoch) {
+      if (isTearingDown || generation !== pdfGeneration || getPathCacheEpoch(path) !== epoch) {
         throw new ViewerLifecycleEndedError();
       }
 
@@ -559,14 +624,25 @@ async function fetchChunk(path: string, begin: number, end: number) {
       }
 
       const sc = result.structuredContent as any;
-      if (!sc?.bytes) throw new Error("No bytes in response");
+      if (!sc || typeof sc.pdfPath !== "string" || !sc.pdfPath ||
+          (session.canonicalPath && sc.pdfPath !== session.canonicalPath) ||
+          sc.offset !== begin || sc.byteCount !== end - begin || sc.totalBytes !== size ||
+          typeof sc.bytes !== "string" || sc.bytes.length !== 4 * Math.ceil((end - begin) / 3)) {
+        throw new Error("PDF byte response does not match the current document range. Reopen the PDF.");
+      }
+      // A permitted symlink may resolve to a different canonical path. Bind
+      // every chunk in this load to the same path returned by the server.
+      session.canonicalPath = sc.pdfPath;
 
       const raw = atob(sc.bytes);
+      if (raw.length !== end - begin || btoa(raw) !== sc.bytes) {
+        throw new Error("PDF byte response is incomplete or invalid. Reopen the PDF.");
+      }
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
 
       const entry = { bytes, totalBytes: sc.totalBytes };
-      if (isTearingDown || getPathCacheEpoch(path) !== epoch) {
+      if (isTearingDown || generation !== pdfGeneration || getPathCacheEpoch(path) !== epoch) {
         throw new ViewerLifecycleEndedError();
       }
       rangeCache.set(key, entry);
@@ -580,16 +656,21 @@ async function fetchChunk(path: string, begin: number, end: number) {
   return request;
 }
 
-async function fetchRange(path: string, begin: number, end: number) {
+async function fetchRange(session: PdfRangeSession, begin: number, end: number) {
+  assertPdfGeneration(session.generation);
+  if (!Number.isSafeInteger(begin) || !Number.isSafeInteger(end) || begin < 0 || end <= begin || end > session.size) {
+    throw new Error("The PDF viewer requested an invalid byte range.");
+  }
   const size = end - begin;
-  if (size <= MAX_CHUNK_BYTES) return fetchChunk(path, begin, end);
+  if (size <= MAX_CHUNK_BYTES) return fetchChunk(session, begin, end);
 
   const chunks: { begin: number; end: number }[] = [];
   for (let off = begin; off < end; off += MAX_CHUNK_BYTES) {
     chunks.push({ begin: off, end: Math.min(off + MAX_CHUNK_BYTES, end) });
   }
 
-  const results = await Promise.all(chunks.map(c => fetchChunk(path, c.begin, c.end)));
+  const results = await Promise.all(chunks.map(c => fetchChunk(session, c.begin, c.end)));
+  assertPdfGeneration(session.generation);
   const totalLen = results.reduce((s, r) => s + r.bytes.length, 0);
   const combined = new Uint8Array(totalLen);
   let pos = 0;
@@ -598,34 +679,54 @@ async function fetchRange(path: string, begin: number, end: number) {
 }
 
 async function loadPdfProgressively(filePath: string, fileSize: number, generation: number) {
-  if (isTearingDown || generation !== pdfGeneration) {
-    throw new ViewerLifecycleEndedError();
-  }
+  assertPdfGeneration(generation);
+  const session: PdfRangeSession = { path: filePath, size: fileSize, generation };
+  let loadingTask: pdfjsLib.PDFDocumentLoadingTask;
+  let rangeError: unknown;
+  let loadCancelled = false;
+  let rejectCancelled!: (reason: unknown) => void;
+  const cancelled = new Promise<never>((_resolve, reject) => { rejectCancelled = reject; });
+  const cancelLoad = (reason: unknown) => { loadCancelled = true; rejectCancelled(reason); };
 
   class AppRangeTransport extends pdfjsLib.PDFDataRangeTransport {
     requestDataRange(begin: number, end: number) {
-      fetchRange(filePath, begin, end)
-        .then(r => this.onDataRange(begin, r.bytes))
+      fetchRange(session, begin, end)
+        .then(r => { assertPdfGeneration(generation); this.onDataRange(begin, r.bytes); })
         .catch(err => {
           if (!isTearingDown && generation === pdfGeneration) {
             console.error("[viewer] Range fetch error:", err);
+            rangeError = err;
+            cancelLoad(err);
+            // An unfulfilled PDF.js range otherwise leaves loading/rendering
+            // pending forever. Retire this task without touching a newer one.
+            retainPdfDisposal(destroyPdfLoadingTask(loadingTask));
+            showError(err instanceof Error ? err.message : String(err));
           }
         });
     }
   }
 
   const transport = new AppRangeTransport(fileSize, null);
-  const loadingTask = pdfjsLib.getDocument({ range: transport });
+  loadingTask = pdfjsLib.getDocument({ range: transport });
   activePdfLoadingTasks.add(loadingTask);
+  activePdfLoadCancellations.set(loadingTask, cancelLoad);
   try {
-    const document = await loadingTask.promise;
-    if (isTearingDown || generation !== pdfGeneration) {
-      try { await document.destroy(); } catch { /* best-effort */ }
-      throw new ViewerLifecycleEndedError();
-    }
-    return document;
+    // PDF.js destroy() need not settle its public loading promise. Race an
+    // explicit cancellation and clean up any document that resolves too late.
+    const loaded = loadingTask.promise.then(async document => {
+      if (loadCancelled || isTearingDown || generation !== pdfGeneration) {
+        try { await document.destroy(); } catch { /* best-effort */ }
+        throw new ViewerLifecycleEndedError();
+      }
+      return document;
+    });
+    return await Promise.race([loaded, cancelled]);
+  } catch (error) {
+    retainPdfDisposal(destroyPdfLoadingTask(loadingTask));
+    throw rangeError || error;
   } finally {
     activePdfLoadingTasks.delete(loadingTask);
+    activePdfLoadCancellations.delete(loadingTask);
   }
 }
 
@@ -677,7 +778,7 @@ async function renderPage() {
       if (err?.name === "RenderingCancelledException") return;
       throw err;
     } finally {
-      currentRenderTask = null;
+      if (currentRenderTask === renderTask) currentRenderTask = null;
     }
 
     if (renderIsStale() || pageNum !== currentPage) return;
@@ -692,7 +793,9 @@ async function renderPage() {
       container: textLayerEl,
       viewport,
     });
-    await textLayer.render();
+    currentTextLayer = textLayer;
+    try { await textLayer.render(); }
+    finally { if (currentTextLayer === textLayer) currentTextLayer = null; }
     if (renderIsStale()) return;
 
     // Cache page text
@@ -716,6 +819,9 @@ async function renderPage() {
     console.error("[viewer] Render error:", err);
     showError(`Failed to render page ${currentPage}`);
   } finally {
+    // An old cancellation may settle after the replacement starts rendering.
+    // Only the renderer that still owns this document may release its lock.
+    if (renderIsStale()) return;
     preloadPaused = false;
     isRendering = false;
 
@@ -2588,35 +2694,19 @@ async function reloadPdfForStamp(
   lifecycle = captureViewerLifecycle(),
 ) {
   assertViewerLifecycle(lifecycle);
-  // Cancel any in-flight render so we don't tear down the old doc mid-raster.
-  if (currentRenderTask) {
-    try { currentRenderTask.cancel(); } catch { /* ignore */ }
-    currentRenderTask = null;
-  }
-  isRendering = false;
-  pendingPage = null;
-
-  // Bump generation FIRST so any in-flight preloader from the old doc sees
-  // it mismatch on the next iteration and aborts cleanly (Codex P2-A).
-  const loadGeneration = ++pdfGeneration;
-  const oldDoc = pdfDocument;
-  pdfDocument = null;
-  if (oldDoc) {
-    try { await oldDoc.destroy(); } catch { /* best-effort */ }
-    assertViewerLifecycle(lifecycle);
-  }
-
-  // Content-specific caches: page text may include our new stamp text.
-  pageTextCache.clear();
-  pagesLoaded = 0;
-  invalidateRangeCacheForPath(stampedPath);
+  const retired = retirePdfSession();
+  const loadGeneration = retired.generation;
 
   try {
+    await retired.disposed;
+    assertViewerLifecycle(lifecycle);
+    assertPdfGeneration(loadGeneration);
     const probe = await callServerToolDuringLifecycle({
       name: "read_pdf_bytes",
       arguments: { pdf_path: stampedPath, offset: 0, byteCount: 1 },
     }, lifecycle);
     assertViewerLifecycle(lifecycle);
+    assertPdfGeneration(loadGeneration);
     if (probe.isError) {
       const text = probe.content?.map((c: any) => ("text" in c ? c.text : "")).join(" ") || "Stamped-file probe failed";
       throw new Error(text);
@@ -2624,7 +2714,12 @@ async function reloadPdfForStamp(
     const probeSc = probe.structuredContent as { totalBytes?: number } | undefined;
     if (!probeSc?.totalBytes) throw new Error("Stamped file has no size reported");
 
-    pdfDocument = await loadPdfProgressively(stampedPath, probeSc.totalBytes, loadGeneration);
+    const loaded = await loadPdfProgressively(stampedPath, probeSc.totalBytes, loadGeneration);
+    if (isTearingDown || loadGeneration !== pdfGeneration) {
+      await loaded.destroy();
+      throw new ViewerLifecycleEndedError();
+    }
+    pdfDocument = loaded;
     assertViewerLifecycle(lifecycle);
     // New doc should have the same page count — guard defensively.
     totalPages = pdfDocument.numPages;
@@ -2645,9 +2740,15 @@ async function reloadPdfForStamp(
         arguments: { pdf_path: pdfPath, offset: 0, byteCount: 1 },
       }, lifecycle);
       assertViewerLifecycle(lifecycle);
+      assertPdfGeneration(loadGeneration);
       const probeSc = probe.structuredContent as { totalBytes?: number } | undefined;
       if (probeSc?.totalBytes) {
-        pdfDocument = await loadPdfProgressively(pdfPath, probeSc.totalBytes, loadGeneration);
+        const loaded = await loadPdfProgressively(pdfPath, probeSc.totalBytes, loadGeneration);
+        if (isTearingDown || loadGeneration !== pdfGeneration) {
+          await loaded.destroy();
+          throw new ViewerLifecycleEndedError();
+        }
+        pdfDocument = loaded;
         assertViewerLifecycle(lifecycle);
         totalPages = pdfDocument.numPages;
         if (currentPage > totalPages) currentPage = totalPages;
@@ -3878,6 +3979,10 @@ async function loadPdfFromToolResult(
 
   lastLoadedResultKey = payload.key;
   pendingLoadResultKey = payload.key;
+  // A view identity is a new byte-reading session, even for the same path and
+  // size. Never reuse the previous view's ranges or PDF.js worker/document.
+  const retired = retirePdfSession();
+  const loadGeneration = retired.generation;
   pdfPath = nextPdfPath;
   hostPdfSession.viewerPathChanged(nextPdfPath);
   viewUUID = payload.viewUUID;
@@ -3900,10 +4005,14 @@ async function loadPdfFromToolResult(
   showLoading("Loading PDF...");
 
   try {
-    // New doc → new preload generation so any straggler preloader from a
-    // previous load (including reloadPdfForStamp) drops out.
-    const loadGeneration = ++pdfGeneration;
-    pdfDocument = await loadPdfProgressively(pdfPath, payload.totalBytes, loadGeneration);
+    await retired.disposed;
+    assertPdfGeneration(loadGeneration);
+    const loaded = await loadPdfProgressively(nextPdfPath, payload.totalBytes, loadGeneration);
+    if (isTearingDown || loadGeneration !== pdfGeneration) {
+      await loaded.destroy();
+      throw new ViewerLifecycleEndedError();
+    }
+    pdfDocument = loaded;
     assertViewerLifecycle(lifecycle);
     totalPages = pdfDocument.numPages;
 
@@ -3922,10 +4031,9 @@ async function loadPdfFromToolResult(
     updateWorkingCopyBanner();
 
     showViewer();
-    modeTabsEl.style.display = totalPages > 1 ? "" : "none";
-    if (totalPages > 1) {
-      initPageStates();
-    }
+    // One-page forms still need signing and page rotation.
+    modeTabsEl.style.display = "";
+    initPageStates();
     updateManageActions();
     manageStatusEl.textContent = "";
     manageApplyBtn.textContent = "Save as new file";
@@ -3933,12 +4041,12 @@ async function loadPdfFromToolResult(
     syncActiveDocumentState();
     startPreloading();
   } catch (err: any) {
-    if (isTearingDown || err instanceof ViewerLifecycleEndedError) return true;
+    if (isTearingDown || loadGeneration !== pdfGeneration || err instanceof ViewerLifecycleEndedError) return true;
     lastLoadedResultKey = "";
     console.error("[viewer] Load error:", err);
     showError(err.message || "Failed to load PDF");
   } finally {
-    if (pendingLoadResultKey === payload.key) pendingLoadResultKey = "";
+    if (loadGeneration === pdfGeneration && pendingLoadResultKey === payload.key) pendingLoadResultKey = "";
     hostPdfSession.refresh();
   }
 
@@ -3960,13 +4068,9 @@ async function teardownViewer(): Promise<Record<string, never>> {
   clearConnectTimeout();
   clearToolResultTimeout();
   fallbackLoad = null;
-  await hostPdfSession.dispose();
-
-  // Stop asynchronous render and preload work before acknowledging teardown.
-  // The host may remove the iframe immediately after the response.
-  pdfGeneration++;
-  preloadPaused = false;
-  pendingPage = null;
+  // Cancel document work immediately, even if host unsubscribe is still in
+  // flight. The host may remove the iframe as soon as teardown is acknowledged.
+  const retired = retirePdfSession();
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);
     searchDebounceTimer = null;
@@ -3975,18 +4079,9 @@ async function teardownViewer(): Promise<Record<string, never>> {
     clearTimeout(selectionTimer);
     selectionTimer = null;
   }
-  if (currentRenderTask) {
-    try { currentRenderTask.cancel(); } catch { /* best-effort */ }
-    currentRenderTask = null;
-  }
-  isRendering = false;
-
-  const documentToDestroy = pdfDocument;
-  pdfDocument = null;
-  const loadingTasksToDestroy = [...activePdfLoadingTasks];
   await Promise.allSettled([
-    ...loadingTasksToDestroy.map(loadingTask => loadingTask.destroy()),
-    ...(documentToDestroy ? [documentToDestroy.destroy()] : []),
+    hostPdfSession.dispose(),
+    retired.disposed,
   ]);
 
   rangeCache.clear();
