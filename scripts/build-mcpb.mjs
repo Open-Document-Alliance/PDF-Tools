@@ -80,6 +80,7 @@ export const SERVER_FILES = [
   "accessibility-inspection.js",
   "bounded-pdf-file.js",
   "document-map.js",
+  "download-transport.js",
   "helpers.js",
   "host-pdf-import.js",
   "index.js",

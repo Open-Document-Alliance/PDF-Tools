@@ -58,6 +58,7 @@ export const SHARE_FILES = [
   "server/accessibility-inspection.js",
   "server/bounded-pdf-file.js",
   "server/document-map.js",
+  "server/download-transport.js",
   "server/helpers.js",
   "server/host-pdf-import.js",
   "server/index.js",
