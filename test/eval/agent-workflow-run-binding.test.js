@@ -146,7 +146,9 @@ if (args[0] === "--version") {
   );
   const inventory = fs.existsSync(skill) ? \`\\nfile: \${skill}\` : "";
   const metadata = { turn_id: "auto-compact-0" };
-  const environment = { type: "message", role: "user", internal_chat_message_metadata_passthrough: metadata, content: [{ type: "input_text", text: \`<environment_context><cwd>\${process.cwd()}</cwd><filesystem><workspace_roots><root>\${process.cwd()}</root></workspace_roots></filesystem></environment_context>\` }] };
+  // Keep the synthetic capture minimal: the optional closing </root> tag
+  // collides with the unchanged denied-home substring check for Linux root.
+  const environment = { type: "message", role: "user", internal_chat_message_metadata_passthrough: metadata, content: [{ type: "input_text", text: \`<environment_context><cwd>\${process.cwd()}</cwd></environment_context>\` }] };
   const context = prompt === undefined ? [
     { type: "message", role: "developer", internal_chat_message_metadata_passthrough: metadata, content: [
       { type: "input_text", text: "synthetic base policy" },
@@ -1550,6 +1552,33 @@ describe("agent workflow run binding", () => {
       runId: run.scheduled?.run_id,
       outputPath: path.join(run.resultsRoot, "run-manifest.json"),
     })).rejects.toThrow(/response does not equal/);
+  }, 15000);
+
+  it("rejects actual denied-home text in prompt-input evidence", async () => {
+    const run = await preparedRun();
+    const plan = JSON.parse(await fs.readFile(
+      path.join(run.resultsRoot, "launch-plan.json"),
+      "utf8",
+    ));
+    const promptInputPath = path.join(run.resultsRoot, "prompt-input.json");
+    const promptInput = JSON.parse(await fs.readFile(promptInputPath, "utf8"));
+    promptInput.unshift({
+      type: "message",
+      role: "developer",
+      content: [{
+        type: "input_text",
+        text: `Synthetic forbidden home path: ${plan.isolation.denied_user_home}`,
+      }],
+    });
+    await fs.writeFile(promptInputPath, JSON.stringify(promptInput));
+    await expect(bindAgentWorkflowRun({
+      runRoot: run.resultsRoot,
+      preparationManifestPath: run.manifestPath,
+      arm: run.arm,
+      caseId: run.caseId,
+      runId: run.scheduled?.run_id,
+      outputPath: path.join(run.resultsRoot, "run-manifest.json"),
+    })).rejects.toThrow(/prompt-input evidence does not match the reviewed run input/);
   }, 15000);
 
   it("rejects an ambient or duplicate project skill in prompt-input evidence", async () => {
