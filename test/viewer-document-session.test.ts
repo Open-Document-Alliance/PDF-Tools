@@ -80,6 +80,11 @@ class Element {
   removeChild(child: Element) { this.children.splice(this.children.indexOf(child), 1); }
   remove() { this.parentElement?.removeChild(this); }
   addEventListener(type: string, listener: Function) { this.listeners.set(type, [...this.listeners.get(type) || [], listener]); }
+  removeEventListener(type: string, listener: Function) { this.listeners.set(type, (this.listeners.get(type) || []).filter(value => value !== listener)); }
+  setPointerCapture() {}
+  releasePointerCapture() {}
+  cloneNode() { return new Element(this.tagName); }
+  closest() { return null; }
   setAttribute(name: string, value: string) { (this as any)[name] = value; }
   toggleAttribute() {}
   querySelectorAll(selector: string): Element[] {
@@ -213,6 +218,23 @@ describe("viewer document sessions", () => {
     expect(element("manage-panel").style.display).toBe("flex");
     expect(element("manage-grid").children).toHaveLength(1);
     expect((element("manage-grid").children[0] as any).className).toBe("manage-thumb-item");
+  });
+
+  it("preserves a thumbnail through pointerup so the following click selects its page", async () => {
+    await harness.app.ontoolresult(result("single"));
+    element("mode-manage-btn").click();
+    const grid = element("manage-grid");
+    const thumbnail = grid.children[0];
+    expect(element("manage-rotate-cw").disabled).toBe(true);
+    thumbnail.listeners.get("pointerdown")!.forEach(listener => listener({
+      target: thumbnail, currentTarget: thumbnail, pointerId: 1, clientX: 20, clientY: 20,
+    }));
+    thumbnail.listeners.get("pointerup")!.slice().forEach(listener => listener({ pointerId: 1 }));
+    expect(grid.children[0]).toBe(thumbnail);
+    thumbnail.click();
+    expect(element("manage-rotate-cw").disabled).toBe(false);
+    element("manage-rotate-cw").click();
+    expect(element("manage-status").textContent).toContain("1 rotated");
   });
 
   it("reloads changed same-path bytes for a new view and destroys the previous document", async () => {

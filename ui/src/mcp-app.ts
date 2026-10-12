@@ -3507,16 +3507,20 @@ function startDrag(idx: number, e: PointerEvent) {
 
     if (dragClone) { dragClone.remove(); dragClone = null; }
 
-    if (dragOverIdx !== null && dragSourceIndex !== null && dragOverIdx !== dragSourceIndex) {
+    const reordered = dragOverIdx !== null && dragSourceIndex !== null && dragOverIdx !== dragSourceIndex;
+    if (reordered) {
       const [moved] = pageStates.splice(dragSourceIndex, 1);
-      pageStates.splice(dragOverIdx, 0, moved);
+      pageStates.splice(dragOverIdx!, 0, moved);
     }
 
     dragSourceIndex = null;
     dragOverIdx = null;
     manageGridEl.querySelectorAll(".manage-thumb-item").forEach(el => el.classList.remove("drop-before", "drop-after"));
 
-    renderManageGrid();
+    // A normal pointer click fires after pointerup. Replacing its target here
+    // discards that click, so leave the original item connected unless a page
+    // actually moved. The click handler then performs selection normally.
+    if (reordered) renderManageGrid();
     updateManageActions();
   };
 
