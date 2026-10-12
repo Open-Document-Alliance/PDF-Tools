@@ -4,7 +4,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildUpstreamRequest, summarizeUpstream } from "../../scripts/eval-olmocr-upstream.mjs";
+import { buildUpstreamRequest, scorerEnvironment, summarizeUpstream } from "../../scripts/eval-olmocr-upstream.mjs";
 import { WORKFLOW_OBLIGATIONS, scoreWorkflow } from "../../scripts/eval-workflow-score.mjs";
 
 const exec = promisify(execFile);
@@ -16,6 +16,15 @@ const records = [{ pdf: "one.pdf", ok: true, outcome: "converted", markdown: "**
   { pdf: "two.pdf", ok: true, outcome: "converted", markdown: "C" }];
 
 describe("pinned upstream bridge denominator", () => {
+  it("retains the installed browser while isolating equation caches and ambient credentials", () => {
+    const environment = scorerEnvironment("/evidence/run", { home: "/original/home", platform: "linux", environment: { PATH: "/bin", OPENAI_API_KEY: "must-not-inherit" } });
+    expect(environment.HOME).toBe("/evidence/run");
+    expect(environment.PLAYWRIGHT_BROWSERS_PATH).toBe("/original/home/.cache/ms-playwright");
+    expect(environment.OPENAI_API_KEY).toBeUndefined();
+    expect(scorerEnvironment("/evidence", { home: "/home", platform: "darwin", environment: {} }).PLAYWRIGHT_BROWSERS_PATH)
+      .toBe("/home/Library/Caches/ms-playwright");
+    expect(scorerEnvironment("/evidence", { environment: { PLAYWRIGHT_BROWSERS_PATH: "0" } }).PLAYWRIGHT_BROWSERS_PATH).toBe("0");
+  });
   it("preserves exact Markdown, categories, and the default baseline for every PDF", () => {
     const request = buildUpstreamRequest(tests, records);
     expect(request.tests).toHaveLength(5);

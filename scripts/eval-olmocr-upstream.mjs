@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -13,6 +14,17 @@ const MANIFEST = path.join(ROOT, "test/fixtures/eval/olmocr/manifest.v1.json");
 const exec = promisify(execFile);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 export const UPSTREAM_REVISION = "f7cfe4c22098b154c76b6ec950d1c0a464eecf8d";
+
+export function scorerEnvironment(destination, { environment = process.env, platform = process.platform, home = os.homedir() } = {}) {
+  const browserCache = platform === "darwin"
+    ? path.join(home, "Library", "Caches", "ms-playwright")
+    : path.join(environment.XDG_CACHE_HOME || path.join(home, ".cache"), "ms-playwright");
+  return { PATH: environment.PATH ?? "", HOME: destination,
+    PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONHASHSEED: "0",
+    // Keep equation caches fresh without hiding the browser installed in the
+    // original user's cache. Explicit hermetic/custom Playwright paths win.
+    PLAYWRIGHT_BROWSERS_PATH: environment.PLAYWRIGHT_BROWSERS_PATH ?? browserCache };
+}
 
 export function buildUpstreamRequest(categories, records) {
   if (!Array.isArray(categories) || !categories.length || !Array.isArray(records)) throw new Error("A nonempty category denominator is required");
@@ -146,9 +158,7 @@ export async function runUpstream(options) {
     report.candidate_qualifying = run.qualifying;
     report.request_sha256 = hash(await fs.readFile(requestPath));
     report.bridge_sha256 = hash(await fs.readFile(path.join(ROOT, "scripts/eval-olmocr-upstream.py")));
-    const environment = { PATH: process.env.PATH ?? "", HOME: destination,
-      PYTHONNOUSERSITE: "1", PYTHONDONTWRITEBYTECODE: "1", PYTHONHASHSEED: "0",
-      ...(process.env.PLAYWRIGHT_BROWSERS_PATH ? { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH } : {}) };
+    const environment = scorerEnvironment(destination);
     const { stdout: pythonVersion } = await exec(python, ["--version"], { env: environment });
     const { stdout: packages } = await exec(python, ["-m", "pip", "list", "--format=json"], { env: environment, maxBuffer: 4 * 1024 * 1024 });
     report.runtime = { python: pythonVersion.trim(), packages: JSON.parse(packages) };

@@ -52,7 +52,11 @@ The report binds the Git revision, clean/dirty state, tracked runtime/script
 files, generator, oracle, Python reader version, Node runtime, seed, artifacts,
 and raw-response hashes. The output includes local paths and synthetic source
 content; review it before external publication. A dirty run is useful during
-development but is not exact-commit release evidence. Run again from the clean
+development but is not exact-commit release evidence. Source bindings are
+captured before starting the server and after completing the run; drift keeps
+`source_stable` and `qualified` false even when individual assertions passed.
+The CLI exits nonzero for drift, dirty source, or unmet obligations. This
+pre/post check is not a signed runtime attestation. Run again from the clean
 integrated commit for the final PR/release record.
 
 ## Official upstream test-class bridge
@@ -86,6 +90,12 @@ than this bridge itself. The corpus's pinned PDFs occupy 354,384,964 bytes;
 Python dependencies and Chromium are additional. Pin and retain an environment
 lock/container when publishing comparisons: a source commit alone does not
 freeze package or browser behavior.
+
+The scorer uses a fresh per-run home for its equation cache while preserving
+the original platform's Playwright browser-cache path. An explicit
+`PLAYWRIGHT_BROWSERS_PATH` takes precedence (use the same value during browser
+installation and scoring). Provider credentials and proxy variables are not
+passed to the scoring process.
 
 ```sh
 npm run eval:olmocr:upstream -- --preflight \

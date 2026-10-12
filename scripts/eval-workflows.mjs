@@ -59,6 +59,7 @@ export async function runWorkflows({ output, seed = "qualification-v1", python =
   output = path.resolve(output);
   if (output === ROOT || output.startsWith(`${ROOT}${path.sep}`)) throw new Error("Evidence must be outside the repository");
   await fs.mkdir(output, { mode: 0o700 }); // Exclusive run directory; never replace evidence.
+  const initialSource = await sourceBinding();
   const started = now();
   const observations = WORKFLOW_OBLIGATIONS.map(item => ({ ...item, status: "not_run", ...(item.kind === "refusal" ? { accepted: null } : {}) }));
   const calls = [];
@@ -209,16 +210,20 @@ export async function runWorkflows({ output, seed = "qualification-v1", python =
   const elapsed = calls.map(item => item.elapsed_ms).sort((a, b) => a - b);
   const percentile = fraction => elapsed.length ? elapsed[Math.ceil(fraction * elapsed.length) - 1] : null;
   const source = await sourceBinding();
+  const sourceStable = isDeepStrictEqual(initialSource, source);
+  const metrics = scoreWorkflow(observations);
   const report = {
     schema: "pdf-tools.public-workflow-qualification.v1", started_at: started, completed_at: now(),
     scope: "generated-synthetic-stdio-with-independent-pypdf-oracle", seed,
     generator_sha256: digest(await fs.readFile(fileURLToPath(import.meta.url))),
     oracle_sha256: digest(await fs.readFile(path.join(ROOT, "scripts/eval-workflow-oracle.py"))),
-    oracle_version: oracleVersion, source,
+    oracle_version: oracleVersion, source: initialSource, source_after: source,
+    source_stable: sourceStable,
+    qualified: metrics.passed_all && sourceStable && initialSource.clean,
     claim_boundary: { benchmark_claim_ready: false, native_host_accepted: false, unseen_holdout: false,
       real_signature_executed: false, model_calls: 0, note: "Public generator, deterministic fixtures, no extraction superiority or native UI claim." },
     runtime: { node: process.version, platform: process.platform, architecture: process.arch },
-    metrics: scoreWorkflow(observations), observations, calls, errors, artifacts, oracle_reads: oracleReads,
+    metrics, observations, calls, errors, artifacts, oracle_reads: oracleReads,
     resources: { latency_p50_ms: percentile(0.5), latency_p95_ms: percentile(0.95),
       server_tree_rss_sampled_max_bytes: peakRss, samples, memory_error: memoryError,
       memory_scope: "Linux /proc current RSS sum of observed server descendants every 100ms; sampled, not peak/limit; excludes independent oracle" },
@@ -235,7 +240,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const [output, seed, python] = process.argv.slice(2);
   if (!output) { console.error("Usage: node scripts/eval-workflows.mjs NEW_ABSOLUTE_OUTPUT_DIRECTORY [SEED] [PYTHON]"); process.exitCode = 1; }
   else runWorkflows({ output, seed, python }).then(report => {
-    console.log(JSON.stringify({ report: path.join(path.resolve(output), "report.json"), metrics: report.metrics, resources: report.resources }, null, 2));
-    if (!report.metrics.passed_all) process.exitCode = 2;
+    console.log(JSON.stringify({ report: path.join(path.resolve(output), "report.json"), qualified: report.qualified, source_stable: report.source_stable, metrics: report.metrics, resources: report.resources }, null, 2));
+    if (!report.qualified) process.exitCode = 2;
   }).catch(error => { console.error(error.stack); process.exitCode = 1; });
 }
