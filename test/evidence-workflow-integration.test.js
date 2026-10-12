@@ -14,7 +14,8 @@ const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 for (const prefix of ["", "pdf-toolkit-mcp-share"]) {
   describe(`evidence workflow over MCP (${prefix || "source"})`, () => {
     it("batches, reviews, corrects, and refuses stale source or generation", async () => {
-      const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-evidence-wire-"));
+      // Keep the child HOME/workspace physical on macOS as well as Linux.
+      const temporary = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-evidence-wire-")));
       const docs = path.join(temporary, "documents");
       const home = path.join(temporary, "home");
       await fs.mkdir(docs);
