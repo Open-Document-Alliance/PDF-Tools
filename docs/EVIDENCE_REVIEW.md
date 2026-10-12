@@ -73,6 +73,11 @@ renderer and MCP transport: byte mismatch, page coverage, citation navigation,
 correction messaging, stale-generation rejection, and late responses after
 document replacement. These are not browser-layout or installed-host evidence.
 `scripts/dev-ui-document-session-smoke.mjs` is the optional real-browser smoke
-against a built viewer. The current implementation run could not provision
-Chromium because the download endpoint was unavailable; installed-host and real
-browser qualification remain separate release checks.
+against a built viewer. The original implementation environment could not
+provision Chromium. The October 12 receiving review subsequently ran that smoke
+in real headless Chromium against the built viewer with a synthetic MCP bridge:
+all eight cases passed after correcting thumbnail pointerup/click selection.
+The run covers document replacement, same-path byte drift, late-response
+retirement, visible failures, Evidence source binding, citation highlighting
+and page coverage. It is browser evidence, not installed Claude Desktop or
+ChatGPT acceptance; those remain separate release checks.
