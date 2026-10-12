@@ -6,7 +6,7 @@ export const NODE_TEST_SUITES = Object.freeze([
     file: "test/local-ocr-tools-native.test.js",
     platforms: POSIX_PLATFORMS,
     omissions: Object.freeze({
-      win32: "optional local OCR adapter requires macOS; private-mode and process-group tests are POSIX-only",
+      win32: "optional local OCR adapters support Linux/macOS; private-mode and process-group tests are POSIX-only",
     }),
   },
   {

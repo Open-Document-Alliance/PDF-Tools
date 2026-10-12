@@ -126,7 +126,7 @@ jobs:
         run: npm ci
 
       # Contract checks need only the runner's Python standard library, not
-      # the optional macOS OCR engine or renderer. Actual OCR stays Mac-only.
+      # the optional OCR engines or renderer. Real engine smoke is separate.
       - name: Local OCR Python proposal contract
         run: python3 test/eval/local_ocr_proposal_test.py
         env:
