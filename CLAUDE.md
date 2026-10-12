@@ -448,7 +448,7 @@ upload files to a separate PDF service. Content returned through MCP can be
 processed by the selected host or model under that provider's data terms. A
 separately installed engine can be explicitly configured for optional local OCR
 adapters and resumable proposal jobs. These produce unverified proposals and do
-not change ordinary text reads; see [Local OCR](docs/LOCAL_OCR.md).
+not change ordinary text reads; see [Optional local OCR](docs/LOCAL_OCR.md).
 
 ## Signature Architecture (v0.8.0)
 

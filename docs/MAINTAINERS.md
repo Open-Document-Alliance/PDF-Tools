@@ -290,7 +290,7 @@ upload files to a separate PDF service. Text, images, and metadata returned
 through MCP may still be processed under the selected host or model provider's
 data terms. Optional local OCR adapters and resumable proposal jobs require a
 separately installed engine and explicit configuration. Their output remains
-unverified; ordinary text reads do not invoke them. See [Local OCR](LOCAL_OCR.md)
+unverified; ordinary text reads do not invoke them. See [Optional local OCR](LOCAL_OCR.md)
 for platform limits and the validation required before release claims.
 
 ## Tool inventory (current)
