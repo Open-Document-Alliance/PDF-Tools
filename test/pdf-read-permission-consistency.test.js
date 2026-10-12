@@ -88,7 +88,10 @@ const fixturePaths = {};
 let workspaceSequence = 0;
 
 beforeAll(async () => {
-  temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-permission-consistency-"));
+  // macOS exposes its temporary directory through /var -> /private/var.
+  // Workspaces deliberately reject aliased parents; use the physical test root
+  // rather than weakening that production boundary.
+  temporaryRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-permission-consistency-")));
   await fs.mkdir(path.join(temporaryRoot, "profiles"), { mode: 0o700 });
   const plainBytes = await fs.readFile(PLAIN_PDF);
   fixturePaths.plain = path.join(temporaryRoot, "plain.pdf");
