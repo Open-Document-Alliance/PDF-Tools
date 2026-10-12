@@ -73,16 +73,23 @@ widening permission or using another folder. Import does not change the host's
 original document, upload it or authorize signing. Native host-resource
 save-back and installed-host acceptance remain separate integration gates.
 
-By default, fifty-five tool handlers advertise strict `outputSchema` contracts and return
+By default, fifty-seven tool handlers advertise strict `outputSchema` contracts and return
 `structuredContent`. They also return a human-readable `content` text block so
 non-Apps and older clients remain usable. Successful structured output is
 validated before it leaves the server, with separate generic and tool-specific
 error branches where required.
 
-The separately configured optional `propose_pdf_ocr` tool adds one structured
-handler, bringing an opted-in runtime to 60 tools with 56 output schemas.
-It is absent from default discovery and both manifests. No OCR engine is bundled;
+The separately configured optional `propose_pdf_ocr`, `start_pdf_ocr_job`,
+`resume_pdf_ocr_job`, and `read_pdf_ocr_job` tools add four structured handlers,
+bringing an opted-in runtime to 65 tools with 61 output schemas.
+They are absent from default discovery and both manifests. No OCR engine is bundled;
 see [Optional OCR setup and limitations](LOCAL_OCR.md).
+
+`verify_extraction_batch` replays up to 32 proposals against one exact current
+generation and publishes all results in one new immutable generation. Completion
+means persistence; each result retains its own verification or uncertainty status.
+`review_extraction_workspace` is a read-only, source- and generation-bound viewer
+entrypoint with bounded value, history, citation, and page-coverage views.
 
 `get_pdf_identity` provides parser-independent artifact binding for planning
 and provenance. It streams at most 250 MiB from one read-only descriptor,

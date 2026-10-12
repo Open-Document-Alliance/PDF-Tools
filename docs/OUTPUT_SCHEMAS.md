@@ -55,6 +55,7 @@ an `isError` result is never forced through a success schema.
 | `prepare_signing_packet` | active document, fills, legacy pending placements, and a source/output-bound provider-neutral preparation receipt with value-free field outcomes, typed zones, readiness gaps, and `provider_execution_status: not_requested` |
 | `prepare_lumin_request` | exact local prepared-PDF identity, recipients, disclosure, required confirmation, expiry, and proof that no provider was contacted |
 | `propose_pdf_ocr` | optional configured-only one-page unverified word proposals, exact source/render/helper digests, retained private review file, and observed/returned/omitted accounting; absent from default discovery, with no bundled OCR engine |
+| `start_pdf_ocr_job`, `resume_pdf_ocr_job`, `read_pdf_ocr_job` | optional source/config-bound resumable OCR job identity, page progress, and retained unverified review artifacts; completion never verifies recognized words |
 | `read_pdf_bytes` | bounded base64 byte chunk |
 | `open_pdf_workspace` | empty task-selection workspace with no PDF or folder access |
 | `read_pdf_content` | complete/partial text or image-fallback result with page-scoped routing facts (`read_pages_without_text`, integrity signals, typed `page_read_error`) preserved through failure and resource-limit branches |
@@ -76,6 +77,8 @@ an `isError` result is never forced through a success schema.
 | `start_lumin_authorization` | opaque pending-session identity, callback expiry, and proof that no PDF was sent |
 | `validate_pdf` | versioned PDF field-validation result |
 | `verify_extraction_proposal` | new immutable generation containing the deterministic cited replay result and typed status |
+| `verify_extraction_batch` | one new immutable generation containing ordered per-proposal replay results and their separate typed statuses |
+| `review_extraction_workspace` | source-bound viewer metadata plus a bounded generation-pinned page of current values, correction history/citations, or page coverage |
 
 The following four tools remain intentionally text-only and therefore do not
 advertise `outputSchema`: `list_pdfs`, `list_profiles`, `load_profile`,

@@ -312,7 +312,13 @@ the `.mcpb` manifest that ordinary model workflows discover.
 - `read_extraction_chunk`
 - `submit_extraction_proposal`
 - `verify_extraction_proposal`
+- `verify_extraction_batch`
+- `review_extraction_workspace`
 - `delete_extraction_workspace`
+
+The [Evidence view](docs/EVIDENCE_REVIEW.md) connects extraction values to
+source text, page coverage, and correction history. Optional local OCR and
+resumable page jobs require [explicit adapter setup](docs/LOCAL_OCR.md).
 
 ### Active Document and Host Helpers
 
