@@ -70,6 +70,43 @@ host and operating system being claimed.
 - PDF.js text extraction and canvas-backed page/region rendering are lazy loaded to avoid startup overhead.
 - Interactive viewer UI lives in `ui/`, built to `dist-ui/` via Vite.
 
+### Read-only parser isolation
+
+`read_pdf_fields`, `validate_pdf`, `extract_to_csv`, viewer/active-document
+form metadata, and host-import validation all use the existing bounded
+`pdf-lib-subprocess.js` service. The MCP entrypoint never constructs a
+`PDFDocument`. Every parser call, page-tree traversal, and form accessor runs
+in the child process (or the existing worker-thread fallback for embedded
+hosts), including work that appears read-only or best-effort.
+
+Read requests bind the canonical source path, device/inode, size and SHA-256.
+The worker reopens and verifies that source; the parent revalidates it before
+returning the observations. Read operations must produce an empty staging
+manifest and schema-checked JSON, bounded by the same 1 MiB response cap,
+30-second deadline, V8 heap limit, RSS monitor, admission limit, cancellation
+and shutdown handling as the existing service. A parser resource refusal
+must not be presented as an empty form.
+
+The three existing decrypting reads keep their qpdf password and permission
+rules. Both decryption and parsing now happen inside the isolated worker;
+only copied field values or the value-free validation report return. The
+plaintext buffer is released in a `finally` block, including parsing failures.
+Viewer metadata and host imports do not gain a new decryption route.
+
+Host imports have no source file before validation. Their bounded original
+bytes are temporarily written to a private local inspection directory, then
+checked using the same isolation service and original import validator. That
+temporary source is removed on success or failure; publication to the chosen
+workspace still happens only after validation. Decrypted bytes are never
+staged there.
+
+`test/pdf-lib-read-isolation.test.js` checks the tiny hostile xref-width case
+through both shipped MCP entrypoints, active-file replacement, post-failure
+normal forms, host-byte imports, and noncooperative child/thread deadlines
+with a live parent heartbeat. The qpdf read-only suite preserves encrypted
+form compatibility. These tests do not replace installed macOS/Windows host
+and final-artifact release qualification.
+
 ### Optional Lumin signing workflow
 
 `server/lumin-oauth-loopback.js` is an internal native-app OAuth helper.

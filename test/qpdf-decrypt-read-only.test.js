@@ -418,24 +418,22 @@ describe("cost of an unencrypted document", () => {
   });
 
   it("reaches the runtime only from the encrypted branch of the loader", async () => {
-    const source = await fs.readFile(path.join(REPO_ROOT, "server", "index.js"), "utf8");
-    // One import, one call site. If a second call site appears, the reviewer
-    // has to look at it: this is the boundary that keeps write-path tools and
-    // unencrypted reads away from the runtime entirely.
-    const callSites = source.match(/\bdecryptPdfForRead\(/g) ?? [];
-    expect(callSites).toHaveLength(1);
-    expect(source).toMatch(/loadEncryptedPdfBytes[\s\S]{0,400}?decryptPdfForRead\(/);
-    // pdf-lib is tried first, so the encrypted branch is only ever reached
-    // after it has refused the document.
-    expect(source).toMatch(/if \(!decryptFor\) throw new Error\(PDF_LIB_ENCRYPTED_MESSAGE\);/);
+    const source = await fs.readFile(path.join(REPO_ROOT, "server", "pdf-lib-worker.js"), "utf8");
+    const entrypoint = await fs.readFile(path.join(REPO_ROOT, "server", "index.js"), "utf8");
+    expect(entrypoint).not.toMatch(/\b(?:PDFDocument\.load|decryptPdfForRead|loadPdfForMutation)\(/);
+    expect(source.match(/\bdecryptPdfForRead\(/g) ?? []).toHaveLength(1);
+    expect(source).toContain("if (!Object.hasOwn(ENCRYPTED_READ_OPERATIONS, operation))");
+    expect(source).toContain(": await load(bytes)");
+    expect(source).toContain("plaintext = await decryptPdfForRead(bytes, password, operation)");
+    expect(source).toContain("plaintext?.release()");
   });
 });
 
 describe("pre-parse bounds on the decrypted plaintext", () => {
   /*
-   * The read path is the only place in the server process where pdf-lib parses
-   * bytes that did not come off disk, so the plaintext gets the same two
-   * pre-parse bounds the mutation path applies. This is defence in depth rather
+   * Read-only parsing now runs in the isolated pdf-lib worker. Its decrypted
+   * plaintext still receives the same two pre-parse bounds as original input
+   * and mutations before any parser sees it. This is defence in depth rather
    * than a live hole: `qpdf --decrypt` re-serializes the document and launders
    * hostile cross-reference structure, so no encrypted input reaching these
    * checks is known to trip them. That makes a purely behavioural test
@@ -466,21 +464,14 @@ describe("pre-parse bounds on the decrypted plaintext", () => {
   }, 60_000);
 
   it("runs both of them on the plaintext before pdf-lib ever sees it", async () => {
-    const source = await fs.readFile(path.join(REPO_ROOT, "server", "index.js"), "utf8");
-    const body = source.slice(
-      source.indexOf("async function loadEncryptedPdfBytes("),
-      source.indexOf("async function loadPdf("),
-    );
-    expect(body).toContain("assertBoundedPdfStructure(decrypted.plaintext)");
-    expect(body).toContain("await assertBoundedPdfStreamDecodes(decrypted.plaintext)");
-    // Order matters: a bound checked after parsing bounds nothing.
-    expect(body.indexOf("assertBoundedPdfStructure(decrypted.plaintext)"))
-      .toBeLessThan(body.indexOf("PDFDocument.load(decrypted.plaintext)"));
-    expect(body.indexOf("assertBoundedPdfStreamDecodes(decrypted.plaintext)"))
-      .toBeLessThan(body.indexOf("PDFDocument.load(decrypted.plaintext)"));
-    // And the specific refusal survives the catch-all rather than being
-    // rewritten as "the file is malformed".
-    expect(body).toContain("if (error?.code === PDF_RESOURCE_LIMIT_CODE) throw error;");
+    const source = await fs.readFile(path.join(REPO_ROOT, "server", "pdf-lib-worker.js"), "utf8");
+    const body = source.slice(source.indexOf("async function inspectFormSource("), source.indexOf("function formInfo("));
+    expect(body).toContain("document = await load(plaintext.plaintext)");
+    expect(body.indexOf("assertBoundedPdfStructure(input)"))
+      .toBeLessThan(body.indexOf("PDFDocument.load(input"));
+    expect(body.indexOf("assertBoundedPdfStreamDecodes(input)"))
+      .toBeLessThan(body.indexOf("PDFDocument.load(input"));
+    expect(body).toContain("if (error?.code === RESOURCE_CODE) throw error;");
   });
 });
 

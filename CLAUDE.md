@@ -86,6 +86,13 @@ vendored qpdf WebAssembly runtime before handing plaintext to pdf-lib. They only
 ever read: none writes a PDF back. Decrypted bytes stay in memory and are never
 written to disk.
 
+All read-only pdf-lib parsing and form traversal runs in the bounded isolated
+worker, including viewer/active-document metadata and host-import validation.
+The MCP entrypoint receives only source-bound JSON observations, never a live
+PDFDocument or decrypted bytes. The three decrypting reads release plaintext
+inside the worker on every exit. See `docs/MAINTAINERS.md` for the isolation
+contract and the temporary original-byte source used for host imports.
+
 **The mutation tools decrypt too, and put the protection back.** Every tool in
 `PDF_LIB_MUTATION_TOOL_NAMES` decrypts its source, lets pdf-lib change the
 plaintext, and then restores the source's own encryption with qpdf's

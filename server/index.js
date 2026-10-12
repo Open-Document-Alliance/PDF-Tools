@@ -8,17 +8,6 @@ import {
 } from "@modelcontextprotocol/server";
 import { loadSkills, skillParams, SKILLS_EXTENSION } from "./skills.js";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
-import {
-  PDFArray,
-  PDFCatalog,
-  PDFDocument,
-  PDFName,
-  PDFNumber,
-  PDFPageLeaf,
-  PDFPageTree,
-  PDFRef,
-  degrees as pdfDegrees,
-} from "pdf-lib";
 import { fileURLToPath } from "url";
 import {
   chmodSync,
@@ -75,7 +64,6 @@ import {
   PDF_DECRYPTABLE_PASSWORD_DESCRIPTION,
   PDF_REPROTECTING_PASSWORD_DESCRIPTION,
   PdfDecryptionError,
-  decryptPdfForRead,
   forceTerminateAllDecryptionWorkers,
   terminateAllDecryptionWorkers,
 } from "./qpdf-decrypt.js";
@@ -104,18 +92,10 @@ import {
   PDF_LIB_MUTATION_TOOL_NAMES,
   forceTerminateAllPdfLibMutations,
   runPdfLibInspection,
+  inspectHostPdfBytes,
   runPdfLibMutation,
   terminateAllPdfLibMutations,
 } from "./pdf-lib-subprocess.js";
-// The pre-parse bounds the mutation path already applies, reused on the one
-// read path that hands pdf-lib bytes it did not read off disk. This module is
-// already on the server's import graph through pdf-lib-subprocess.js, so the
-// import costs nothing new; see `loadEncryptedPdfBytes`.
-import {
-  assertBoundedPdfStreamDecodes,
-  assertBoundedPdfStructure,
-  loadPdfForMutation,
-} from "./pdf-lib-worker.js";
 import {
   VERIFIED_EXTRACTION_TOOL_DEFINITIONS,
   createVerifiedExtractionToolHandler,
@@ -471,7 +451,7 @@ async function commitMarkdownOutputInAnchoredProcess({
   });
 }
 
-// Helper: load a PDF from disk with password support and clear error messages
+// Bind bounded original bytes after recovering any interrupted transaction.
 async function assertPdfInputRecoveryBinding(binding) {
   if (!binding?.recoveryDirectory) {
     throw new TypeError("A PDF input recovery binding is required.");
@@ -549,198 +529,16 @@ async function readPdfInputWithRecovery(inputPath, {
   };
 }
 
-const MAX_VALIDATED_PDF_STRUCTURE_DIGESTS = 32;
-const validatedPdfStructureDigests = new Map();
-
-function rememberValidatedPdfStructure(digest) {
-  validatedPdfStructureDigests.delete(digest);
-  validatedPdfStructureDigests.set(digest, true);
-  while (validatedPdfStructureDigests.size > MAX_VALIDATED_PDF_STRUCTURE_DIGESTS) {
-    validatedPdfStructureDigests.delete(validatedPdfStructureDigests.keys().next().value);
-  }
-}
-
-function validatePdfPageTree(pdfDoc) {
-  if (!(pdfDoc.catalog instanceof PDFCatalog)) {
-    throw new Error("catalog is unavailable");
-  }
-  const root = pdfDoc.catalog.lookup(PDFName.of("Pages"));
-  if (!(root instanceof PDFPageTree)) {
-    throw new Error("page tree root is unavailable");
-  }
-  if (root.get(PDFName.of("Parent"), true) !== undefined) {
-    throw new Error("page tree root must not have a parent");
-  }
-
-  const seenNodes = new Set([root]);
-  const frameFor = (tree, parent) => {
-    const kids = tree.lookupMaybe(PDFName.of("Kids"), PDFArray);
-    const count = tree.lookupMaybe(PDFName.of("Count"), PDFNumber);
-    const declaredCount = count?.asNumber();
-    if (!kids || !Number.isSafeInteger(declaredCount) || declaredCount < 0) {
-      throw new Error("page tree node is incomplete");
-    }
-    return {
-      tree,
-      parent,
-      kids,
-      declaredCount,
-      nextChild: 0,
-      reachablePages: 0,
-    };
-  };
-
-  const stack = [frameFor(root, null)];
-  while (stack.length > 0) {
-    const frame = stack[stack.length - 1];
-    if (frame.nextChild >= frame.kids.size()) {
-      if (frame.reachablePages !== frame.declaredCount) {
-        throw new Error("page tree count does not match reachable pages");
-      }
-      stack.pop();
-      if (frame.parent) {
-        frame.parent.reachablePages += frame.reachablePages;
-      }
-      continue;
-    }
-
-    const childToken = frame.kids.get(frame.nextChild);
-    frame.nextChild += 1;
-    if (!(childToken instanceof PDFRef)) {
-      throw new Error("page tree children must be indirect references");
-    }
-    const child = pdfDoc.context.lookupMaybe(childToken, PDFPageTree, PDFPageLeaf);
-    if (!(child instanceof PDFPageTree) && !(child instanceof PDFPageLeaf)) {
-      throw new Error("page tree child is unavailable or has an invalid type");
-    }
-    if (seenNodes.has(child)) {
-      throw new Error("page tree contains a cycle or duplicate child");
-    }
-    seenNodes.add(child);
-    const parent = child.lookupMaybe(PDFName.of("Parent"), PDFPageTree);
-    if (parent !== frame.tree) {
-      throw new Error("page tree child has an invalid parent");
-    }
-    if (child instanceof PDFPageLeaf) {
-      frame.reachablePages += 1;
-    } else {
-      stack.push(frameFor(child, frame));
-    }
-  }
-}
-
-function validateLoadedPdfStructure(pdfDoc, pdfBytes) {
-  const invalidPdfMessage = "Failed to load PDF: the file is malformed, incomplete, or unsupported.";
-  const structureDigest = sha256Bytes(pdfBytes);
-  if (validatedPdfStructureDigests.has(structureDigest)) {
-    rememberValidatedPdfStructure(structureDigest);
-    return pdfDoc;
-  }
-  try {
-    validatePdfPageTree(pdfDoc);
-  } catch (error) {
-    throw new Error(invalidPdfMessage, { cause: error });
-  }
-  rememberValidatedPdfStructure(structureDigest);
-  return pdfDoc;
-}
-
-/**
- * Loads bytes through pdf-lib, optionally decrypting first.
- *
- * pdf-lib is always tried first, so an unencrypted document pays nothing for
- * this path: no QPDF module is instantiated and no extra parse happens. Only
- * once pdf-lib has refused the document as encrypted, and only for an
- * operation named in `ENCRYPTED_READ_OPERATIONS`, is the decrypting path
- * entered at all.
- *
- * `decryptFor` is the opt-in. Passing it means "this operation only reads, and
- * is allowed to decrypt subject to the rules in server/qpdf-decrypt.js".
- * Without it the behaviour is exactly what it was: the honest pdf-lib message.
- *
- * When decryption happens the caller is handed a `releaseDecryptedBytes` and
- * must call it once it has finished reading `pdfDoc`. pdf-lib copies the input
- * during parsing, so releasing afterwards does not disturb the loaded
- * document.
- */
-async function loadPdfBytes(pdfBytes, password = null, { decryptFor = null } = {}) {
-  const invalidPdfMessage = "Failed to load PDF: the file is malformed, incomplete, or unsupported.";
-  let pdfDoc;
-  try {
-    pdfDoc = await PDFDocument.load(pdfBytes, password ? { password } : {});
-  } catch (error) {
-    if (error.message?.includes("password") || error.message?.includes("encrypt")) {
-      if (!decryptFor) throw new Error(PDF_LIB_ENCRYPTED_MESSAGE);
-      return loadEncryptedPdfBytes(pdfBytes, password, decryptFor, invalidPdfMessage);
-    }
-    throw new Error(invalidPdfMessage, { cause: error });
-  }
-  return { pdfDoc: validateLoadedPdfStructure(pdfDoc, pdfBytes), releaseDecryptedBytes: () => {} };
-}
-
-/**
- * The encrypted branch of `loadPdfBytes`. Decrypts in memory, parses the
- * plaintext, and releases the plaintext immediately if parsing fails so a
- * malformed decrypted document does not leave it sitting in the heap.
- *
- * The plaintext gets the same pre-parse bounds the mutation path applies to a
- * document it is about to hand pdf-lib: `assertBoundedPdfStructure` for hostile
- * cross-reference byte widths and sparse object numbering, and
- * `assertBoundedPdfStreamDecodes` for object streams that expand past a
- * deterministic ceiling. Those are the two shapes that make `PDFDocument.load`
- * allocate without bound, and this is the one place in the server process where
- * pdf-lib parses bytes that did not come straight off disk.
- *
- * It is belt and braces rather than a live hole. `qpdf --decrypt` fully
- * re-serializes the document, which launders hostile cross-reference structure
- * on the way through — a `/W [1 2000000000 1]` does not survive the round trip.
- * But that is a property of QPDF's writer, not a contract it offers us, and it
- * is the sort of property that evaporates quietly. Measured at 7.2 MB the two
- * checks cost 22 ms against the 314 ms of pdf-lib parsing that follows
- * unconditionally, so paying for the guarantee outright is cheaper than
- * depending on somebody else's serializer to keep providing it.
- */
-async function loadEncryptedPdfBytes(pdfBytes, password, decryptFor, invalidPdfMessage) {
-  const decrypted = await decryptPdfForRead(pdfBytes, password, decryptFor);
-  let pdfDoc;
-  try {
-    assertBoundedPdfStructure(decrypted.plaintext);
-    await assertBoundedPdfStreamDecodes(decrypted.plaintext);
-    pdfDoc = await PDFDocument.load(decrypted.plaintext);
-    // Validated against the plaintext, because that is the byte sequence this
-    // document was actually parsed from.
-    validateLoadedPdfStructure(pdfDoc, decrypted.plaintext);
-  } catch (error) {
-    decrypted.release();
-    // A bound that was exceeded is a specific, actionable fact and says which
-    // one. Collapsing it into "the file is malformed" would throw that away and
-    // describe a document this code deliberately refused as one it could not
-    // understand.
-    if (error?.code === PDF_RESOURCE_LIMIT_CODE) throw error;
-    if (error?.message === invalidPdfMessage) throw error;
-    throw new Error(invalidPdfMessage, { cause: error });
-  }
-  return { pdfDoc, releaseDecryptedBytes: () => decrypted.release() };
-}
-
-async function loadPdf(inputPath, password = null, { decryptFor = null } = {}) {
-  const {
-    resolvedPath,
-    pdfBytes,
-    fileIdentity,
-    inputRecoveryBinding,
-  } = await readPdfInputWithRecovery(inputPath);
-  const { pdfDoc, releaseDecryptedBytes } = await loadPdfBytes(pdfBytes, password, { decryptFor });
-  return {
-    pdfDoc,
-    resolvedPath,
-    // Always the bytes as they are on disk. A decrypted copy is never returned
-    // here and never reaches a caller that might persist it.
-    pdfBytes,
-    fileIdentity,
-    inputRecoveryBinding,
-    releaseDecryptedBytes,
-  };
+// Read-only form operations use the same isolated, deadline/RSS-bounded
+// parser service as writes. Return plain observations, never live PDF objects.
+async function inspectPdfForm(inputPath, operation = "inspect_pdf_form", password = null) {
+  const input = await readPdfInputWithRecovery(inputPath);
+  const inspection = await runPdfLibInspection({
+    operation,
+    sources: [bindRecoveredMutationSource(input)],
+    password: password || null,
+  });
+  return { ...inspection, resolvedPath: input.resolvedPath };
 }
 
 async function readCurrentPdfMutationBytes(inputPath) {
@@ -789,7 +587,6 @@ import {
   getRegionPixelRect,
   expandHostPlaceholders,
   parseAllowedDirectoryArgs,
-  validatePdfFormFields,
   failedPdfFormValidation,
   copyPdfPagesPreservingForms,
   copyPdfDocumentMetadata,
@@ -3139,9 +2936,10 @@ async function buildActiveDocumentPayload(pdfPath, initialPage = 1, extra = {}) 
   let defaultFormInfo = {};
   if (extra.fields === undefined && extra.fieldCount === undefined && extra.hasFormFields === undefined) {
     try {
-      const { pdfDoc } = await loadPdf(resolvedPath);
-      defaultFormInfo = getFormFieldInfo(pdfDoc);
-    } catch {
+      const inspection = await inspectPdfForm(resolvedPath);
+      defaultFormInfo = inspection.form_info;
+    } catch (error) {
+      if (error?.code === PDF_RESOURCE_LIMIT_CODE) throw error;
       defaultFormInfo = { fields: [], fieldCount: 0, hasFormFields: false };
     }
   }
@@ -3419,47 +3217,6 @@ async function persistPdfMutation({
   try { return await commit(); } finally { await release(); }
 }
 
-function getFormFieldInfo(pdfDoc) {
-  try {
-    const form = pdfDoc.getForm();
-    const fields = form.getFields();
-    const fieldInfo = fields.map(field => {
-      const name = field.getName();
-      let type = "unknown";
-      let options = [];
-      let currentValue = "";
-      try {
-        if (field.constructor.name.includes("TextField")) {
-          type = "text";
-          currentValue = field.getText() || "";
-        } else if (field.constructor.name.includes("CheckBox")) {
-          type = "checkbox";
-          currentValue = field.isChecked();
-        } else if (field.constructor.name.includes("RadioGroup")) {
-          type = "radio";
-          currentValue = field.getSelected() || "";
-        } else if (field.constructor.name.includes("Dropdown")) {
-          type = "dropdown";
-          options = field.getOptions();
-          currentValue = field.getSelected() || "";
-        }
-      } catch {}
-      return { name, type, options, currentValue };
-    });
-    return {
-      fields: fieldInfo,
-      fieldCount: fieldInfo.length,
-      hasFormFields: fieldInfo.length > 0,
-    };
-  } catch {
-    return {
-      fields: [],
-      fieldCount: 0,
-      hasFormFields: false,
-    };
-  }
-}
-
 // Helper function to parse CSV
 function parseCSV(content) {
   const rows = [];
@@ -3552,49 +3309,6 @@ function parseCSV(content) {
 
 function formatCSVValue(value) {
   return `"${String(value ?? "").replace(/"/g, "\"\"")}"`;
-}
-
-// Helper function to fill PDF fields
-async function fillPdfDocumentFields(pdfDoc, fieldData) {
-  const form = pdfDoc.getForm();
-  const filledFields = [];
-  const errors = [];
-  
-  for (const [fieldName, value] of Object.entries(fieldData)) {
-    try {
-      const field = form.getField(fieldName);
-      
-      if (field.constructor.name.includes('TextField')) {
-        field.setText(String(value));
-      } else if (field.constructor.name.includes('CheckBox')) {
-        if (value === true || value === 'true' || value === 'yes' || value === '1') {
-          field.check();
-        } else {
-          field.uncheck();
-        }
-      } else if (field.constructor.name.includes('RadioGroup')) {
-        field.select(String(value));
-      } else if (field.constructor.name.includes('Dropdown')) {
-        field.select(String(value));
-      }
-      filledFields.push(fieldName);
-    } catch (e) {
-      if (e.message?.includes('No field')) {
-        errors.push(`Field '${fieldName}' not found in PDF. Check field name or use 'read_pdf_fields' to see available fields.`);
-      } else {
-        errors.push(`Field '${fieldName}': ${e.message}`);
-      }
-    }
-  }
-  
-  return { pdfDoc, filledFields, errors };
-}
-
-async function fillPdfBytes(pdfBytes, fieldData, password = null) {
-  // No `decryptFor`: filling writes the document back, so it stays on the
-  // honest pdf-lib limit rather than the decrypting path.
-  const { pdfDoc } = await loadPdfBytes(pdfBytes, password);
-  return await fillPdfDocumentFields(pdfDoc, fieldData);
 }
 
 // read_pdf_content, read_pdf_pages, and search_pdf_text decrypt through PDF.js
@@ -5250,57 +4964,10 @@ async function handleToolCall(request) {
 
       case "read_pdf_fields": {
         const { pdf_path, password } = args;
-        // Read-only: this never writes the PDF back, so it may decrypt.
-        const { pdfDoc, resolvedPath, releaseDecryptedBytes } = await loadPdf(
-          pdf_path,
-          password,
-          { decryptFor: "read_pdf_fields" },
-        );
+        const { form_info, resolvedPath } = await inspectPdfForm(pdf_path, "read_pdf_fields", password);
+        const { fields: fieldInfo, fieldCount } = form_info;
         noteDocumentOpened(resolvedPath);
-
-        const form = pdfDoc.getForm();
-        const fields = form.getFields();
-
-        let fieldInfo;
-        try {
-          fieldInfo = fields.map(field => {
-          const name = field.getName();
-          let type = "unknown";
-          let options = [];
-          let currentValue = "";
-
-          try {
-            if (field.constructor.name.includes('TextField')) {
-              type = "text";
-              currentValue = field.getText() || "";
-            } else if (field.constructor.name.includes('CheckBox')) {
-              type = "checkbox";
-              currentValue = field.isChecked();
-            } else if (field.constructor.name.includes('RadioGroup')) {
-              type = "radio";
-              currentValue = field.getSelected() || "";
-            } else if (field.constructor.name.includes('Dropdown')) {
-              type = "dropdown";
-              options = field.getOptions();
-              currentValue = field.getSelected() || "";
-            }
-          } catch (e) {
-            // Field type detection failed
-          }
-          
-          return { name, type, options, currentValue };
-          });
-        } finally {
-          // Every value has been copied out of the document, so any decrypted
-          // plaintext can go now rather than at the end of the response build.
-          releaseDecryptedBytes();
-        }
-
-        const payload = await buildActiveDocumentPayload(resolvedPath, 1, {
-          fields: fieldInfo,
-          fieldCount: fields.length,
-          hasFormFields: fields.length > 0,
-        });
+        const payload = await buildActiveDocumentPayload(resolvedPath, 1, form_info);
         return {
           content: [
             {
@@ -5310,9 +4977,9 @@ async function handleToolCall(request) {
               // were flattened into page content, or built with a form
               // technology this parser does not enumerate. We measured AcroForm
               // fields, so say AcroForm, and say what that does not rule out.
-              text: fields.length === 0
+              text: fieldCount === 0
                 ? "This PDF has no AcroForm fields. That is not the same as having no form: visible blanks may have been flattened into the page, or built with a form technology this parser does not enumerate. Use read_pdf_content or the viewer to inspect what is actually on the page."
-                : `PDF has ${fields.length} AcroForm fields:\n${JSON.stringify(fieldInfo, null, 2)}`
+                : `PDF has ${fieldCount} AcroForm fields:\n${JSON.stringify(fieldInfo, null, 2)}`
             }
           ],
           structuredContent: payload,
@@ -5603,61 +5270,38 @@ async function handleToolCall(request) {
         const allFieldNames = new Set();
         const sources = [];
         
-        // Extract data from each PDF
+        // Source bytes and every field accessor are handled in the bounded
+        // worker. Only scalar/array field observations return to this process.
         for (const pdfPath of pdf_paths) {
           const resolvedPdfPath = resolvePath(pdfPath);
-          const source = await readBoundedPdfFileSafely(resolvedPdfPath, PDF_MUTATION_MAX_FILE_BYTES, {
+          const source = await hashBoundedPdfFileSafely(resolvedPdfPath, PDF_MUTATION_MAX_FILE_BYTES, {
             assertPathAllowed,
             createSizeLimitError: pdfMutationFileLimitError,
           });
-          const pdfBytes = source.bytes;
           sources.push({
             path: resolvedPdfPath,
             canonicalPath: source.canonicalPath,
             sizeBytes: source.sizeBytes,
             fileIdentity: source.fileIdentity,
-            sha256: sha256Bytes(pdfBytes),
+            sha256: source.sha256,
           });
-          // Read-only: this writes a CSV, never a PDF, so it may decrypt. The
-          // tool takes a list of documents and no password — one password
-          // could not serve a list — so the only encrypted documents it can
-          // read are those that open without one and whose own permissions
-          // allow extraction. Anything else is refused by name.
-          const { pdfDoc, releaseDecryptedBytes } = await loadPdfBytes(pdfBytes, null, {
-            decryptFor: "extract_to_csv",
+          const { csv_fields } = await runPdfLibInspection({
+            operation: "extract_to_csv",
+            sources: [{
+              canonical_path: source.canonicalPath,
+              file_identity: source.fileIdentity,
+              sha256: source.sha256,
+              size_bytes: source.sizeBytes,
+            }],
           });
-          const form = pdfDoc.getForm();
-          const fields = form.getFields();
-
           const rowData = { _filename: path.basename(pdfPath) };
-
-          try {
-            for (const field of fields) {
-              const fieldName = field.getName();
-              allFieldNames.add(fieldName);
-
-              try {
-                if (field.constructor.name.includes('TextField')) {
-                  rowData[fieldName] = field.getText() || "";
-                } else if (field.constructor.name.includes('CheckBox')) {
-                  rowData[fieldName] = field.isChecked() ? "yes" : "no";
-                } else if (field.constructor.name.includes('RadioGroup') ||
-                           field.constructor.name.includes('Dropdown')) {
-                  rowData[fieldName] = field.getSelected() || "";
-                }
-              } catch (e) {
-                rowData[fieldName] = "";
-              }
-            }
-          } finally {
-            // Released per document, so a long list never holds more than one
-            // decrypted document in memory at a time.
-            releaseDecryptedBytes();
+          for (const { name, value } of csv_fields) {
+            allFieldNames.add(name);
+            Object.defineProperty(rowData, name, { value, enumerable: true, configurable: true, writable: true });
           }
-
           allData.push(rowData);
         }
-        
+
         // Create CSV
         const headers = ['_filename', ...Array.from(allFieldNames).sort()];
         const csvLines = [headers.map(formatCSVValue).join(',')];
@@ -5695,21 +5339,13 @@ async function handleToolCall(request) {
         const { pdf_path, password } = args;
         let resolvedPath = null;
         try {
-          // Read-only: this never writes the PDF back, so it may decrypt.
-          const loaded = await loadPdf(pdf_path, password, { decryptFor: "validate_pdf" });
-          resolvedPath = loaded.resolvedPath;
-          let validation;
-          try {
-            const fields = loaded.pdfDoc.getForm().getFields();
-            validation = validatePdfFormFields(fields, {
-              pdfPath: resolvedPath,
-              fileName: path.basename(resolvedPath),
-            });
-          } finally {
-            // The report is fully materialized above; nothing below reads the
-            // document again, so any decrypted plaintext can go now.
-            loaded.releaseDecryptedBytes();
-          }
+          const inspection = await inspectPdfForm(pdf_path, "validate_pdf", password);
+          resolvedPath = inspection.resolvedPath;
+          const validation = {
+            ...inspection.validation,
+            pdf_path: resolvedPath,
+            file_name: path.basename(resolvedPath),
+          };
 
           const requiredSummary = validation.required_fields_complete === null
             ? "UNKNOWN"
@@ -6785,9 +6421,9 @@ async function handleToolCall(request) {
         const imported = await importHostPdf(args, {
           workspacePath: PLUGIN_WORKSPACE_PATH,
           assertPathAllowed,
-          // Reuse the bounded existing parser without decrypting or rewriting
-          // the bytes. Encrypted imports deliberately require another route.
-          validatePdf: bytes => loadPdfForMutation(bytes, null),
+          // Validate in isolation before publication; original bytes only,
+          // without decryption, parser work, or rewriting on the MCP thread.
+          validatePdf: inspectHostPdfBytes,
           writePdfOutputAtomic,
           hashPdfFile: importedPath => hashBoundedPdfFileSafely(importedPath, 16 * 1024 * 1024, { assertPathAllowed }),
         });
@@ -6804,8 +6440,8 @@ async function handleToolCall(request) {
           pdf_parsed: false,
         };
         const payload = await buildActiveDocumentPayload(imported.path, 1, {
-          ...getFormFieldInfo(imported.parsed),
-          totalPages: imported.parsed.getPageCount(),
+          ...imported.parsed.form_info,
+          totalPages: imported.parsed.total_pages,
           source,
           host_import: {
             version: 1,
@@ -6841,46 +6477,14 @@ async function handleToolCall(request) {
         const initialPage = Math.max(1, page || 1);
         noteDocumentOpened(resolvedPath);
 
-        // Detect and extract form fields
-        let hasFormFields = false;
-        let fieldCount = 0;
-        let fieldInfo = [];
-        try {
-          const pdfBytes = await fs.readFile(resolvedPath);
-          const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-          const form = pdfDoc.getForm();
-          const fields = form.getFields();
-          fieldCount = fields.length;
-          hasFormFields = fieldCount > 0;
-
-          if (hasFormFields) {
-            fieldInfo = fields.map(field => {
-              const name = field.getName();
-              let type = "unknown";
-              let options = [];
-              let currentValue = "";
-              try {
-                if (field.constructor.name.includes("TextField")) {
-                  type = "text";
-                  currentValue = field.getText() || "";
-                } else if (field.constructor.name.includes("CheckBox")) {
-                  type = "checkbox";
-                  currentValue = field.isChecked();
-                } else if (field.constructor.name.includes("RadioGroup")) {
-                  type = "radio";
-                  currentValue = field.getSelected() || "";
-                } else if (field.constructor.name.includes("Dropdown")) {
-                  type = "dropdown";
-                  options = field.getOptions();
-                  currentValue = field.getSelected() || "";
-                }
-              } catch {}
-              return { name, type, options, currentValue };
-            });
-          }
-        } catch {
-          // Not a form PDF or encrypted — that's fine
+        // Metadata inspection is best-effort, but parser execution is always
+        // isolated. Encrypted documents still open in the viewer without
+        // enabling a new decryption route here.
+        let formInfo = { fields: [], fieldCount: 0, hasFormFields: false };
+        try { formInfo = (await inspectPdfForm(resolvedPath)).form_info; } catch (error) {
+          if (error?.code === PDF_RESOURCE_LIMIT_CODE) throw error;
         }
+        const { fields: fieldInfo, fieldCount, hasFormFields } = formInfo;
 
         let text = `Displaying: ${fileName} (${(stats.size / 1024).toFixed(0)} KB)`;
         if (hasFormFields) {
