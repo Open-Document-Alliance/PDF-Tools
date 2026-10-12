@@ -249,6 +249,11 @@ synthetic fixtures should reproduce the failure without retaining private data.
 
 ### External olmOCR-bench regression gate
 
+The separate [public qualification tools](PUBLIC_QUALIFICATION.md) add an
+independently reopened synthetic import/edit/return workflow and a pinned
+official-upstream Python test-class adapter. They preserve this historical
+directional gate and expose unavailable or unattempted evidence explicitly.
+
 The tracked olmOCR-bench gate measures page-1 Markdown extraction and typed-gap
 coverage across an external 1,403-PDF corpus. The corpus is not vendored. Its
 upstream revision, seven JSONL inputs, metadata, and canonical PDF inventory are
