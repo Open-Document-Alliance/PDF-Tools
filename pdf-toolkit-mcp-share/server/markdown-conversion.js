@@ -2196,6 +2196,11 @@ function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables =
       // Header-neutral emission is narrower than the established GFM path.
       // A partial rectangle census or a center-only cell assignment cannot
       // establish the complete grid this profile promises to preserve.
+      const candidateLineIds = new Set(candidateRows.map(row => row.line.id));
+      if (candidateLineIds.size !== runLineIds.size
+        || [...runLineIds].some(id => !candidateLineIds.has(id))) {
+        return { reason: "topology" };
+      }
       if (page.truncation?.truncated || page.extraction_status !== "complete"
         || page.text_integrity?.status === "suspect" || bands.length !== 0
         || rowCount * columnCount > RULED_TABLE_MAX_CELLS
@@ -2901,7 +2906,7 @@ function renderTable(grid) {
 }
 
 function renderHeaderlessTable(grid) {
-  const escape = value => String(value).replace(/&/gu, "&amp;")
+  const escape = value => sanitizeUnsafeText(String(value)).replace(/&/gu, "&amp;")
     .replace(/</gu, "&lt;").replace(/>/gu, "&gt;")
     .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;");
   return ["<table>", ...grid.map(row => (
