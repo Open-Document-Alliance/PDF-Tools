@@ -122,8 +122,9 @@ server without touching a desktop application's configuration:
 node scripts/macos-local-ocr-smoke.mjs --pdf /absolute/two-page-scan.pdf --expect-source-sha256 <sha256> --python /absolute/venv/bin/python --helper /absolute/local-ocr-proposal.py --encrypted-pdf /absolute/encrypted-fixture.pdf --output-dir /absolute/new-private-evidence --job-pages 1,2
 ```
 
-The check requires the exact current default catalog and all four configured
-OCR tools. It retains one page proposal, creates a two-page job without OCR,
+The check requires the exact current default tool names and all four configured
+OCR tools with their source input/output schemas and annotations. It retains
+one page proposal, creates a two-page job without OCR,
 processes its first page, closes its own server, and resumes the second page
 in a fresh server process. Repeating the completed resume must do no new page
 work. Retained image, proposal, commit and review hashes are checked, and the

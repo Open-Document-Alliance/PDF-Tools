@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 
-// The qualification follows the current source inventory, not a historical
-// tool count. Optional tools must match the reviewed definitions exactly.
+// Check the current default name inventory, not a historical tool count.
+// Optional input/output schemas and annotations match the source definitions.
 export function assertLocalOcrSmokeCatalog(tools, manifestTools, optionalTools, enabled) {
   const names = definitions => {
     assert(Array.isArray(definitions) && definitions.length > 0, "Tool inventory must be nonempty");
@@ -22,7 +22,8 @@ export function assertLocalOcrSmokeCatalog(tools, manifestTools, optionalTools, 
       const observed = tools.find(tool => tool.name === definition.name);
       assert.deepEqual(observed.inputSchema, definition.inputSchema, "Optional input schema drift");
       assert.deepEqual(observed.annotations, definition.annotations, "Optional annotations drift");
-      assert(observed.outputSchema && observed.outputSchema.type === "object", "Optional output schema missing");
+      assert(definition.outputSchema?.type === "object", "Expected optional output schema missing");
+      assert.deepEqual(observed.outputSchema, definition.outputSchema, "Optional output schema drift");
     }
   }
   return expected.length;

@@ -3,13 +3,16 @@
 // Isolated stdio qualification, not a Claude Desktop installation or host test.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { LOCAL_OCR_HELPER_SHA256, LOCAL_OCR_TOOL_DEFINITION } from "../server/local-ocr-tools.js";
 import { LOCAL_OCR_JOB_TOOL_DEFINITIONS } from "../server/local-ocr-jobs.js";
+import { withToolOutputSchema } from "../server/output-schemas.js";
 import { assertLocalOcrSmokeCatalog, assertLocalOcrSmokeProgress } from "./local-ocr-smoke-contract.mjs";
 
 const options = {};
@@ -34,7 +37,8 @@ for (const key of ["--pdf", "--python", "--helper", "--encrypted-pdf", "--output
 const sha = bytes => createHash("sha256").update(bytes).digest("hex");
 const sourceBefore = await fs.readFile(options["--pdf"]);
 assert.equal(sha(sourceBefore), options["--expect-source-sha256"]);
-assert.equal(sha(await fs.readFile(options["--helper"])), LOCAL_OCR_HELPER_SHA256);
+const helperBytes = await fs.readFile(options["--helper"]);
+assert.equal(sha(helperBytes), LOCAL_OCR_HELPER_SHA256);
 const root = options["--output-dir"];
 await fs.mkdir(root, { mode: 0o700 }); // No reuse of a previous smoke.
 const home = path.join(root, "home");
@@ -48,7 +52,7 @@ await writeConfig();
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestBytes = await fs.readFile(path.join(repo, "manifest.json"));
 const manifestTools = JSON.parse(manifestBytes).tools;
-const optionalTools = [LOCAL_OCR_TOOL_DEFINITION, ...LOCAL_OCR_JOB_TOOL_DEFINITIONS];
+const optionalTools = [LOCAL_OCR_TOOL_DEFINITION, ...LOCAL_OCR_JOB_TOOL_DEFINITIONS].map(withToolOutputSchema);
 const opened = [];
 async function connect(label) {
   const transport = new StdioClientTransport({
@@ -102,19 +106,41 @@ try {
   const identity = await enabled.callTool({ name: "get_pdf_identity", arguments: { pdf_path: request.pdf_path } });
   assert.notEqual(identity.isError, true);
   assert.equal(identity.structuredContent.sha256, request.expected_source_sha256);
-  for (const arguments_ of [
-    { ...request, confirm_local_ocr: false },
-    { ...request, expected_source_sha256: "0".repeat(64) },
+  for (const [arguments_, reason] of [
+    [{ ...request, confirm_local_ocr: false }, /confirm_local_ocr|confirmation/iu],
+    [{ ...request, expected_source_sha256: "0".repeat(64) }, /source bytes do not match/iu],
   ]) {
     const result = await enabled.callTool({ name: "propose_pdf_ocr", arguments: arguments_ });
     assert.equal(result.isError, true);
+    assert.match(text(result), reason);
     assert.deepEqual(await jobs(), []);
   }
   const encrypted = await fs.readFile(options["--encrypted-pdf"]);
+  // The public wrapper intentionally gives generic adapter diagnostics. Prove
+  // this fixture's exact encryption refusal independently, using hashed helper
+  // bytes and no host credentials, before labelling the negative control.
+  const negativeHelper = path.join(root, "encrypted-negative-adapter.py");
+  await fs.writeFile(negativeHelper, helperBytes, { flag: "wx", mode: 0o600 });
+  let encryptedDiagnostic;
+  try {
+    await promisify(execFile)(options["--python"], ["-I", "-B", negativeHelper,
+      "--pdf", options["--encrypted-pdf"], "--page", "1", "--expect-source-sha256", sha(encrypted),
+      "--output-dir", path.join(root, "encrypted-negative-output")],
+    { timeout: 15_000, maxBuffer: 256 * 1024, env: { PATH: "/usr/bin:/bin", PYTHONDONTWRITEBYTECODE: "1" } });
+    assert.fail("Encrypted adapter fixture unexpectedly succeeded");
+  } catch (error) {
+    assert.equal(error.code, 1, "Encryption control failed for an unexpected reason");
+    assert.match(error.stderr, /Optional OCR does not accept encrypted PDFs/u);
+    assert.equal(error.stdout, "");
+    encryptedDiagnostic = error.stderr;
+  }
+  await assert.rejects(fs.stat(path.join(root, "encrypted-negative-output")), { code: "ENOENT" });
+  await fs.writeFile(path.join(root, "encrypted-adapter.stderr"), encryptedDiagnostic, { flag: "wx", mode: 0o600 });
   const encryptionResult = await enabled.callTool({ name: "propose_pdf_ocr", arguments: {
     ...request, pdf_path: options["--encrypted-pdf"], expected_source_sha256: sha(encrypted),
   } });
   assert.equal(encryptionResult.isError, true);
+  assert.match(text(encryptionResult), /Optional local OCR adapter failed/u);
   const failedJobs = await jobs();
   assert.equal(failedJobs.length, 1);
   await assert.rejects(fs.stat(path.join(jobsPath, failedJobs[0], "proposal/commit.json")), { code: "ENOENT" });
@@ -173,6 +199,7 @@ try {
     default_tool_count: defaultCount, default_tool_contract_sha256: defaultDigest, configured_tool_count: configuredCount,
     manifest_sha256: sha(manifestBytes), optional_tool_names: optionalTools.map(tool => tool.name),
     source_pdf_sha256: sha(sourceBefore), encrypted_fixture_sha256: sha(encrypted), encrypted_fixture_rejected: true,
+    encrypted_adapter_stderr_sha256: sha(encryptedDiagnostic),
     explicit_confirmation_and_stale_source_rejected: true, original_source_unchanged: true,
     result, job: jobReceipt, engine: proposal.engine, source_server_sha256: sha(await fs.readFile(path.join(repo, "server/index.js"))),
     installed_desktop_qualified: false, word_correctness_verified: false,

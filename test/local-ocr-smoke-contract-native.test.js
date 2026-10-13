@@ -5,8 +5,9 @@ import { assertLocalOcrSmokeCatalog, assertLocalOcrSmokeProgress } from "../scri
 const defaults = [{ name: "read_pdf_content" }, { name: "get_pdf_identity" }];
 const optional = ["propose_pdf_ocr", "start_pdf_ocr_job", "resume_pdf_ocr_job", "read_pdf_ocr_job"]
   .map(name => ({ name, inputSchema: { type: "object", additionalProperties: false },
+    outputSchema: { type: "object", required: ["status"] },
     annotations: { readOnlyHint: name === "read_pdf_ocr_job" } }));
-const configured = [...defaults, ...optional.map(tool => ({ ...tool, outputSchema: { type: "object" } }))];
+const configured = [...defaults, ...optional];
 
 test("smoke follows exact current default and four optional tool names without historical counts", () => {
   assert.equal(assertLocalOcrSmokeCatalog(defaults, defaults, optional, false), 2);
@@ -19,6 +20,7 @@ for (const [name, mutate] of [
   ["optional schema drift", tools => { tools[2].inputSchema.additionalProperties = true; }],
   ["optional annotation drift", tools => { tools[2].annotations.readOnlyHint = true; }],
   ["missing output schema", tools => { delete tools[2].outputSchema; }],
+  ["valid-shape output schema substitution", tools => { tools[2].outputSchema.required = ["forged"]; }],
 ]) {
   test(`catalog rejects ${name}`, () => {
     const tools = structuredClone(configured); mutate(tools);
