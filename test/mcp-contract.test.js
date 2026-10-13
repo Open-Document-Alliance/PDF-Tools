@@ -236,7 +236,9 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // three app-only and 56 model-visible; no existing input authority changes.
 // 2026-10-12: add batch verification and source-bound Evidence review; CSV
 // export is explicitly new-file-only. Optional OCR remains absent by default.
-const TOOL_CONTRACT_SHA256 = "639189a0677085df0ef8d8ee92d23c5a5c1c3121a779e926ebe36f266c3de84c";
+// 2026-10-13: default-off header-neutral HTML table option and its coupled
+// renderer-profile/output-schema contract. Default conversion bytes unchanged.
+const TOOL_CONTRACT_SHA256 = "225dccb33c6168690d56ab0e40ef3fb364f10d4f0af8fdfa4577938f3566a235";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

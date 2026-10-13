@@ -3772,7 +3772,7 @@ async function listTools(request) {
       },
       {
         name: "convert_pdf_to_markdown",
-        description: "Convert a bounded page range of a local PDF into deterministic Markdown from the source-validated PDF Tools Extraction IR. Headings and lists require geometry or literal marker evidence. A table requires a complete recurring text grid, a clean ruled-rectangle grid, or a complete closed painted grid, with every item in one cell and real header evidence. A link requires a source-validated external http or https annotation target covering one contiguous text run. Unsupported tables and link targets, including merged cells, internal destinations, actions, and other schemes, stay escaped text with typed gaps. Compact extreme-margin page numbers and provenance furniture, plus same-band text repeated across selected pages, are removed with typed counts by default; detected headings and all source-evidenced table-region lines are preserved, and removal can be disabled. No OCR or external model. Optionally enable compact mode for counted dot-leader and spaced-hyphen normalizations. Optionally saves transactional UTF-8 Markdown. Use absolute or ~/ local paths, not Claude container paths (/mnt/...).",
+        description: "Convert a bounded page range of a local PDF into deterministic Markdown from the source-validated PDF Tools Extraction IR. Headings and lists require geometry or literal marker evidence. By default, a table requires a complete recurring text grid, a clean ruled-rectangle grid, or a complete closed painted grid, with every item in one cell and real header evidence. A link requires a source-validated external http or https annotation target covering one contiguous text run. Unsupported tables and link targets, including merged cells, internal destinations, actions, and other schemes, stay escaped text with typed gaps. Compact extreme-margin page numbers and provenance furniture, plus same-band text repeated across selected pages, are removed with typed counts by default; detected headings and all source-evidenced table-region lines are preserved, and removal can be disabled. No OCR or external model. Optionally enable compact mode for counted dot-leader and spaced-hyphen normalizations. Optionally saves transactional UTF-8 Markdown. Use absolute or ~/ local paths, not Claude container paths (/mnt/...).",
         inputSchema: {
           type: "object",
           additionalProperties: false,
@@ -3788,6 +3788,7 @@ async function listTools(request) {
             compact: { type: "boolean", description: "Opt into counted dot-leader, isolated page-number, and Unicode-letter spaced-hyphen normalizations. Default: false." },
             remove_page_furniture: { type: "boolean", description: "Remove only source-evidenced extreme-margin page furniture and report every removed line by typed gap and counts. Set false to preserve all source lines. Default: true." },
             emit_table_proposals: { type: "boolean", description: "Opt into emitting one bounded, deterministic table_proposals packet per abandoned table region (TABLE_TOPOLOGY_UNKNOWN or TABLE_RULING_UNSUPPORTED), carrying the region's text items, ruled and painted evidence, header hints, page, bbox, coordinate_space, and a source-and-IR-bound proposal_token so a host model can propose a structure for later read-only verification. Additive: the abstention gap is unchanged and default output stays byte-identical. Default: false." },
+            allow_headerless_tables: { type: "boolean", description: "Opt into header-neutral HTML data cells for a complete source-covered ruled-rectangle cell grid without header evidence. No header roles, spans or blank data values are inferred; incomplete, ambiguous and cross-cell geometry remains text with typed gaps. Uses renderer profile 1.22.0; default false keeps profile 1.21.0 and unchanged output. No OCR or model." },
             output_path: { type: "string", description: "Optional absolute .md path, or ~/ path. The file is written only after complete bytes are staged and verified." },
             overwrite: { type: "boolean", description: "Replace an existing output_path only when its exact expected_output_identity is also supplied. Default: false." },
             expected_output_identity: EXPECTED_MARKDOWN_OUTPUT_IDENTITY_INPUT_SCHEMA
@@ -5867,6 +5868,7 @@ async function handleToolCall(request) {
           "compact",
           "remove_page_furniture",
           "emit_table_proposals",
+          "allow_headerless_tables",
           "output_path",
           "overwrite",
           "expected_output_identity",
@@ -5884,6 +5886,7 @@ async function handleToolCall(request) {
           true,
         );
         const emitTableProposals = optionalBooleanArgument(markdownArgs.emit_table_proposals, "emit_table_proposals", false);
+        const allowHeaderlessTables = optionalBooleanArgument(markdownArgs.allow_headerless_tables, "allow_headerless_tables", false);
         const overwrite = optionalBooleanArgument(markdownArgs.overwrite, "overwrite", false);
         const expectedOutputIdentity = normalizeExpectedOutputIdentity(
           markdownArgs.expected_output_identity,
@@ -5944,6 +5947,7 @@ async function handleToolCall(request) {
             compact,
             removePageFurniture,
             emitTableProposals,
+            allowHeaderlessTables,
           });
           const pagesNeedingVision = deriveMarkdownVisionRouting(layout);
 

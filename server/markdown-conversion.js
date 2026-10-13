@@ -8,6 +8,7 @@ const RENDERER = Object.freeze({
   name: "pdf-tools.layout-markdown-renderer",
   version: "1.21.0",
 });
+const HEADERLESS_RENDERER = Object.freeze({ ...RENDERER, version: "1.22.0" });
 const SUPPORTED_LAYOUT_IR_VERSION = "1.6.0";
 
 // Bounded geometric table inference. A run of adjacent lines is treated as a
@@ -96,6 +97,14 @@ const LIMITATIONS = Object.freeze([
   "OCR is not performed. Image-only text and text that exists only inside page images are omitted and reported as conversion gaps.",
   "Unsafe control characters and malformed UTF-16 surrogates are replaced with the Unicode replacement character and reported as conversion gaps.",
 ]);
+
+function headerlessLimitations() {
+  return [
+    ...LIMITATIONS.map(value => value.startsWith("Tables are reconstructed")
+      ? `Default GFM table rules: ${value}` : value),
+    "The explicit header-neutral profile may instead emit a complete, fully source-covered ruled-rectangle cell grid as escaped HTML table data cells when header evidence is absent. It assigns no header roles, spans, inherited values or semantic blank values. A typed header-role gap remains, and partial, ambiguous or cross-cell evidence stays reading-order text. This does not perform OCR or interpret cell artwork.",
+  ];
+}
 
 function assertion(condition, message) {
   if (!condition) throw new Error(`Invalid Markdown conversion semantics: ${message}`);
@@ -2009,7 +2018,7 @@ function hasFirstRowBandEvidence(bands) {
     && Math.abs(rectBottom(band.rect) - rectBottom(firstRow.rect)) <= RECT_SNAP_TOLERANCE);
 }
 
-function tryBuildRectGrid(page, run, clusters, itemById) {
+function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables = false) {
   const runLineIds = new Set(run.map(row => row.line.id));
   const candidates = [];
   for (const cluster of clusters) {
@@ -2178,10 +2187,35 @@ function tryBuildRectGrid(page, run, clusters, itemById) {
     const candidateRows = lineRecords
       .sort((left, right) => left.line.y - right.line.y)
       .map(record => ({ line: record.line, cells: record.structuralInsideNonWhitespace }));
-    if (!hasHeaderEvidence(candidateRows) && !hasFirstRowBandEvidence(bands)) {
+    const headerless = !hasHeaderEvidence(candidateRows) && !hasFirstRowBandEvidence(bands);
+    if (headerless && !allowHeaderlessTables) {
       return { reason: "header" };
     }
     if (candidateRows.some(row => !runLineIds.has(row.line.id))) return { reason: "topology" };
+    if (headerless) {
+      // Header-neutral emission is narrower than the established GFM path.
+      // A partial rectangle census or a center-only cell assignment cannot
+      // establish the complete grid this profile promises to preserve.
+      if (page.truncation?.truncated || page.extraction_status !== "complete"
+        || page.text_integrity?.status === "suspect" || bands.length !== 0
+        || rowCount * columnCount > RULED_TABLE_MAX_CELLS
+        || filledCells !== totalCells || occupiedCells.size !== totalCells
+        || page.raw_items.some(item => item.text?.trim() && !itemBox(item))) {
+        return { reason: "topology" };
+      }
+      for (let row = 0; row < rowCount; row += 1) {
+        for (let column = 0; column < columnCount; column += 1) {
+          if (cells[row][column].some(({ item }) => (
+            item.bbox.x < xEdges[column] - RECT_CELL_ASSIGNMENT_SLACK
+            || item.bbox.x + item.bbox.width > xEdges[column + 1] + RECT_CELL_ASSIGNMENT_SLACK
+            || item.bbox.y < yEdges[row] - RECT_CELL_ASSIGNMENT_SLACK
+            || item.bbox.y + item.bbox.height > yEdges[row + 1] + RECT_CELL_ASSIGNMENT_SLACK
+          ))) return { reason: "topology" };
+        }
+      }
+      // Keep empty outer slots rather than trimming source grid columns.
+      return { kind: "table", grid, rows: candidateRows, headerless: true };
+    }
     return { kind: "table", grid: trimmedGrid, rows: candidateRows };
   }
   return null;
@@ -2598,7 +2632,7 @@ function segmentedRuleTable(page, rows) {
     coveredLineIds: selected, insertionIndex: indices[0] };
 }
 
-function segmentTextRows(page, rows, itemById, ruledClusters) {
+function segmentTextRows(page, rows, itemById, ruledClusters, allowHeaderlessTables = false) {
   const pageItems = paintedItems(page);
   const segments = [];
   const regions = [];
@@ -2622,10 +2656,14 @@ function segmentTextRows(page, rows, itemById, ruledClusters) {
       // Ordinary prose that happens to share a left margin must not be
       // reported as an unreconstructed table.
       const ruling = ruledClusters.length > 0
-        ? tryBuildRectGrid(page, run, ruledClusters, itemById)
+        ? tryBuildRectGrid(page, run, ruledClusters, itemById, allowHeaderlessTables)
         : null;
       if (ruling?.kind === "table") {
-        segments.push({ kind: "table", rows: run, grid: ruling.grid });
+        segments.push({ kind: "table", rows: run, grid: ruling.grid, ...(ruling.headerless ? { headerless: true } : {}) });
+        if (ruling.headerless) {
+          tableReason = "header";
+          regions.push({ run, reason: "header" });
+        }
       } else {
         // Preserve the reason from the rect-evidence attempt. The text path
         // can independently see a header/topology failure, but it must not
@@ -2661,7 +2699,7 @@ function segmentTextRows(page, rows, itemById, ruledClusters) {
  * that cannot be reconstructed are returned as text with tableReason set, so
  * the caller can report typed partial coverage instead of silently flattening.
  */
-function segmentPageLines(page) {
+function segmentPageLines(page, allowHeaderlessTables = false) {
   const itemById = new Map(page.raw_items.map(item => [item.id, item]));
   const rows = page.lines.map(line => ({ line, cells: lineCells(line, itemById) }));
   const ruledRects = preprocessRuledRects(page);
@@ -2669,7 +2707,7 @@ function segmentPageLines(page) {
   const ruled = ruledGridSegment(page);
   if (!ruled.segment) ruled.segment = segmentedRuleTable(page, rows);
   if (!ruled.segment) {
-    const text = segmentTextRows(page, rows, itemById, ruledClusters);
+    const text = segmentTextRows(page, rows, itemById, ruledClusters, allowHeaderlessTables);
     return {
       segments: text.segments,
       tableReason: ruled.tableReason ?? text.tableReason,
@@ -2678,8 +2716,8 @@ function segmentPageLines(page) {
   }
   const remaining = rows.map((row, index) => ({ ...row, sourceIndex: index }))
     .filter(row => !ruled.segment.coveredLineIds.has(row.line.id));
-  const before = segmentTextRows(page, remaining.filter(row => row.sourceIndex < ruled.segment.insertionIndex), itemById, ruledClusters);
-  const after = segmentTextRows(page, remaining.filter(row => row.sourceIndex >= ruled.segment.insertionIndex), itemById, ruledClusters);
+  const before = segmentTextRows(page, remaining.filter(row => row.sourceIndex < ruled.segment.insertionIndex), itemById, ruledClusters, allowHeaderlessTables);
+  const after = segmentTextRows(page, remaining.filter(row => row.sourceIndex >= ruled.segment.insertionIndex), itemById, ruledClusters, allowHeaderlessTables);
   return {
     segments: [...before.segments, ruled.segment, ...after.segments],
     tableReason: before.tableReason ?? after.tableReason,
@@ -2860,6 +2898,15 @@ function renderTable(grid) {
     ...body.map(row => `| ${row.map(escapeTableCell).join(" | ")} |`),
   ];
   return lines;
+}
+
+function renderHeaderlessTable(grid) {
+  const escape = value => String(value).replace(/&/gu, "&amp;")
+    .replace(/</gu, "&lt;").replace(/>/gu, "&gt;")
+    .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;");
+  return ["<table>", ...grid.map(row => (
+    `<tr>${row.map(value => `<td>${escape(value)}</td>`).join("")}</tr>`
+  )), "</table>"];
 }
 
 /**
@@ -3078,7 +3125,12 @@ function pageGaps(page, analysis, linkState, {
     add("TABLE_TOPOLOGY_UNKNOWN", "Table-like content was detected but its column topology could not be reconstructed, so it remains reading-order text.");
   }
   if (analysis?.tableReason === "header") {
-    add("TABLE_TOPOLOGY_UNKNOWN", "A column grid was detected but no source evidence distinguishes a header row, and a Markdown table would impose one, so it remains reading-order text.");
+    add("TABLE_TOPOLOGY_UNKNOWN", analysis.segments.some(segment => segment.headerless)
+      ? "A complete source-backed rectangle grid is emitted as header-neutral HTML data cells. Header roles are not established; other unsupported regions remain reading-order text. Empty slots describe retained text coverage, not proof of blank data values."
+      : "A column grid was detected but no source evidence distinguishes a header row, and a Markdown table would impose one, so it remains reading-order text.");
+  }
+  if (analysis?.tableReason !== "header" && analysis?.segments.some(segment => segment.headerless)) {
+    add("TABLE_TOPOLOGY_UNKNOWN", "A complete source-backed rectangle grid is emitted as header-neutral HTML data cells. Header roles and blank data values are not established.");
   }
   if (analysis?.tableReason === "ruling_unsupported") {
     add("TABLE_RULING_UNSUPPORTED", "Ruled rectangle evidence described a grid-shaped region, but its table topology could not be reconstructed, so it remains reading-order text.");
@@ -3208,13 +3260,14 @@ function renderPage(page, {
   pageBoundaryBefore = false,
   pageBoundaryAfter = false,
   collectTableProposals = false,
+  allowHeaderlessTables = false,
   pageFurniture = [],
 } = {}) {
   const furnitureLineIds = new Set(pageFurniture.map(entry => entry.lineId));
   const pageItems = paintedItems(page);
   const headings = headingLevels(page);
   const headingContinuations = headingContinuationIds(page, headings);
-  const analysis = segmentPageLines(page);
+  const analysis = segmentPageLines(page, allowHeaderlessTables);
   const linkState = analyzePageLinks(page, analysis, headings, furnitureLineIds);
   const unsafePage = analysis.tableReason !== null
     || linkState.unavailable
@@ -3227,7 +3280,7 @@ function renderPage(page, {
   });
   const records = analysis.segments.flatMap(segment => {
     if (segment.kind === "table") {
-      return renderTable(segment.grid).map(text => ({
+      return (segment.headerless ? renderHeaderlessTable(segment.grid) : renderTable(segment.grid)).map(text => ({
           text,
           sourceText: text,
           normalizable: false,
@@ -3331,7 +3384,7 @@ function renderPage(page, {
   return rendered;
 }
 
-function renderDocumentMarkdown(renderedPages, includePageBoundaries, gaps) {
+function renderDocumentMarkdown(renderedPages, includePageBoundaries, gaps, limitations = LIMITATIONS) {
   const sections = renderedPages.map(({ page, markdown }) => (
     includePageBoundaries ? `<!-- PDF page ${page} -->\n\n${markdown}` : markdown
   ));
@@ -3347,7 +3400,7 @@ function renderDocumentMarkdown(renderedPages, includePageBoundaries, gaps) {
   parts.push([
     "## Conversion limitations",
     "",
-    ...LIMITATIONS.map(limitation => `- ${escapePlainMarkdown(limitation)}`),
+    ...limitations.map(limitation => `- ${escapePlainMarkdown(limitation)}`),
   ].join("\n"));
   return `${parts.filter(Boolean).join("\n\n")}\n`;
 }
@@ -3437,7 +3490,10 @@ function validateNormalizations(normalizations) {
  * source evidence. Callers must source-validate the layout IR before rendering.
  */
 export function validateMarkdownConversionSemantics(result, { layout = null } = {}) {
-  assertion(sameJson(result.renderer, RENDERER), "renderer identity mismatch");
+  const allowHeaderlessTables = result.options?.allow_headerless_tables === true;
+  assertion(!Object.hasOwn(result.options ?? {}, "allow_headerless_tables") || allowHeaderlessTables,
+    "allow_headerless_tables must be absent or true");
+  assertion(sameJson(result.renderer, allowHeaderlessTables ? HEADERLESS_RENDERER : RENDERER), "renderer identity mismatch");
   assertion(result.options?.include_page_boundaries === true || result.options?.include_page_boundaries === false,
     "include_page_boundaries must be boolean");
   assertion(result.options?.compact === true || result.options?.compact === false,
@@ -3476,7 +3532,8 @@ export function validateMarkdownConversionSemantics(result, { layout = null } = 
   const flattenedGaps = result.pages.flatMap(page => page.gaps);
   assertion(sameJson(result.gaps, flattenedGaps), "document gaps are not the exact flattened page gaps");
   assertion(result.conversion_status === documentStatus(result.pages), "document conversion status mismatch");
-  assertion(sameJson(result.limitations, LIMITATIONS), "renderer limitations mismatch");
+  const limitations = allowHeaderlessTables ? headerlessLimitations() : LIMITATIONS;
+  assertion(sameJson(result.limitations, limitations), "renderer limitations mismatch");
 
   if (layout !== null) {
     validatePdfLayoutSemantics(layout, { enforceOutputBudget: false });
@@ -3490,6 +3547,7 @@ export function validateMarkdownConversionSemantics(result, { layout = null } = 
     for (let index = 0; index < layout.pages.length; index += 1) {
       const expected = renderPage(layout.pages[index], {
         compact: result.options.compact,
+        allowHeaderlessTables,
         pageBoundaryBefore: index > 0,
         pageBoundaryAfter: true,
         pageFurniture: furniturePlans.get(layout.pages[index].page),
@@ -3505,6 +3563,7 @@ export function validateMarkdownConversionSemantics(result, { layout = null } = 
     assertion(sameJson(result.normalizations, aggregateNormalizations(
       layout.pages.map((page, index) => renderPage(page, {
         compact: result.options.compact,
+        allowHeaderlessTables,
         pageBoundaryBefore: index > 0,
         pageBoundaryAfter: true,
         pageFurniture: furniturePlans.get(page.page),
@@ -3513,12 +3572,14 @@ export function validateMarkdownConversionSemantics(result, { layout = null } = 
     const expectedMarkdown = renderDocumentMarkdown(
       layout.pages.map((page, index) => renderPage(page, {
         compact: result.options.compact,
+        allowHeaderlessTables,
         pageBoundaryBefore: index > 0,
         pageBoundaryAfter: true,
         pageFurniture: furniturePlans.get(page.page),
       })),
       result.options.include_page_boundaries,
       flattenedGaps,
+      limitations,
     );
     assertion(result.markdown === expectedMarkdown, "markdown does not match the bound layout IR");
   }
@@ -3780,6 +3841,7 @@ export function renderPdfLayoutToMarkdown(layout, {
   compact = false,
   removePageFurniture = true,
   emitTableProposals = false,
+  allowHeaderlessTables = false,
 } = {}) {
   validatePdfLayoutSemantics(layout, { enforceOutputBudget: false });
   validateSupportedLayoutIdentity(layout);
@@ -3794,6 +3856,9 @@ export function renderPdfLayoutToMarkdown(layout, {
   }
   if (typeof emitTableProposals !== "boolean") {
     throw new TypeError("emitTableProposals must be a boolean.");
+  }
+  if (typeof allowHeaderlessTables !== "boolean") {
+    throw new TypeError("allowHeaderlessTables must be a boolean.");
   }
   if (!Number.isSafeInteger(maxMarkdownBytes)
     || maxMarkdownBytes < 1
@@ -3810,10 +3875,12 @@ export function renderPdfLayoutToMarkdown(layout, {
     // number from a single-page selection.
     pageBoundaryAfter: true,
     collectTableProposals: emitTableProposals,
+    allowHeaderlessTables,
     pageFurniture: furniturePlans.get(page.page),
   }));
   const gaps = renderedPages.flatMap(page => page.gaps);
-  const markdown = renderDocumentMarkdown(renderedPages, includePageBoundaries, gaps);
+  const limitations = allowHeaderlessTables ? headerlessLimitations() : LIMITATIONS;
+  const markdown = renderDocumentMarkdown(renderedPages, includePageBoundaries, gaps, limitations);
   const markdownBytes = utf8Bytes(markdown);
   if (markdownBytes > maxMarkdownBytes) {
     // Deliberately throws rather than emitting a gap: truncating would cut a
@@ -3826,7 +3893,7 @@ export function renderPdfLayoutToMarkdown(layout, {
   }
 
   const result = {
-    renderer: { ...RENDERER },
+    renderer: { ...(allowHeaderlessTables ? HEADERLESS_RENDERER : RENDERER) },
     conversion_status: documentStatus(renderedPages),
     markdown,
     markdown_sha256: sha256(markdown),
@@ -3835,6 +3902,7 @@ export function renderPdfLayoutToMarkdown(layout, {
       include_page_boundaries: includePageBoundaries,
       compact,
       remove_page_furniture: removePageFurniture,
+      ...(allowHeaderlessTables ? { allow_headerless_tables: true } : {}),
     },
     limits: { max_markdown_bytes: maxMarkdownBytes },
     pages: renderedPages.map(({
@@ -3844,7 +3912,7 @@ export function renderPdfLayoutToMarkdown(layout, {
       ...page
     }) => page),
     gaps,
-    limitations: [...LIMITATIONS],
+    limitations: [...limitations],
     normalizations: aggregateNormalizations(renderedPages),
     provenance: provenanceFromLayout(layout),
   };
