@@ -2201,11 +2201,17 @@ function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables =
         || [...runLineIds].some(id => !candidateLineIds.has(id))) {
         return { reason: "topology" };
       }
-      if (page.truncation?.truncated || page.extraction_status !== "complete"
+      // Vector paint makes an otherwise fully observed text page "partial"
+      // in the IR. Test evidence completeness, not that modality label.
+      if (page.truncation?.truncated || page.text_layer_status !== "present"
+        || page.image_detection_status === "failed" || page.errors.length !== 0
+        || page.link_annotations.status !== "available" || page.link_annotations.truncated
+        || page.painted_rectangles.status !== "available" || page.painted_rectangles.truncated
+        || page.ruling_segments.status !== "available" || page.ruling_segments.truncated
         || page.text_integrity?.status === "suspect" || bands.length !== 0
         || rowCount * columnCount > RULED_TABLE_MAX_CELLS
         || filledCells !== totalCells || occupiedCells.size !== totalCells
-        || page.raw_items.some(item => item.text?.trim() && !itemBox(item))) {
+        || page.raw_items.some(item => !item.geometry_valid || (item.text?.trim() && !itemBox(item)))) {
         return { reason: "topology" };
       }
       for (let row = 0; row < rowCount; row += 1) {
@@ -2908,7 +2914,10 @@ function renderTable(grid) {
 function renderHeaderlessTable(grid) {
   const escape = value => sanitizeUnsafeText(String(value)).replace(/&/gu, "&amp;")
     .replace(/</gu, "&lt;").replace(/>/gu, "&gt;")
-    .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;");
+    .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;")
+    .replace(/https?:/giu, match => `${match.slice(0, -1)}&#58;`)
+    .replace(/\b(?:[\p{L}\p{N}-]+\.)+[\p{L}]{2,}\b/giu, domain => domain.replace(".", "&#46;"))
+    .replace(/@(?=[\p{L}\p{N}.-]+&#46;[\p{L}]{2,})/giu, "&#64;");
   return ["<table>", ...grid.map(row => (
     `<tr>${row.map(value => `<td>${escape(value)}</td>`).join("")}</tr>`
   )), "</table>"];

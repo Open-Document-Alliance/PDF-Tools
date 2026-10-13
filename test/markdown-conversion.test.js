@@ -479,7 +479,7 @@ describe("layout Markdown renderer", () => {
   );
 
   it("preserves a multi-column source row outside the selected header-neutral grid", async () => {
-    const extraValues = ["Extra", "2100", "2300"];
+    const extraValues = ["OutsideRow", "2100", "2300"];
     const items = [...ruledGridItems({ headerSize: 12 }), ...extraValues.map((value, column) => textItem(value, {
       top: 322, left: 82 + column * 150, fontSize: 12, eol: column === 2,
     }))];
@@ -511,7 +511,30 @@ describe("layout Markdown renderer", () => {
     expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
   });
 
-  it.each(["missing_rect", "cross_cell", "ambiguous_boundary", "overlap", "outside_run", "truncated"])(
+  it("keeps fully covered multiline cell text without dropping the additional source item", async () => {
+    const items = [...ruledGridItems({ headerSize: 12 }),
+      textItem("AdditionalCellText", { top: 288, left: 82, fontSize: 12 })];
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+    expect(result.markdown).toContain("<table>");
+    expect(result.markdown.split("AdditionalCellText")).toHaveLength(2);
+    expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+  });
+
+  it.each(["http://a.co", "https://a.co", "a.co", "a@b.co"])(
+    "neutralizes URL-looking header-neutral cell text: %s", async value => {
+      const items = ruledGridItems({ headerSize: 12 }).map(item => item.str === "North"
+        ? { ...item, str: value, width: value.length * 6 } : item);
+      const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+      const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+      expect(result.markdown).toContain("<table>");
+      expect(result.markdown).not.toContain(`<td>${value}</td>`);
+      expect(result.markdown).not.toContain("<a ");
+      expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+    },
+  );
+
+  it.each(["missing_rect", "cross_cell", "ambiguous_boundary", "overlap", "truncated", "annotation_failure"])(
     "refuses header-neutral emission with %s evidence", async attack => {
       let items = ruledGridItems({ headerSize: 12 });
       let rects = headerlessGridRects();
@@ -521,8 +544,10 @@ describe("layout Markdown renderer", () => {
       if (attack === "ambiguous_boundary") items = items.map(item => item.str === "Q1"
         ? textItem("Q1", { top: 130, left: 210, fontSize: 12, eol: false }) : item);
       if (attack === "overlap") items.push(textItem("Twin", { top: 130, left: 84, fontSize: 12, eol: false }));
-      if (attack === "outside_run") items.push(textItem("Uncovered", { top: 298, left: 82, fontSize: 12 }));
-      const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), rects,
+      const layout = attachRuledRects(await validatedSyntheticLayout([{ items,
+        ...(attack === "truncated" ? { operations: [1] } : {}),
+        ...(attack === "annotation_failure" ? { annotationError: new Error("Synthetic annotation failure") } : {}),
+      }]), rects,
         attack === "truncated" ? "truncated" : "available");
       const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
       expect(result.markdown).not.toContain("<table>");
