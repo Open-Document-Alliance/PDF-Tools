@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertLocalOcrSmokeCatalog, assertLocalOcrSmokeProgress } from "../scripts/local-ocr-smoke-contract.mjs";
+import { assertLocalOcrSmokeCatalog, assertLocalOcrSmokeEncryptedRefusal, assertLocalOcrSmokeProgress } from "../scripts/local-ocr-smoke-contract.mjs";
 
 const defaults = [{ name: "read_pdf_content" }, { name: "get_pdf_identity" }];
 const optional = ["propose_pdf_ocr", "start_pdf_ocr_job", "resume_pdf_ocr_job", "read_pdf_ocr_job"]
@@ -8,6 +8,18 @@ const optional = ["propose_pdf_ocr", "start_pdf_ocr_job", "resume_pdf_ocr_job", 
     outputSchema: { type: "object", required: ["status"] },
     annotations: { readOnlyHint: name === "read_pdf_ocr_job" } }));
 const configured = [...defaults, ...optional];
+
+const encryptedRefusal = { code: 2, stdout: "", stderr: JSON.stringify({
+  status: "ocr_proposal_failed", message: "Optional OCR does not accept encrypted PDFs" }) };
+test("encryption control requires the real helper exit code and exact reason", () => {
+  assertLocalOcrSmokeEncryptedRefusal(encryptedRefusal);
+});
+for (const [key, value] of Object.entries({ code: 1, stdout: "success", stderr: JSON.stringify({
+  status: "ocr_proposal_failed", message: "Optional renderer unavailable" }) })) {
+  test(`encryption control rejects unrelated ${key}`, () => {
+    assert.throws(() => assertLocalOcrSmokeEncryptedRefusal({ ...encryptedRefusal, [key]: value }));
+  });
+}
 
 test("smoke follows exact current default and four optional tool names without historical counts", () => {
   assert.equal(assertLocalOcrSmokeCatalog(defaults, defaults, optional, false), 2);

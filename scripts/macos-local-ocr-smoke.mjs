@@ -13,7 +13,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { LOCAL_OCR_HELPER_SHA256, LOCAL_OCR_TOOL_DEFINITION } from "../server/local-ocr-tools.js";
 import { LOCAL_OCR_JOB_TOOL_DEFINITIONS } from "../server/local-ocr-jobs.js";
 import { withToolOutputSchema } from "../server/output-schemas.js";
-import { assertLocalOcrSmokeCatalog, assertLocalOcrSmokeProgress } from "./local-ocr-smoke-contract.mjs";
+import { assertLocalOcrSmokeCatalog, assertLocalOcrSmokeEncryptedRefusal, assertLocalOcrSmokeProgress } from "./local-ocr-smoke-contract.mjs";
 
 const options = {};
 const requiredKeys = ["--pdf", "--expect-source-sha256", "--python", "--helper", "--encrypted-pdf", "--output-dir"];
@@ -129,9 +129,7 @@ try {
     { timeout: 15_000, maxBuffer: 256 * 1024, env: { PATH: "/usr/bin:/bin", PYTHONDONTWRITEBYTECODE: "1" } });
     assert.fail("Encrypted adapter fixture unexpectedly succeeded");
   } catch (error) {
-    assert.equal(error.code, 1, "Encryption control failed for an unexpected reason");
-    assert.match(error.stderr, /Optional OCR does not accept encrypted PDFs/u);
-    assert.equal(error.stdout, "");
+    assertLocalOcrSmokeEncryptedRefusal(error);
     encryptedDiagnostic = error.stderr;
   }
   await assert.rejects(fs.stat(path.join(root, "encrypted-negative-output")), { code: "ENOENT" });

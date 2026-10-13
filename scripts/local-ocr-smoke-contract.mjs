@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
 
+export function assertLocalOcrSmokeEncryptedRefusal(error) {
+  assert.equal(error.code, 2, "Encryption control failed for an unexpected reason");
+  assert.equal(error.stdout, "");
+  assert.deepEqual(JSON.parse(error.stderr), { status: "ocr_proposal_failed",
+    message: "Optional OCR does not accept encrypted PDFs" });
+}
+
 // Check the current default name inventory, not a historical tool count.
 // Optional input/output schemas and annotations match the source definitions.
 export function assertLocalOcrSmokeCatalog(tools, manifestTools, optionalTools, enabled) {
