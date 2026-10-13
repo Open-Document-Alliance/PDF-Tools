@@ -1503,7 +1503,7 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     {
       renderer: object({
         name: { const: "pdf-tools.layout-markdown-renderer" },
-        version: { const: "1.21.0" },
+        version: enumString(["1.21.0", "1.22.0"]),
       }),
       conversion_status: enumString(["complete", "partial", "failed"]),
       markdown: string,
@@ -1513,7 +1513,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
         include_page_boundaries: boolean,
         compact: boolean,
         remove_page_furniture: boolean,
-      }),
+        allow_headerless_tables: { const: true },
+      }, ["include_page_boundaries", "compact", "remove_page_furniture"]),
       limits: object({ max_markdown_bytes: { type: "integer", minimum: 1, maximum: 200000 } }),
       pages: arrayOf(markdownPage),
       pages_needing_vision: arrayOf(visionRoutingPage),

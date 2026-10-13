@@ -62,6 +62,12 @@ function ruledGridItems({ headerSize = 13 } = {}) {
   })));
 }
 
+function headerlessGridRects() {
+  return Array.from({ length: 4 }, (_, row) => Array.from({ length: 3 }, (_, column) => ({
+    x: 72 + column * 150, y: 112 + row * 48, width: 150, height: 48, verb: "stroke",
+  }))).flat();
+}
+
 function attachRuledRects(layout, items, status = "available") {
   const page = layout.pages[0];
   page.ruled_rects = {
@@ -420,6 +426,147 @@ describe("layout Markdown renderer", () => {
     expect(first.markdown).toContain("| Region | Q1 | Q2 |\n| --- | --- | --- |\n| North | 1200 | 1450 |");
     expect(first.gaps).toEqual([]);
     expect(first.conversion_status).toBe("complete");
+  });
+
+  it("keeps the complete default envelope unchanged when header-neutral mode is off", async () => {
+    const layout = attachRuledRects(await validatedSyntheticLayout([{
+      items: ruledGridItems({ headerSize: 12 }),
+    }]), headerlessGridRects());
+    const baseline = renderPdfLayoutToMarkdown(layout);
+    expect(renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: false })).toEqual(baseline);
+    expect(baseline.options).not.toHaveProperty("allow_headerless_tables");
+    expect(baseline.renderer.version).toBe("1.21.0");
+    expect(baseline.markdown).not.toContain("<table>");
+    expect(baseline.gaps.some(gap => gap.message.includes("no source evidence distinguishes a header"))).toBe(true);
+  });
+
+  it("emits only inert data cells for an opted-in complete source-covered headerless grid", async () => {
+    const layout = attachRuledRects(await validatedSyntheticLayout([{
+      items: ruledGridItems({ headerSize: 12 }),
+    }]), headerlessGridRects());
+    const result = renderPdfLayoutToMarkdown(layout, {
+      allowHeaderlessTables: true, emitTableProposals: true, compact: true,
+    });
+    expect(result.renderer.version).toBe("1.22.0");
+    expect(result.options.allow_headerless_tables).toBe(true);
+    expect(result.markdown).toContain("<tr><td>North</td><td>1200</td><td>1450</td></tr>");
+    expect(result.markdown).not.toContain("<th>");
+    expect(result.markdown).not.toMatch(/rowspan=|colspan=/u);
+    expect(result.conversion_status).toBe("partial");
+    expect(result.gaps.some(gap => gap.message.includes("Header roles are not established"))).toBe(true);
+    expect(result.table_proposal_regions).toHaveLength(1);
+    expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+  });
+
+  it("escapes source markup without interpreting pipe characters or creating HTML attributes", async () => {
+    const items = ruledGridItems({ headerSize: 12 }).map(item => item.str === "North"
+      ? textItem("<img>&|\"'", { top: 178, left: 82, fontSize: 12, eol: false }) : item);
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+    expect(result.markdown).toContain("<td>&lt;img&gt;&amp;|&quot;&#39;</td>");
+    expect(result.markdown).not.toContain("<img>");
+  });
+
+  it.each(["\u0000", "\u0001", "\u001b", "\ud800"])(
+    "sanitizes an unsafe code unit in an otherwise admissible header-neutral cell: %j", async unsafe => {
+      const items = ruledGridItems({ headerSize: 12 }).map(item => item.str === "North"
+        ? { ...item, str: `No${unsafe}rth` } : item);
+      const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+      const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+      expect(result.markdown).toContain("<td>No\ufffdrth</td>");
+      expect(result.markdown).not.toContain(unsafe);
+      expect(result.gaps.some(gap => gap.code === "CONTROL_CHARACTERS_SANITIZED")).toBe(true);
+      expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+    },
+  );
+
+  it("preserves a multi-column source row outside the selected header-neutral grid", async () => {
+    const extraValues = ["OutsideRow", "2100", "2300"];
+    const items = [...ruledGridItems({ headerSize: 12 }), ...extraValues.map((value, column) => textItem(value, {
+      top: 322, left: 82 + column * 150, fontSize: 12, eol: column === 2,
+    }))];
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+    expect(result.markdown).not.toContain("<table>");
+    for (const value of ["Region", "North", "South", "West", ...extraValues]) {
+      expect(result.markdown.split(value)).toHaveLength(2);
+    }
+    expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+  });
+
+  it("preserves both disjoint grids when they share one contiguous multi-column run", async () => {
+    const secondValues = [["Second", "Q3", "Q4"], ["East", "4100", "4300"],
+      ["Upland", "5100", "5300"], ["Lowland", "6100", "6300"]];
+    const items = [...ruledGridItems({ headerSize: 12 }), ...secondValues.flatMap((row, rowIndex) => (
+      row.map((value, column) => textItem(value, {
+        top: 322 + rowIndex * 48, left: 82 + column * 150, fontSize: 12, eol: column === 2,
+      }))
+    ))];
+    const rects = [...headerlessGridRects(), ...secondValues.flatMap((row, rowIndex) => row.map((_, column) => ({
+      x: 72 + column * 150, y: 310 + rowIndex * 48, width: 150, height: 48, verb: "stroke",
+    })))];
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), rects);
+    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+    expect(result.markdown).not.toContain("<table>");
+    for (const value of ["Region", "North", "South", "West", ...secondValues.flat()]) {
+      expect(result.markdown.split(value)).toHaveLength(2);
+    }
+    expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+  });
+
+  it("keeps fully covered multiline cell text without dropping the additional source item", async () => {
+    const items = [...ruledGridItems({ headerSize: 12 }),
+      textItem("AdditionalCellText", { top: 288, left: 82, fontSize: 12, eol: false }),
+      textItem("TailCell", { top: 288, left: 232, fontSize: 12 })];
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+    expect(result.markdown).toContain("<table>");
+    expect(result.markdown.split("AdditionalCellText")).toHaveLength(2);
+    expect(result.markdown.split("TailCell")).toHaveLength(2);
+    expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+  });
+
+  it.each(["http://a.co", "https://a.co", "a.co", "a@b.co"])(
+    "neutralizes URL-looking header-neutral cell text: %s", async value => {
+      const items = ruledGridItems({ headerSize: 12 }).map(item => item.str === "North"
+        ? { ...item, str: value, width: value.length * 6 } : item);
+      const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+      const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+      expect(result.markdown).toContain("<table>");
+      expect(result.markdown).not.toContain(`<td>${value}</td>`);
+      expect(result.markdown).not.toContain("<a ");
+      expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+    },
+  );
+
+  it.each(["missing_rect", "cross_cell", "ambiguous_boundary", "overlap", "truncated", "annotation_failure"])(
+    "refuses header-neutral emission with %s evidence", async attack => {
+      let items = ruledGridItems({ headerSize: 12 });
+      let rects = headerlessGridRects();
+      if (attack === "missing_rect") rects = rects.filter(rect => !(rect.x === 222 && rect.y === 160));
+      if (attack === "cross_cell") items = items.map(item => item.str === "North"
+        ? { ...item, width: 160 } : item);
+      if (attack === "ambiguous_boundary") items = items.map(item => item.str === "Q1"
+        ? textItem("Q1", { top: 130, left: 210, fontSize: 12, eol: false }) : item);
+      if (attack === "overlap") items.push(textItem("Twin", { top: 130, left: 84, fontSize: 12, eol: false }));
+      const layout = attachRuledRects(await validatedSyntheticLayout([{ items,
+        ...(attack === "truncated" ? { operations: [1] } : {}),
+        ...(attack === "annotation_failure" ? { annotationError: new Error("Synthetic annotation failure") } : {}),
+      }]), rects,
+        attack === "truncated" ? "truncated" : "available");
+      const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+      expect(result.markdown).not.toContain("<table>");
+    },
+  );
+
+  it("does not promote aligned prose without cell rectangles and rejects a forged profile", async () => {
+    const layout = await validatedSyntheticLayout([{ items: ruledGridItems({ headerSize: 12 }) }]);
+    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+    expect(result.markdown).not.toContain("<table>");
+    expect(() => renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: "true" })).toThrow(/boolean/);
+    const forged = structuredClone(result);
+    delete forged.options.allow_headerless_tables;
+    expect(() => validateMarkdownConversionSemantics(forged)).toThrow(/renderer identity/);
   });
 
   it("abstains on a ruled merged span with TABLE_TOPOLOGY_UNKNOWN", async () => {
