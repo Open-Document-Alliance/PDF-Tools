@@ -444,7 +444,9 @@ describe("layout Markdown renderer", () => {
     const layout = attachRuledRects(await validatedSyntheticLayout([{
       items: ruledGridItems({ headerSize: 12 }),
     }]), headerlessGridRects());
-    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true, emitTableProposals: true });
+    const result = renderPdfLayoutToMarkdown(layout, {
+      allowHeaderlessTables: true, emitTableProposals: true, compact: true,
+    });
     expect(result.renderer.version).toBe("1.22.0");
     expect(result.options.allow_headerless_tables).toBe(true);
     expect(result.markdown).toContain("<tr><td>North</td><td>1200</td><td>1450</td></tr>");
@@ -493,7 +495,8 @@ describe("layout Markdown renderer", () => {
   });
 
   it("preserves both disjoint grids when they share one contiguous multi-column run", async () => {
-    const secondValues = [["Second", "Q3", "Q4"], ["East", "4100", "4300"]];
+    const secondValues = [["Second", "Q3", "Q4"], ["East", "4100", "4300"],
+      ["Upland", "5100", "5300"], ["Lowland", "6100", "6300"]];
     const items = [...ruledGridItems({ headerSize: 12 }), ...secondValues.flatMap((row, rowIndex) => (
       row.map((value, column) => textItem(value, {
         top: 322 + rowIndex * 48, left: 82 + column * 150, fontSize: 12, eol: column === 2,
@@ -513,11 +516,13 @@ describe("layout Markdown renderer", () => {
 
   it("keeps fully covered multiline cell text without dropping the additional source item", async () => {
     const items = [...ruledGridItems({ headerSize: 12 }),
-      textItem("AdditionalCellText", { top: 288, left: 82, fontSize: 12 })];
+      textItem("AdditionalCellText", { top: 288, left: 82, fontSize: 12, eol: false }),
+      textItem("TailCell", { top: 288, left: 232, fontSize: 12 })];
     const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
     const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
     expect(result.markdown).toContain("<table>");
     expect(result.markdown.split("AdditionalCellText")).toHaveLength(2);
+    expect(result.markdown.split("TailCell")).toHaveLength(2);
     expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
   });
 

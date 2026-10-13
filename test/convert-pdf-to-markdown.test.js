@@ -432,7 +432,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
     expect(baseline.isError).not.toBe(true);
     expect(baseline.structuredContent.markdown).not.toContain("<table>");
     const opted = await client.callTool({ name: "convert_pdf_to_markdown",
-      arguments: { ...args, allow_headerless_tables: true, emit_table_proposals: true } });
+      arguments: { ...args, allow_headerless_tables: true, emit_table_proposals: true, compact: true } });
     expect(opted.isError).not.toBe(true);
     expect(opted.structuredContent.renderer.version).toBe("1.22.0");
     expect(opted.structuredContent.options.allow_headerless_tables).toBe(true);
