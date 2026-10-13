@@ -115,6 +115,24 @@ are not accepted as completed proposals and are not silently deleted.
 
 ## Limits
 
+Current-source macOS Vision qualification can also exercise the actual stdio
+server without touching a desktop application's configuration:
+
+```sh
+node scripts/macos-local-ocr-smoke.mjs --pdf /absolute/two-page-scan.pdf --expect-source-sha256 <sha256> --python /absolute/venv/bin/python --helper /absolute/local-ocr-proposal.py --encrypted-pdf /absolute/encrypted-fixture.pdf --output-dir /absolute/new-private-evidence --job-pages 1,2
+```
+
+The check requires the exact current default tool names and all four configured
+OCR tools with their source input/output schemas and annotations. It retains
+one page proposal, creates a two-page job without OCR,
+processes its first page, closes its own server, and resumes the second page
+in a fresh server process. Repeating the completed resume must do no new page
+work. Retained image, proposal, commit and review hashes are checked, and the
+original PDF must stay unchanged. Omitting `--job-pages` performs the single-page
+check only. Missing consent, stale source identity and encrypted input must
+be refused. This is local protocol and engine evidence, not installed Claude
+or ChatGPT acceptance, independent word verification or general scan accuracy.
+
 - One active OCR page operation per server and a shared 120-second
   generation/replay budget per page with process-group termination. The
   single-page tool keeps its existing contract; a job resume handles at most

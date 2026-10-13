@@ -3,6 +3,10 @@ const POSIX_PLATFORMS = Object.freeze(["darwin", "linux"]);
 
 export const NODE_TEST_SUITES = Object.freeze([
   {
+    file: "test/local-ocr-smoke-contract-native.test.js",
+    platforms: RELEASE_PLATFORMS,
+  },
+  {
     file: "test/local-ocr-tools-native.test.js",
     platforms: POSIX_PLATFORMS,
     omissions: Object.freeze({

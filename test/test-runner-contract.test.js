@@ -541,6 +541,7 @@ describe("aggregate test-runner contract", () => {
 
   it("uses exact, explicit native-suite partitions on each release platform", () => {
     expect(nodeTestFilesForPlatform("win32")).toEqual([
+      "test/local-ocr-smoke-contract-native.test.js",
       "test/deep-malformed-native-v2-contract.test.js",
       "test/deep-malformed-native-v3-contract.test.js",
       "test/deep-malformed-native-v4-contract.test.js",
@@ -549,6 +550,7 @@ describe("aggregate test-runner contract", () => {
       "test/deep-malformed-native-windows-portable.test.js",
     ]);
     const posixFiles = [
+      "test/local-ocr-smoke-contract-native.test.js",
       "test/local-ocr-tools-native.test.js",
       "test/deep-malformed-native-v2-contract.test.js",
       "test/deep-malformed-native-v2-mechanisms.test.js",
