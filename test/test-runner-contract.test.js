@@ -397,6 +397,9 @@ describe("aggregate test-runner contract", () => {
     expect(graphReachesAny(graph, "suite", new Set(["binder"]))).toBe(true);
   });
 
+  // This repository-wide filesystem and AST completeness scan can exceed
+  // Vitest's five-second default as the source inventory grows. Keep a bounded
+  // harness allowance for the fresh full scan; it measures no product latency.
   it("classifies the complete reviewed import closure to every real-checkout source binder", async () => {
     const nativeFiles = new Set(NODE_TEST_FILES);
     const discoveredVitestFiles = [];
@@ -520,7 +523,7 @@ describe("aggregate test-runner contract", () => {
         }),
       ),
     );
-  });
+  }, 15_000);
 
   it("classifies every node:test suite exactly once", async () => {
     expect([...NODE_TEST_FILES].sort()).toEqual(await findNodeTestFiles());

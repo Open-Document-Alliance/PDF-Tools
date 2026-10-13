@@ -88,7 +88,10 @@ const fixturePaths = {};
 let workspaceSequence = 0;
 
 beforeAll(async () => {
-  temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-permission-consistency-"));
+  // macOS exposes its temporary directory through /var -> /private/var.
+  // Workspaces deliberately reject aliased parents; use the physical test root
+  // rather than weakening that production boundary.
+  temporaryRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-permission-consistency-")));
   await fs.mkdir(path.join(temporaryRoot, "profiles"), { mode: 0o700 });
   const plainBytes = await fs.readFile(PLAIN_PDF);
   fixturePaths.plain = path.join(temporaryRoot, "plain.pdf");
@@ -135,7 +138,7 @@ afterAll(async () => {
  * says so. That is deliberate: the alternative is a new tool silently escaping
  * the rule, which is the failure this whole file exists to prevent.
  */
-async function extractionWorkspace(document, tag) {
+async function extractionWorkspace(document, tag, { leafNames = ["missing"], password } = {}) {
   const sourceDocument = document === fixturePaths.extractDenied
     ? fixturePaths.extractDeniedExtraction
     : fixturePaths.extractAllowedExtraction;
@@ -146,14 +149,18 @@ async function extractionWorkspace(document, tag) {
     arguments: {
       pdf_path: sourceDocument,
       workspace_id: workspaceId,
+      ...(password ? { password } : {}),
       schema: {
         type: "object",
         additionalProperties: false,
-        required: ["missing"],
-        properties: { missing: { anyOf: [{ type: "string" }, { type: "null" }] } },
+        required: leafNames,
+        properties: Object.fromEntries(leafNames.map(leaf => [
+          leaf, { anyOf: [{ type: "string" }, { type: "null" }] },
+        ])),
       },
     },
   });
+  expect(created.isError, responseText(created)).not.toBe(true);
   const chunks = await client.callTool({
     name: "read_extraction_workspace",
     arguments: {
@@ -163,6 +170,8 @@ async function extractionWorkspace(document, tag) {
       limit: 100,
     },
   });
+  expect(chunks.isError, responseText(chunks)).not.toBe(true);
+  expect(chunks.structuredContent.items.length).toBeGreaterThan(0);
   return {
     workspaceId,
     sourceDocument,
@@ -185,6 +194,7 @@ const READ_CALL_RECIPES = Object.freeze({
       : fixturePaths.extractAllowedExtraction,
     workspace_id: `permission-create-${path.basename(doc, ".pdf")}${extras.tag}`
       .replace(/[^a-z0-9_-]/gu, "-"),
+    ...(extras.password ? { password: extras.password } : {}),
     schema: { type: "object", properties: { value: { type: "string" } } },
   }),
   detect_signature_zones: (doc, extras) => ({ pdf_path: doc, ...extras }),
@@ -200,9 +210,10 @@ const READ_CALL_RECIPES = Object.freeze({
   inspect_pdf_accessibility: doc => ({ pdf_path: doc }),
   prepare_lumin_request: doc => ({ pdf_path: doc }),
   read_extraction_chunk: async (doc, extras) => {
-    const prepared = await extractionWorkspace(doc, `chunk${extras.tag}`);
+    const prepared = await extractionWorkspace(doc, `chunk${extras.tag}`, { password: extras.password });
     return {
       pdf_path: prepared.sourceDocument,
+      ...(extras.password ? { password: extras.password } : {}),
       workspace_id: prepared.workspaceId,
       workspace_identity_sha256: prepared.created.workspace_identity_sha256,
       chunk_id: prepared.chunks[0].chunk_id,
@@ -217,11 +228,60 @@ const READ_CALL_RECIPES = Object.freeze({
   render_pdf_region: (doc, extras) => ({
     pdf_path: doc, page: 1, x: 0, y: 0, width: 200, height: 200, ...extras,
   }),
+  review_extraction_workspace: async (doc, extras) => {
+    // Review hashes the original bytes and reads retained evidence; it has no
+    // password argument. Exercise the supplied password during workspace creation.
+    const prepared = await extractionWorkspace(doc, `review${extras.tag}`, { password: extras.password });
+    return {
+      pdf_path: prepared.sourceDocument,
+      workspace_id: prepared.workspaceId,
+      workspace_identity_sha256: prepared.created.workspace_identity_sha256,
+      expected_generation_sha256: prepared.created.generation_sha256,
+      view: "leaves",
+      limit: 20,
+    };
+  },
   search_pdf_text: doc => ({ pdf_path: doc, query: "Name" }),
   set_active_document: doc => ({ pdf_path: doc }),
   validate_pdf: (doc, extras) => ({ pdf_path: doc, ...extras }),
+  verify_extraction_batch: async (doc, extras) => {
+    const leafNames = ["first", "second"];
+    const prepared = await extractionWorkspace(doc, `batch${extras.tag}`, {
+      leafNames, password: extras.password,
+    });
+    let generation = prepared.created.generation_sha256;
+    const items = [];
+    for (const leaf of leafNames) {
+      const proposal = await client.callTool({
+        name: "submit_extraction_proposal",
+        arguments: {
+          workspace_id: prepared.workspaceId,
+          workspace_identity_sha256: prepared.created.workspace_identity_sha256,
+          parent_generation_sha256: generation,
+          leaf_pointer: `/${leaf}`,
+          proposed_value: null,
+          chunk_ids: prepared.chunks.map(chunk => chunk.chunk_id),
+        },
+      });
+      expect(proposal.isError, responseText(proposal)).not.toBe(true);
+      generation = proposal.structuredContent.generation_sha256;
+      items.push({
+        proposal_event_id: proposal.structuredContent.event.event_id,
+        citations: [],
+        method: { kind: "not_found" },
+      });
+    }
+    return {
+      pdf_path: prepared.sourceDocument,
+      ...(extras.password ? { password: extras.password } : {}),
+      workspace_id: prepared.workspaceId,
+      workspace_identity_sha256: prepared.created.workspace_identity_sha256,
+      parent_generation_sha256: generation,
+      items,
+    };
+  },
   verify_extraction_proposal: async (doc, extras) => {
-    const prepared = await extractionWorkspace(doc, `verify${extras.tag}`);
+    const prepared = await extractionWorkspace(doc, `verify${extras.tag}`, { password: extras.password });
     const proposal = await client.callTool({
       name: "submit_extraction_proposal",
       arguments: {
@@ -233,8 +293,10 @@ const READ_CALL_RECIPES = Object.freeze({
         chunk_ids: prepared.chunks.map(chunk => chunk.chunk_id),
       },
     });
+    expect(proposal.isError, responseText(proposal)).not.toBe(true);
     return {
       pdf_path: prepared.sourceDocument,
+      ...(extras.password ? { password: extras.password } : {}),
       workspace_id: prepared.workspaceId,
       workspace_identity_sha256: prepared.created.workspace_identity_sha256,
       proposal_generation_sha256: proposal.structuredContent.generation_sha256,
@@ -393,6 +455,32 @@ describe("every tool that reads a document treats /P the same way", () => {
       .toEqual([]);
   }, 60_000);
 
+  it("really reviews and batch-verifies both permission variants with or without the owner password", async () => {
+    for (const document of [fixturePaths.extractDenied, fixturePaths.extractAllowed]) {
+      for (const password of [undefined, OWNER_PASSWORD]) {
+        for (const name of ["review_extraction_workspace", "verify_extraction_batch"]) {
+          const args = await READ_CALL_RECIPES[name](document, { tag: "-nonvacuous", password });
+          const result = await client.callTool({ name, arguments: args });
+          expect(result.isError, `${name}: ${responseText(result)}`).not.toBe(true);
+          if (name === "review_extraction_workspace") {
+            expect(result.structuredContent.extractionReview).toMatchObject({
+              page_count: 1, summary: { leaves: 1, unproposed: 1 },
+              items: [{ leaf_pointer: "/missing", status: "not_proposed" }],
+            });
+          } else {
+            expect(result.structuredContent).toMatchObject({ state: "complete", generation_sequence: 3 });
+            expect(result.structuredContent.results).toHaveLength(2);
+            expect(result.structuredContent.results.map(item => item.leaf_pointer)).toEqual(["/first", "/second"]);
+            for (const item of result.structuredContent.results) {
+              expect(item).toMatchObject({ status: "unverified_reasoning", source_replayed: true,
+                schema_replayed: true, reason_codes: ["ABSENCE_NOT_MECHANICALLY_PROVEN"] });
+            }
+          }
+        }
+      }
+    }
+  }, 180_000);
+
   it("cannot tell an extract-denied document from an extract-allowed one", async () => {
     const family = await readFamily();
     const divergent = [];
@@ -469,7 +557,7 @@ describe("every tool that reads a document treats /P the same way", () => {
         downgraded.push({ name, without, withOwner });
       }
     }
-    expect(downgraded.map(entry => entry.name)).toEqual([]);
+    expect(downgraded.map(entry => entry.name), JSON.stringify(downgraded, null, 2)).toEqual([]);
   }, 600_000);
 });
 

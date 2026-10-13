@@ -1,12 +1,14 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import {
   compileExtractionLeafObligations,
   verifyWorkspaceExtractionProposal,
+  verifyWorkspaceExtractionBatch,
 } from "../scripts/verified-extraction-proposal.mjs";
 import {
   appendUnverifiedWorkspaceProposal,
   appendVerifiedWorkspaceResult,
+  appendVerifiedWorkspaceResults,
   canonicalWorkspaceJson,
   createExtractionWorkspace,
   deleteExtractionWorkspace,
@@ -19,6 +21,8 @@ import {
   readSourceBoundDocumentChunk,
   validateSourceBoundDocumentMap,
 } from "./document-map.js";
+import { EXTRACTION_IR_IDENTITY, validatePdfLayoutSemantics } from "./layout-extraction.js";
+import { MARKDOWN_RENDERER_IDENTITY } from "./markdown-conversion.js";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const EVENT_ID = /^event\.[a-f0-9]{64}$/u;
@@ -40,6 +44,10 @@ const TOOL_ARGUMENTS = Object.freeze({
   verify_extraction_proposal: [
     "pdf_path", "password", "workspace_id", "workspace_identity_sha256",
     "proposal_generation_sha256", "proposal_event_id", "citations", "method",
+  ],
+  verify_extraction_batch: [
+    "pdf_path", "password", "workspace_id", "workspace_identity_sha256",
+    "parent_generation_sha256", "items",
   ],
   delete_extraction_workspace: [
     "workspace_id", "workspace_identity_sha256", "current_generation_sha256", "confirm",
@@ -66,6 +74,100 @@ function requiredString(value, label, pattern = null) {
 
 function transactionId() {
   return randomBytes(16).toString("hex");
+}
+
+export const VERIFIED_EXTRACTION_LAYOUT_CACHE_CONTEXT = Object.freeze({
+  parser: { name: "pdfjs-dist", version: "5.4.624" },
+  extraction_ir: EXTRACTION_IR_IDENTITY,
+  renderer: MARKDOWN_RENDERER_IDENTITY,
+  policy: "complete-pages-5000-items-100000-characters-200000-output-v1",
+});
+
+// This cache contains only source-derived layouts, never schemas, proposals or
+// verification results. Every caller must still read fresh source bytes and
+// replay its document map. The budget is serialized layout bytes, not host RSS.
+export function createVerifiedExtractionLayoutCache({
+  extractLayouts,
+  context = VERIFIED_EXTRACTION_LAYOUT_CACHE_CONTEXT,
+  maxEntries = 8,
+  maxRetainedBytes = 64 * 1024 * 1024,
+  maxInflight = 2,
+} = {}) {
+  assertion(typeof extractLayouts === "function", "layout cache requires an extractor");
+  for (const [name, value] of Object.entries({ maxEntries, maxRetainedBytes, maxInflight })) {
+    assertion(Number.isSafeInteger(value) && value >= 1, `${name} must be a positive integer`);
+  }
+  const contextJson = canonicalWorkspaceJson(context);
+  const passwordSalt = randomBytes(32);
+  const entries = new Map();
+  const inflight = new Map();
+  let retainedBytes = 0;
+  const counters = { hits: 0, misses: 0, shared_inflight: 0, loads: 0, failures: 0, evictions: 0 };
+  const removeOldest = () => {
+    const key = entries.keys().next().value;
+    retainedBytes -= entries.get(key).bytes;
+    entries.delete(key);
+    counters.evictions += 1;
+  };
+  return {
+    stats: () => ({ ...counters, entries: entries.size, retained_bytes: retainedBytes,
+      inflight: inflight.size, maximum_inflight: maxInflight }),
+    async extract(input) {
+      exactObject(input, ["resolvedPath", "password", "sourceBytes", "maxPages"], "layout cache input");
+      const { resolvedPath, password = null, sourceBytes, maxPages } = input;
+      assertion(typeof resolvedPath === "string" && Buffer.isBuffer(sourceBytes),
+        "layout cache requires a resolved path and exact source bytes");
+      assertion(password === null || typeof password === "string", "PDF password must be a string");
+      assertion(Number.isSafeInteger(maxPages) && maxPages >= 1 && maxPages <= 200,
+        "max_pages must be an integer from 1 to 200");
+      const sourceSha256 = createHash("sha256").update(sourceBytes).digest("hex");
+      const passwordContext = createHash("sha256").update(passwordSalt)
+        .update(canonicalWorkspaceJson(password)).digest("hex");
+      const key = createHash("sha256").update(canonicalWorkspaceJson({
+        context: contextJson, resolvedPath, sourceSha256, sourceBytes: sourceBytes.length,
+        passwordContext, maxPages,
+      })).digest("hex");
+      const cached = entries.get(key);
+      if (cached) {
+        counters.hits += 1;
+        entries.delete(key);
+        entries.set(key, cached);
+        return structuredClone(cached.layouts);
+      }
+      if (inflight.has(key)) {
+        counters.shared_inflight += 1;
+        return structuredClone(await inflight.get(key));
+      }
+      assertion(inflight.size < maxInflight,
+        "Concurrent PDF layout extraction limit reached; retry after an active extraction completes.");
+      counters.misses += 1;
+      const bytesSnapshot = Buffer.from(sourceBytes);
+      const loading = Promise.resolve().then(async () => {
+        counters.loads += 1;
+        const layouts = structuredClone(await extractLayouts({ ...input, password, sourceBytes: bytesSnapshot }));
+        assertion(createHash("sha256").update(bytesSnapshot).digest("hex") === sourceSha256,
+          "layout extractor mutated its source snapshot");
+        assertion(Array.isArray(layouts) && layouts.length >= 1, "layout extractor returned no layouts");
+        for (const layout of layouts) validatePdfLayoutSemantics(layout, { sourceBytes: bytesSnapshot });
+        const bytes = Buffer.byteLength(JSON.stringify(layouts), "utf8");
+        if (bytes <= maxRetainedBytes) {
+          while (entries.size >= maxEntries || retainedBytes + bytes > maxRetainedBytes) removeOldest();
+          entries.set(key, { layouts, bytes });
+          retainedBytes += bytes;
+        }
+        return layouts;
+      });
+      inflight.set(key, loading);
+      try {
+        return structuredClone(await loading);
+      } catch (error) {
+        counters.failures += 1;
+        throw error;
+      } finally {
+        inflight.delete(key);
+      }
+    },
+  };
 }
 
 function schemaBytes(schema) {
@@ -226,6 +328,40 @@ export const VERIFIED_EXTRACTION_TOOL_DEFINITIONS = Object.freeze([
       destructiveHint: false, idempotentHint: false, openWorldHint: false },
   },
   {
+    name: "verify_extraction_batch",
+    description: "Replay 1 to 32 pending proposals against one exact current generation and fresh PDF bytes, then atomically append all typed results in one generation. Any invalid item aborts before writes; citation mismatches are retained results. Result order matches item order. Complete means all results retained, not all values verified.",
+    inputSchema: {
+      type: "object", additionalProperties: false,
+      properties: {
+        pdf_path: { type: "string" },
+        password: { type: "string" },
+        workspace_id: { type: "string" },
+        workspace_identity_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        parent_generation_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+        items: { type: "array", minItems: 1, maxItems: 32, items: {
+          type: "object", additionalProperties: false,
+          properties: {
+            proposal_event_id: { type: "string", pattern: "^event\\.[a-f0-9]{64}$" },
+            citations: { type: "array", maxItems: 32, items: {
+              type: "object", additionalProperties: false,
+              properties: {
+                chunk_id: { type: "string", pattern: "^chunk\\.[a-f0-9]{64}$" },
+                start_utf8_byte: { type: "integer", minimum: 0 },
+                end_utf8_byte: { type: "integer", minimum: 1 },
+                quote_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+              }, required: ["chunk_id", "start_utf8_byte", "end_utf8_byte", "quote_sha256"],
+            } },
+            method: { type: "object" },
+          },
+          required: ["proposal_event_id", "citations", "method"],
+        } },
+      },
+      required: ["pdf_path", "workspace_id", "workspace_identity_sha256", "parent_generation_sha256", "items"],
+    },
+    annotations: { title: "Verify Extraction Batch", readOnlyHint: false,
+      destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  },
+  {
     name: "delete_extraction_workspace",
     description: "Permanently delete one private workspace only when both its exact identity and exact current generation match. Requires the literal confirmation DELETE.",
     inputSchema: {
@@ -249,11 +385,13 @@ export function createVerifiedExtractionToolHandler({
   resolvePdfPath,
   readPdfBytes,
   extractLayouts,
+  layoutCacheOptions = {},
 }) {
   assertion(typeof workspaceRoot === "string" && workspaceRoot.length > 0,
     "workspaceRoot is required");
   assertion(typeof resolvePdfPath === "function" && typeof readPdfBytes === "function"
     && typeof extractLayouts === "function", "verified extraction dependencies are incomplete");
+  const layoutCache = createVerifiedExtractionLayoutCache({ ...layoutCacheOptions, extractLayouts });
 
   return async function handleVerifiedExtractionTool(name, args) {
     if (name === "create_extraction_workspace") {
@@ -263,7 +401,7 @@ export function createVerifiedExtractionToolHandler({
       const leafObligations = compileExtractionLeafObligations(exactSchemaBytes);
       const resolvedPath = resolvePdfPath(requiredString(input.pdf_path, "pdf_path"));
       const sourceBytes = await readPdfBytes(resolvedPath);
-      const layouts = await extractLayouts({
+      const layouts = await layoutCache.extract({
         resolvedPath,
         password: input.password ?? null,
         sourceBytes,
@@ -341,7 +479,7 @@ export function createVerifiedExtractionToolHandler({
       });
     }
 
-    assertion(["read_extraction_chunk", "verify_extraction_proposal"].includes(name),
+    assertion(["read_extraction_chunk", "verify_extraction_proposal", "verify_extraction_batch"].includes(name),
       `Unknown verified extraction tool: ${name}`);
     const retained = await readExtractionWorkspaceContext({
       rootPath: workspaceRoot,
@@ -354,7 +492,7 @@ export function createVerifiedExtractionToolHandler({
       retained,
       resolvePdfPath,
       readPdfBytes,
-      extractLayouts,
+      extractLayouts: input => layoutCache.extract(input),
     });
     if (name === "read_extraction_chunk") {
       requiredString(input.chunk_id, "chunk_id", CHUNK_ID);
@@ -364,6 +502,24 @@ export function createVerifiedExtractionToolHandler({
         sourceBytes: fresh.sourceBytes,
         schemaBytes: retained.schema_bytes,
         layouts: fresh.layouts,
+      });
+    }
+
+    if (name === "verify_extraction_batch") {
+      requiredString(input.parent_generation_sha256, "parent_generation_sha256", SHA256);
+      const results = await verifyWorkspaceExtractionBatch({
+        rootPath: workspaceRoot, workspaceId,
+        expectedWorkspaceIdentitySha256: identitySha256,
+        expectedGenerationSha256: input.parent_generation_sha256,
+        workspaceIdentity: retained.workspace_identity,
+        documentMap: retained.document_map, sourceBytes: fresh.sourceBytes,
+        schemaBytes: retained.schema_bytes, layouts: fresh.layouts, items: input.items,
+      });
+      return appendVerifiedWorkspaceResults({
+        rootPath: workspaceRoot, workspaceId,
+        expectedWorkspaceIdentitySha256: identitySha256,
+        expectedParentGenerationSha256: input.parent_generation_sha256,
+        verificationResults: results, transactionId: transactionId(),
       });
     }
 

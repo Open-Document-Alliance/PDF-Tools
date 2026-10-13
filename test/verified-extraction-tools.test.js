@@ -11,6 +11,7 @@ import {
   createVerifiedExtractionToolHandler,
 } from "../server/verified-extraction-tools.js";
 import { validateStructuredToolResult } from "../server/output-schemas.js";
+import { canonicalWorkspaceJson, readExtractionReviewState } from "../scripts/verified-extraction-workspace.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE_PATH = path.join(
@@ -32,6 +33,8 @@ describe("verified extraction MCP lifecycle", () => {
   let parentPath;
   let workspaceRoot;
   let handle;
+  let extractionCalls;
+  let sourceReads;
 
   beforeAll(async () => {
     pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -41,11 +44,14 @@ describe("verified extraction MCP lifecycle", () => {
     parentPath = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-mcp-e9e7-")));
     await fs.chmod(parentPath, 0o700);
     workspaceRoot = path.join(parentPath, "workspaces");
+    extractionCalls = 0;
+    sourceReads = 0;
     handle = createVerifiedExtractionToolHandler({
       workspaceRoot,
       resolvePdfPath: value => path.resolve(value),
-      readPdfBytes: filename => fs.readFile(filename),
+      readPdfBytes: filename => { sourceReads += 1; return fs.readFile(filename); },
       extractLayouts: async ({ resolvedPath, sourceBytes, maxPages }) => {
+        extractionCalls += 1;
         const sourceSha256 = sha256(sourceBytes);
         const first = await extractPdfLayoutForMarkdown({
           pdfjsLib,
@@ -70,7 +76,7 @@ describe("verified extraction MCP lifecycle", () => {
     await fs.rm(parentPath, { recursive: true, force: true });
   });
 
-  it("ships seven bounded tools and persists a source-replayed exact value", async () => {
+  it("ships eight bounded tools and persists a source-replayed exact value", async () => {
     expect(VERIFIED_EXTRACTION_TOOL_DEFINITIONS.map(tool => tool.name)).toEqual([
       "create_extraction_workspace",
       "inspect_extraction_state",
@@ -78,6 +84,7 @@ describe("verified extraction MCP lifecycle", () => {
       "read_extraction_chunk",
       "submit_extraction_proposal",
       "verify_extraction_proposal",
+      "verify_extraction_batch",
       "delete_extraction_workspace",
     ]);
     const created = await handle("create_extraction_workspace", {
@@ -145,6 +152,8 @@ describe("verified extraction MCP lifecycle", () => {
       result: { status: "verified_exact", derived_value: "INV-1001" },
     });
     expectValidOutput("verify_extraction_proposal", verified);
+    expect(extractionCalls).toBe(1);
+    expect(sourceReads).toBe(3);
     const pending = await handle("read_extraction_workspace", {
       workspace_id: "invoice-extraction",
       workspace_identity_sha256: created.workspace_identity_sha256,
@@ -170,6 +179,98 @@ describe("verified extraction MCP lifecycle", () => {
     });
     expect(deleted).toMatchObject({ state: "deleted", recoverable: false });
     expectValidOutput("delete_extraction_workspace", deleted);
+  }, 60_000);
+
+  it("atomically retains ordered batch results and continues single-proposal history", async () => {
+    const created = await handle("create_extraction_workspace", {
+      pdf_path: SOURCE_PATH, workspace_id: "batch-workspace",
+      schema: { type: "object", properties: {
+        first: { type: "string" }, second: { type: "string" }, missing: { type: "null" },
+      } },
+    });
+    const bound = { workspace_id: "batch-workspace", workspace_identity_sha256: created.workspace_identity_sha256 };
+    const chunks = await handle("read_extraction_workspace", { ...bound, collection: "document_map_chunks" });
+    const chunkId = chunks.items[0].chunk_id;
+    const chunk = await handle("read_extraction_chunk", { ...bound, pdf_path: SOURCE_PATH, chunk_id: chunkId });
+    const quote = Buffer.from("INV-1001");
+    const start = Buffer.from(chunk.content).indexOf(quote);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const citation = { chunk_id: chunkId, start_utf8_byte: start, end_utf8_byte: start + quote.length,
+      quote_sha256: sha256(quote) };
+    const method = { kind: "exact_projection", citation_index: 0, normalization: "identity" };
+    let parent = created.generation_sha256;
+    const proposals = [];
+    for (const leaf of ["first", "second", "missing"]) {
+      const proposed = await handle("submit_extraction_proposal", { ...bound,
+        parent_generation_sha256: parent, leaf_pointer: `/${leaf}`,
+        proposed_value: leaf === "missing" ? null : "INV-1001", chunk_ids: [chunkId] });
+      proposals.push(proposed.event);
+      parent = proposed.generation_sha256;
+    }
+    const input = { ...bound, pdf_path: SOURCE_PATH, parent_generation_sha256: parent, items: [
+      { proposal_event_id: proposals[0].event_id, citations: [citation], method },
+      { proposal_event_id: proposals[1].event_id, citations: [{ ...citation, quote_sha256: "0".repeat(64) }], method },
+      { proposal_event_id: proposals[2].event_id, citations: [], method: { kind: "not_found" } },
+    ] };
+    const generationsPath = path.join(created.workspace_path, "generations");
+    const oldNames = await fs.readdir(generationsPath);
+    expect(oldNames).toHaveLength(4);
+    const retainedFiles = [];
+    for (const name of oldNames) {
+      for (const file of await fs.readdir(path.join(generationsPath, name))) {
+        const filename = path.join(generationsPath, name, file);
+        retainedFiles.push([filename, await fs.readFile(filename)]);
+      }
+    }
+    expect(retainedFiles.length).toBeGreaterThan(0);
+    const malformed = structuredClone(input);
+    malformed.items[1].method = { kind: "invented" };
+    malformed.items[1].citations = [citation];
+    await expect(handle("verify_extraction_batch", malformed)).rejects.toThrow(/batch item 1/);
+    await expect(handle("verify_extraction_batch", { ...input, items: [input.items[0], input.items[0]] }))
+      .rejects.toThrow(/batch item 1.*duplicate/);
+    await expect(handle("verify_extraction_batch", { ...input, items: [] })).rejects.toThrow(/1 through 32/);
+    await expect(handle("verify_extraction_batch", { ...input, items: Array(33).fill(input.items[0]) }))
+      .rejects.toThrow(/1 through 32/);
+    expect(await fs.readdir(generationsPath)).toEqual(oldNames);
+    expect(await fs.readdir(created.workspace_path)).not.toContain("writer-claim.v1.json");
+    const batch = await handle("verify_extraction_batch", input);
+    expectValidOutput("verify_extraction_batch", batch);
+    expect(batch).toMatchObject({ state: "complete", parent_generation_sha256: parent, generation_sequence: 4 });
+    expect(batch.events.map(event => event.event_sequence)).toEqual([4, 5, 6]);
+    expect(batch.results.map(result => result.status)).toEqual([
+      "verified_exact", "citation_mismatch", "unverified_reasoning",
+    ]);
+    expect(batch.results.every(result => result.generation_sha256 === parent)).toBe(true);
+    const batchName = (await fs.readdir(generationsPath)).find(name => name.includes(batch.generation_sha256));
+    const manifest = JSON.parse(await fs.readFile(path.join(generationsPath, batchName, "generation-manifest.v1.json")));
+    expect(manifest).toMatchObject({ contract: { version: "1.1.0-experimental" }, sequence: 4, event_count: 6 });
+    const pending = await handle("read_extraction_workspace", { ...bound, collection: "pending_leaves" });
+    expect(pending.items).toEqual(["/missing", "/second"]);
+    await expect(handle("verify_extraction_batch", input)).rejects.toThrow(/exact complete current generation/);
+    const correction = await handle("submit_extraction_proposal", { ...bound,
+      parent_generation_sha256: batch.generation_sha256, leaf_pointer: "/second",
+      proposed_value: "INV-1001", chunk_ids: [chunkId] });
+    const corrected = await handle("verify_extraction_proposal", { ...bound, pdf_path: SOURCE_PATH,
+      proposal_generation_sha256: correction.generation_sha256,
+      proposal_event_id: correction.event.event_id, citations: [citation], method });
+    expect(corrected).toMatchObject({ generation_sequence: 6, result: { status: "verified_exact" } });
+    expectValidOutput("verify_extraction_proposal", corrected);
+    for (const [filename, bytes] of retainedFiles) expect(await fs.readFile(filename)).toEqual(bytes);
+    const snapshotArgs = { rootPath: workspaceRoot, workspaceId: bound.workspace_id,
+      expectedWorkspaceIdentitySha256: bound.workspace_identity_sha256 };
+    const snapshot = await readExtractionReviewState(snapshotArgs);
+    expect(snapshot.events).toHaveLength(8);
+    expect(snapshot.current_state).toMatchObject({ generation_sequence: 6, event_count: 8 });
+    snapshot.events.length = 0;
+    const historical = await readExtractionReviewState({ ...snapshotArgs, expectedGenerationSha256: parent });
+    expect(historical.events).toHaveLength(3);
+    expect((await readExtractionReviewState(snapshotArgs)).events).toHaveLength(8);
+    expect(extractionCalls).toBe(1);
+    expect(sourceReads).toBeGreaterThan(6);
+    const manifestPath = path.join(generationsPath, batchName, "generation-manifest.v1.json");
+    await fs.writeFile(manifestPath, `${canonicalWorkspaceJson({ ...manifest, event_count: 7 })}\n`);
+    await expect(readExtractionReviewState(snapshotArgs)).rejects.toThrow(/event count does not replay/);
   }, 60_000);
 
   it("rejects unknown arguments for every verified-extraction tool", async () => {

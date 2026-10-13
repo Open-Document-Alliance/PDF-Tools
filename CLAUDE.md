@@ -86,6 +86,13 @@ vendored qpdf WebAssembly runtime before handing plaintext to pdf-lib. They only
 ever read: none writes a PDF back. Decrypted bytes stay in memory and are never
 written to disk.
 
+All read-only pdf-lib parsing and form traversal runs in the bounded isolated
+worker, including viewer/active-document metadata and host-import validation.
+The MCP entrypoint receives only source-bound JSON observations, never a live
+PDFDocument or decrypted bytes. The three decrypting reads release plaintext
+inside the worker on every exit. See `docs/MAINTAINERS.md` for the isolation
+contract and the temporary original-byte source used for host imports.
+
 **The mutation tools decrypt too, and put the protection back.** Every tool in
 `PDF_LIB_MUTATION_TOOL_NAMES` decrypts its source, lets pdf-lib change the
 plaintext, and then restores the source's own encryption with qpdf's
@@ -327,7 +334,7 @@ qualification. Then perform manual host runs against `example-fw9.pdf`:
 23. **compare_pdfs** - Compare two immutable PDFs across semantic, text, structure, form, annotation, metadata, and visual channels with source-bound evidence
 24. **apply_page_plan** - Reorder, rotate, and delete pages in one pass (saves as new file)
 25. **get_page_analysis** - Analyze pages for blank detection, orientation, text content, images
-26. **fetch_pdf_from_url** - Download a PDF from a URL to the user's local machine (bypasses Claude's WebFetch sandbox)
+26. **fetch_pdf_from_url** - Download a PDF to an allowed local folder under the destination, redirect, time, and byte policies
 27. **create_signature** - Save a reusable typed or image signature
 28. **list_signatures** - List saved signatures
 29. **add_signature_field** - Draw a "Sign here" placeholder box (does NOT sign)
@@ -342,6 +349,9 @@ qualification. Then perform manual host runs against `example-fw9.pdf`:
 38. **verify_extraction_proposal** - Replay citations deterministically and retain the typed result without a model inside PDF Tools
 39. **open_pdf_workspace** - (app-only) Open the empty task-selection screen without reading a PDF or scanning folders
 40. **import_host_pdf** - (app-only) Import at most 16 MiB of exact unencrypted PDF bytes into the already-permitted private plugin workspace as a new local copy; never accepts a path or widens folder access
+
+41. **verify_extraction_batch** - Replay up to 32 proposals against one parent and retain ordered statuses in one atomic generation
+42. **review_extraction_workspace** - Open bounded source-linked evidence, coverage, and correction history without approving values
 
 ### Current Extraction Boundary
 
@@ -436,7 +446,9 @@ complete Markdown.
 PDF Tools performs filesystem operations and rasterization locally and does not
 upload files to a separate PDF service. Content returned through MCP can be
 processed by the selected host or model under that provider's data terms. A
-future local OCR engine is optional planned work, not a current capability.
+separately installed engine can be explicitly configured for optional local OCR
+adapters and resumable proposal jobs. These produce unverified proposals and do
+not change ordinary text reads; see [Optional local OCR](docs/LOCAL_OCR.md).
 
 ## Signature Architecture (v0.8.0)
 

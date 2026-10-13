@@ -234,7 +234,9 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2edabecaa5aa61e9ee533f8811180e8661a9423dddaee8ba59fec19cb846ab7d.
 // Live Mac Node 22.23.2 capture after app-only host import: 59 tools,
 // three app-only and 56 model-visible; no existing input authority changes.
-const TOOL_CONTRACT_SHA256 = "cef623a1a7236f82bf7f68c8c500d38d7e73ee9767c08267dc4d4a0a6bf975cc";
+// 2026-10-12: add batch verification and source-bound Evidence review; CSV
+// export is explicitly new-file-only. Optional OCR remains absent by default.
+const TOOL_CONTRACT_SHA256 = "639189a0677085df0ef8d8ee92d23c5a5c1c3121a779e926ebe36f266c3de84c";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -292,6 +294,8 @@ const TOOL_EFFECT_ANNOTATIONS = {
   read_extraction_chunk: CLOSED_READ,
   submit_extraction_proposal: CLOSED_SESSION_ACTION,
   verify_extraction_proposal: CLOSED_SESSION_ACTION,
+  verify_extraction_batch: CLOSED_SESSION_ACTION,
+  review_extraction_workspace: CLOSED_READ,
   delete_extraction_workspace: CLOSED_NON_IDEMPOTENT_OVERWRITE,
   list_pdfs: CLOSED_READ,
   read_pdf_fields: CLOSED_SESSION_ACTION,
@@ -496,7 +500,10 @@ describe("MCPB static declarations", () => {
     for (const filename of [
       "accessibility-inspection.js",
       "bounded-pdf-file.js",
+      "csv-export.js",
       "document-map.js",
+      "download-transport.js",
+      "extraction-review.js",
       "pdf-comparison.js",
       "index.js",
       "helpers.js",
@@ -512,6 +519,7 @@ describe("MCPB static declarations", () => {
       "lumin-sign-v1-transport.js",
       "lumin-signing-tools.js",
       "local-ocr-tools.js",
+      "local-ocr-jobs.js",
       "markdown-conversion.js",
       "markdown-output-transaction.js",
       "pdf-lib-subprocess.js",
@@ -535,7 +543,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(34);
+    expect(mirrored).toHaveLength(38);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",
@@ -603,7 +611,7 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
   });
 
   it("exposes the same uniquely named, fully annotated tool contract", () => {
-    expect(tools).toHaveLength(59);
+    expect(tools).toHaveLength(61);
     expect(new Set(names(tools)).size).toBe(tools.length);
     expect(sorted(names(tools))).toEqual(sorted(names(SOURCE_MANIFEST.tools)));
     expect(createHash("sha256").update(JSON.stringify(tools)).digest("hex"))

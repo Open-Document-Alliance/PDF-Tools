@@ -71,6 +71,44 @@ export function validateLocalOcrResult(result) {
   }
 }
 
+const ocrJobPage = { type: "integer", minimum: 1, maximum: 10000 };
+const LOCAL_OCR_JOB_OUTPUT_SCHEMA = object({
+  status: enumString(["ocr_job_ready", "ocr_job_paused", "ocr_job_complete"]),
+  job_id: { type: "string", pattern: "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$" },
+  job_identity_sha256: ocrDigestSchema, source_pdf_sha256: ocrDigestSchema, helper_sha256: ocrDigestSchema,
+  configured_engine: enumString(["vision", "tesseract"]),
+  verification_status: { const: "unverified_ocr_proposals" },
+  page_count: { type: "integer", minimum: 1, maximum: 20 },
+  completed_count: { type: "integer", minimum: 0, maximum: 20 },
+  remaining_count: { type: "integer", minimum: 0, maximum: 20 },
+  completed_pages: { type: "array", maxItems: 20, items: object({
+    page_number: ocrJobPage, observation_count: { type: "integer", minimum: 0, maximum: 1000 },
+    proposal_sha256: ocrDigestSchema, render_png_sha256: ocrDigestSchema, review_html_sha256: ocrDigestSchema,
+    review_html_path: { type: "string", minLength: 1, maxLength: 8192 },
+    proposal_directory: { type: "string", minLength: 1, maxLength: 8192 },
+  }) },
+  remaining_pages: { type: "array", maxItems: 20, uniqueItems: true, items: ocrJobPage },
+  processed_this_call: { type: "integer", minimum: 0, maximum: 2 },
+  max_pages_per_call: { const: 2 }, failed_page: nullable(ocrJobPage),
+  failure_code: nullable({ const: "page_attempt_failed" }),
+  next_action: enumString(["resume_pdf_ocr_job", "review_unverified_proposals"]),
+});
+
+export function validateLocalOcrJobResult(result) {
+  const completed = result.completed_pages.map(page => page.page_number);
+  const pages = [...completed, ...result.remaining_pages];
+  const expectedStatus = result.remaining_count === 0 ? "ocr_job_complete"
+    : result.completed_count === 0 ? "ocr_job_ready" : "ocr_job_paused";
+  if (result.completed_count !== completed.length || result.remaining_count !== result.remaining_pages.length
+    || result.page_count !== pages.length || new Set(pages).size !== pages.length
+    || result.processed_this_call > result.completed_count || result.status !== expectedStatus
+    || result.next_action !== (result.remaining_count ? "resume_pdf_ocr_job" : "review_unverified_proposals")
+    || (result.failed_page === null) !== (result.failure_code === null)
+    || (result.failed_page !== null && !result.remaining_pages.includes(result.failed_page))) {
+    throw new Error("Local OCR job progress accounting is invalid.");
+  }
+}
+
 const fieldValue = {
   anyOf: [string, boolean, stringArray],
 };
@@ -1262,8 +1300,38 @@ const workspacePageRange = object({
   end_page: { type: "integer", minimum: 1 },
 });
 
+// Keep this wire schema independent of the review handler and its workspace
+// runtime, so extraction scorers can bind only their role-specific module graph.
+export const EXTRACTION_REVIEW_OUTPUT_SCHEMA = (() => {
+  const string = { type: "string" }, integer = { type: "integer", minimum: 0 }, bool = { type: "boolean" };
+  const sha = { type: "string", pattern: "^[a-f0-9]{64}$" };
+  const nullable = value => ({ anyOf: [value, { type: "null" }] });
+  const array = value => ({ type: "array", items: value });
+  const object = properties => ({ type: "object", additionalProperties: false, properties, required: Object.keys(properties) });
+  const citationSchema = { anyOf: [
+    object({ status: { const: "replayed" }, page: { type: "integer", minimum: 1 }, chunk_id: { type: "string", pattern: "^chunk\\.[a-f0-9]{64}$" }, start_utf8_byte: integer, end_utf8_byte: { type: "integer", minimum: 1 }, quote_sha256: sha, quote: { type: "string", minLength: 1 }, quote_truncated: bool, reason: { type: "null" } }),
+    object({ status: { const: "unavailable" }, page: { type: "null" }, chunk_id: nullable(string), start_utf8_byte: nullable(integer), end_utf8_byte: nullable(integer), quote_sha256: nullable(sha), quote: { const: "" }, quote_truncated: { const: false }, reason: string }),
+  ] };
+  const leafSchema = object({ kind: { const: "leaf" }, leaf_pointer: string, current: bool, status: string, settled: bool, correction_allowed: bool, proposal_event_id: nullable(string), event_sequence: nullable(integer), verification_sha256: nullable(sha), value_preview: string, value_truncated: bool, value_sha256: nullable(sha), method: nullable(string), reason_codes: array(string), citation_count: integer, citations: array(citationSchema) });
+  const pageSchema = object({ kind: { const: "page" }, page: integer, extraction_status: string, text_layer_status: string, modality_hint: string, needs_visual_inspection: bool, gap_codes: array(string), returned_chunks: integer, omitted_chunks: integer, omitted_items: integer, omitted_characters: integer });
+  return object({
+    pdfPath: string, totalBytes: integer, initialPage: integer, fields: { type: "array", maxItems: 0 }, fieldCount: { const: 0 }, hasFormFields: { const: false },
+    extractionReview: object({
+      version: { const: 1 }, workspace_id: string, workspace_identity_sha256: sha, generation_sha256: sha, generation_sequence: integer,
+      source: object({ canonical_path: string, size_bytes: integer, sha256: sha }), schema_sha256: sha, document_map_sha256: sha, page_count: integer,
+      summary: object({ leaves: integer, settled: integer, unproposed: integer, awaiting_verification: integer, unresolved: integer }),
+      view: { enum: ["leaves", "pages", "history"] }, leaf_pointer: nullable(string), counts: object({ total: integer, offset: integer, returned: integer }),
+      items: { type: "array", maxItems: 20, items: { anyOf: [leafSchema, pageSchema] } }, next_cursor: nullable(string), claim_boundary: string,
+    }),
+  });
+})();
+
 export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
+  review_extraction_workspace: EXTRACTION_REVIEW_OUTPUT_SCHEMA,
   propose_pdf_ocr: LOCAL_OCR_OUTPUT_SCHEMA,
+  start_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,
+  resume_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,
+  read_pdf_ocr_job: LOCAL_OCR_JOB_OUTPUT_SCHEMA,
   create_extraction_workspace: object({
     workspace_id: string,
     workspace_path: string,
@@ -1336,6 +1404,15 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     generation_sequence: workspaceGenerationSequence,
     event: workspaceVerifiedEvent,
     result: workspaceVerificationResult,
+    state: { const: "complete" },
+  }),
+  verify_extraction_batch: object({
+    workspace_identity_sha256: workspaceDigest,
+    parent_generation_sha256: workspaceDigest,
+    generation_sha256: workspaceDigest,
+    generation_sequence: workspaceGenerationSequence,
+    events: { ...arrayOf(workspaceVerifiedEvent), minItems: 1, maxItems: 32 },
+    results: { ...arrayOf(workspaceVerificationResult), minItems: 1, maxItems: 32 },
     state: { const: "complete" },
   }),
   delete_extraction_workspace: object({
@@ -2100,6 +2177,9 @@ const semanticSuccessValidators = new Map([
     }
   }],
   ["propose_pdf_ocr", validateLocalOcrResult],
+  ["start_pdf_ocr_job", validateLocalOcrJobResult],
+  ["resume_pdf_ocr_job", validateLocalOcrJobResult],
+  ["read_pdf_ocr_job", validateLocalOcrJobResult],
   ["compare_pdfs", validatePdfComparisonSemantics],
   ["inspect_pdf_accessibility", validateAccessibilityInspectionResult],
   ["read_pdf_layout", validatePdfLayoutSemantics],

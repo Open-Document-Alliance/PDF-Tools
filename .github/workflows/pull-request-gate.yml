@@ -126,13 +126,16 @@ jobs:
         run: npm ci
 
       # Contract checks need only the runner's Python standard library, not
-      # the optional macOS OCR engine or renderer. Actual OCR stays Mac-only.
-      - name: Local OCR proposal contract
-        run: |
-          python3 test/eval/local_ocr_proposal_test.py
-          node --test test/local-ocr-tools-native.test.js
+      # the optional OCR engines or renderer. Real engine smoke is separate.
+      - name: Local OCR Python proposal contract
+        run: python3 test/eval/local_ocr_proposal_test.py
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+
+      # Vitest explicitly excludes this partition. Run its platform-aware
+      # entrypoint so new native suites cannot silently miss the PR gate.
+      - name: Native test partition
+        run: npm run test:node-native
 
       # Release steps that live outside `npm test`. See the header.
       - name: Share contract

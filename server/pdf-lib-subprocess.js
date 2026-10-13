@@ -11,7 +11,7 @@ import {
   PDF_MUTATION_MAX_FILE_BYTES,
   hashBoundedPdfFileSafely,
 } from "./bounded-pdf-file.js";
-import { assertBoundedPdfStructure } from "./pdf-lib-worker.js";
+import { assertBoundedPdfStructure, PDF_LIB_READ_ONLY_OPERATIONS } from "./pdf-lib-worker.js";
 import {
   PDF_LIB_RSS_FRAME_BYTES,
   PDF_LIB_RSS_MAGIC,
@@ -22,6 +22,8 @@ import {
   PDF_LIB_RSS_TERMINAL,
 } from "./pdf-lib-rss-monitor.js";
 import { validateAccessibilityInspectionResult } from "./accessibility-inspection.js";
+import { validateStructuredToolResult } from "./output-schemas.js";
+import { PdfDecryptionError } from "./qpdf-decrypt.js";
 import { XFA_GUARDED_MUTATION_OPERATIONS } from "./helpers.js";
 
 export const PDF_RESOURCE_LIMIT_CODE = "PDF_RESOURCE_LIMIT_EXCEEDED";
@@ -40,9 +42,8 @@ export const PDF_LIB_MUTATION_TOOL_NAMES = new Set([
   "rotate_pdf_pages",
   "split_pdf",
 ]);
-export const PDF_LIB_READ_ONLY_OPERATIONS = new Set([
-  "inspect_pdf_accessibility",
-]);
+export { PDF_LIB_READ_ONLY_OPERATIONS };
+const DECRYPTING_READ_OPERATIONS = new Set(["read_pdf_fields", "validate_pdf", "extract_to_csv"]);
 
 const PROTOCOL_VERSION = 1;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
@@ -220,7 +221,14 @@ export function createPdfLibMutationRequest({
 }
 
 export function createPdfLibInspectionRequest(request) {
-  exactKeys(request, ["operation", "sources"], "pdf-lib inspection request");
+  const keys = ["operation", "sources"];
+  if (Object.hasOwn(request, "password")) keys.push("password");
+  exactKeys(request, keys, "pdf-lib inspection request");
+  const password = request.password ?? null;
+  if (password !== null && (!DECRYPTING_READ_OPERATIONS.has(request.operation)
+      || typeof password !== "string" || password.length < 1 || password.length > 4096)) {
+    throw new TypeError("Read-only inspection password is invalid.");
+  }
   if (!PDF_LIB_READ_ONLY_OPERATIONS.has(request.operation)) {
     throw new TypeError(`Unsupported read-only operation: ${request.operation}.`);
   }
@@ -232,7 +240,7 @@ export function createPdfLibInspectionRequest(request) {
     operation: request.operation,
     sources: request.sources,
     options: {},
-    password: null,
+    password,
     force_xfa: false,
   };
 }
@@ -270,7 +278,9 @@ function validateWorkerResponse(response, expectedOperation) {
     if (response.error.code === PDF_RESOURCE_LIMIT_CODE) {
       throw resourceError(response.error.reason ?? "worker_resource_limit");
     }
-    const error = new Error(response.error.message);
+    const error = response.error.name === "PdfDecryptionError"
+      ? new PdfDecryptionError(response.error.reason, response.error.message)
+      : new Error(response.error.message);
     error.name = response.error.name;
     if (response.error.code !== null) error.code = response.error.code;
     throw error;
@@ -749,6 +759,48 @@ async function hashFile(filePath) {
   }
 }
 
+// Only bounded JSON observations cross the parser isolation boundary; a live
+// PDFDocument (or decrypted source bytes) must never return to the MCP thread.
+function validatePdfFormInspectionResult(result, operation, source) {
+  const key = operation === "validate_pdf" ? "validation"
+    : operation === "extract_to_csv" ? "csv_fields" : "form_info";
+  exactKeys(result, ["source", "total_pages", key], "PDF form inspection result");
+  exactKeys(result.source, ["canonical_path", "size_bytes", "sha256"], "inspection source");
+  if (result.source.canonical_path !== source.canonical_path
+      || result.source.size_bytes !== source.size_bytes || result.source.sha256 !== source.sha256
+      || !Number.isSafeInteger(result.total_pages) || result.total_pages < 0) {
+    throw new TypeError("Read-only result source or page count does not match the request.");
+  }
+  const fieldValue = value => typeof value === "string" || typeof value === "boolean"
+    || (Array.isArray(value) && value.every(item => typeof item === "string"));
+  if (key === "validation") {
+    const validated = validateStructuredToolResult("validate_pdf", {
+      content: [], structuredContent: result.validation,
+    });
+    if (validated.isError || result.validation.pdf_path !== source.canonical_path
+        || result.validation.file_name !== path.basename(source.canonical_path)) {
+      throw new TypeError("Invalid field validation result.");
+    }
+  } else if (key === "csv_fields") {
+    if (!Array.isArray(result.csv_fields)) throw new TypeError("Invalid CSV fields.");
+    for (const field of result.csv_fields) {
+      exactKeys(field, ["name", "value"], "CSV field");
+      if (typeof field.name !== "string" || !fieldValue(field.value)) throw new TypeError("Invalid CSV field.");
+    }
+  } else {
+    const info = result.form_info;
+    exactKeys(info, ["fields", "fieldCount", "hasFormFields"], "form metadata");
+    if (!Array.isArray(info.fields) || info.fieldCount !== info.fields.length
+        || info.hasFormFields !== (info.fieldCount > 0)) throw new TypeError("Invalid form metadata.");
+    for (const field of info.fields) {
+      exactKeys(field, ["name", "type", "options", "currentValue"], "form field");
+      if (typeof field.name !== "string" || !["unknown", "text", "checkbox", "radio", "dropdown"].includes(field.type)
+          || !Array.isArray(field.options) || !field.options.every(value => typeof value === "string")
+          || !fieldValue(field.currentValue)) throw new TypeError("Invalid form field.");
+    }
+  }
+}
+
 async function validateStage(stageDirectory, response, operation, sources) {
   const readOnly = PDF_LIB_READ_ONLY_OPERATIONS.has(operation);
   if (response.operation !== operation || !Array.isArray(response.manifest)
@@ -759,12 +811,16 @@ async function validateStage(stageDirectory, response, operation, sources) {
   }
   if (readOnly) {
     try {
-      validateAccessibilityInspectionResult(response.result);
       const source = sources[0];
-      if (response.result.source.file_name !== path.basename(source.canonical_path)
-          || response.result.source.size_bytes !== source.size_bytes
-          || response.result.source.sha256 !== source.sha256) {
-        throw new TypeError("Read-only result source binding does not match the request.");
+      if (operation === "inspect_pdf_accessibility") {
+        validateAccessibilityInspectionResult(response.result);
+        if (response.result.source.file_name !== path.basename(source.canonical_path)
+            || response.result.source.size_bytes !== source.size_bytes
+            || response.result.source.sha256 !== source.sha256) {
+          throw new TypeError("Read-only result source binding does not match the request.");
+        }
+      } else {
+        validatePdfFormInspectionResult(response.result, operation, source);
       }
     } catch (error) {
       throw resourceError("invalid_read_only_result", error);
@@ -1096,6 +1152,38 @@ export function runPdfLibMutation(request, consumeStage, options = {}) {
 
 export function runPdfLibInspection(request, options = {}) {
   return runPdfLibOperation(request, null, options, "read_only");
+}
+
+// Host imports arrive as bytes before a user-visible file exists. Stage only
+// those original bytes in a private transient source, inspect with the same
+// bounded service, and remove the source on every exit. This operation never
+// decrypts and never changes the input bytes or publishes the temporary file.
+export async function inspectHostPdfBytes(bytes, options = {}) {
+  if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > 16 * 1024 * 1024) {
+    throw new TypeError("Host PDF inspection requires from 1 byte to 16 MiB.");
+  }
+  const directory = await fs.mkdtemp(path.join(tmpdir(), "pdf-tools-import-inspection-"));
+  try {
+    await fs.chmod(directory, 0o700);
+    const sourcePath = path.join(await fs.realpath(directory), "source.pdf");
+    await fs.writeFile(sourcePath, bytes, { flag: "wx", mode: 0o600 });
+    const source = await hashBoundedPdfFileSafely(sourcePath, 16 * 1024 * 1024, {
+      assertPathAllowed(candidate) {
+        if (path.resolve(candidate) !== sourcePath) throw new Error("Import inspection source path changed.");
+      },
+    });
+    return await runPdfLibInspection({
+      operation: "inspect_import_pdf",
+      sources: [{
+        canonical_path: source.canonicalPath,
+        file_identity: source.fileIdentity,
+        sha256: source.sha256,
+        size_bytes: source.sizeBytes,
+      }],
+    }, options);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
 }
 
 function terminateChild(child) {

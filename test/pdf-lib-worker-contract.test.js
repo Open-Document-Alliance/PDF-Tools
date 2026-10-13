@@ -20,6 +20,7 @@ import {
   PDFString,
 } from "pdf-lib";
 import {
+  PDF_LIB_READ_ONLY_OPERATIONS as NON_MUTATION_OPERATIONS,
   __testOnlyCopyPdfPagesForRebuiltOutput,
   assertBoundedPdfStructure,
   assertBoundedPdfStreamDecodes,
@@ -1803,8 +1804,6 @@ describe("existing-signature resign guard coverage", () => {
   // Read-only inspection shares the option map but is not routed through the
   // mutation entry point at all, so it carries no resign guard by construction.
   // The exclusion is measured below rather than asserted.
-  const NON_MUTATION_OPERATIONS = new Set(["inspect_pdf_accessibility"]);
-
   const PLACEMENT = { page: 1, x: 50, y: 50, width: 120, height: 40 };
   const LABELLED_PLACEMENT = { ...PLACEMENT, label: "Sign here" };
 
@@ -1979,7 +1978,7 @@ describe("existing-signature resign guard coverage", () => {
     expect(mutationOperations.filter(declaresAllowResign).length).toBeGreaterThanOrEqual(4);
   });
 
-  it("routes the non-mutation operation away from the mutation entry point", async () => {
+  it.each([...NON_MUTATION_OPERATIONS])("routes %s away from the mutation entry point", async operation => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "resign-guard-")));
     roots.push(root);
     const stageDirectory = path.join(root, "stage");
@@ -1990,7 +1989,7 @@ describe("existing-signature resign guard coverage", () => {
     const stats = await fs.lstat(sourcePath, { bigint: true });
     await expect(executePdfLibMutationRequest({
       protocol_version: 1,
-      operation: "inspect_pdf_accessibility",
+      operation,
       sources: [{
         canonical_path: sourcePath,
         file_identity: { device: String(stats.dev), inode: String(stats.ino) },

@@ -67,6 +67,7 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
   "test/atomic-output.test.js",
   "test/atomic-tool-output.test.js",
   "test/compare-pdfs.test.js",
+  "test/csv-export-safety.test.js",
   "test/csv-roundtrip.test.js",
   "test/deep-malformed-campaign.test.js",
   "test/detect-signature-zones-tool.test.js",
@@ -112,6 +113,16 @@ export const REVIEWED_COMPUTED_MODULE_LOADS = Object.freeze([
     ]),
     reason: "Share-tree mirror of server/qpdf-decrypt-worker.js, which loads the vendored QPDF "
       + "WebAssembly runtime from a fixed repository-relative path.",
+  }),
+  Object.freeze({
+    file: "scripts/dev-ui-document-session-smoke.mjs",
+    count: 1,
+    kinds: Object.freeze(["dynamic-import"]),
+    fingerprints: Object.freeze([
+      "32b5e515ca05b2b56582305eb42b90afe986da1f276e64651b0453ee0ebddebe",
+    ]),
+    reason: "The optional browser smoke loads Playwright from the developer's explicit "
+      + "PDF_TOOLS_PLAYWRIGHT_MODULE override or the installed playwright package.",
   }),
   Object.freeze({
     file: "scripts/eval-calibrate-docling-supervisor.mjs",

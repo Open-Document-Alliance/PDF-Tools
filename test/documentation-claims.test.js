@@ -206,7 +206,7 @@ describe("documentation capability claims", () => {
       expect(dependencyNames, relativePath).not.toContain("pdf-parse");
       expect(
         dependencyNames.some(name => /(?:^|[-_/])ocr(?:$|[-_/])/i.test(name)),
-        `${relativePath} must not silently add an OCR package while docs describe OCR as unshipped`,
+        `${relativePath} must not silently add an OCR package while docs state no OCR engine is bundled`,
       ).toBe(false);
     }
 
@@ -492,11 +492,11 @@ describe("documentation tool-count claims", () => {
     );
     const optionalStructuredNames = Object.keys(TOOL_OUTPUT_SCHEMAS)
       .filter(name => !sourceManifest.tools.some(tool => tool.name === name));
-    expect(optionalStructuredNames).toEqual(["propose_pdf_ocr"]);
+    expect(optionalStructuredNames).toEqual(["propose_pdf_ocr", "start_pdf_ocr_job", "resume_pdf_ocr_job", "read_pdf_ocr_job"]);
     expect(contract).toContain(
       `bringing an opted-in runtime to ${sourceToolCount + optionalStructuredNames.length} tools with ${Object.keys(TOOL_OUTPUT_SCHEMAS).length} output schemas`,
     );
-    expect(contract).toContain("It is absent from default discovery and both manifests.");
+    expect(contract).toContain("They are absent from default discovery and both manifests.");
 
     const packedToolNames = packedManifest.tools.map(tool => tool.name);
     const shipped = computeToolIdentifierBudget(DISPLAY_NAME_CANDIDATES.shipped, packedToolNames);

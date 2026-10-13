@@ -17,6 +17,12 @@ const SERVER = process.env.PDF_TOOLS_SERVER_PATH
   : path.join(SERVER_ROOT, "server", "index.js");
 const SERVER_SOURCE = SERVER;
 const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
+// This suite tests the current discovery contract across protocol eras. Keep
+// the exact names bound to the manifest instead of a separately maintained
+// count; full tool descriptions and schemas are still compared between eras.
+const EXPECTED_TOOL_NAMES = JSON.parse(
+  await fs.readFile(path.join(REPO_ROOT, "manifest.json"), "utf8"),
+).tools.map(tool => tool.name).sort();
 const LEGACY_VERSION = "2025-11-25";
 const MODERN_VERSION = "2026-07-28";
 const UI_EXTENSION = "io.modelcontextprotocol/ui";
@@ -269,7 +275,7 @@ describe("MCP v2 dual-era stdio", () => {
       assertNoModernResultFields(a.result);
       assertModernComplete(b.result, { cacheable: method.endsWith("/list") || method === "resources/read" });
       expect(stripModernCodecFields(b.result)).toEqual(a.result);
-      if (method === "tools/list") expect(a.result.tools).toHaveLength(59);
+      if (method === "tools/list") expect(a.result.tools.map(tool => tool.name).sort()).toEqual(EXPECTED_TOOL_NAMES);
     }
     for (const uri of [pathToPdfResourceUri(path.join(stateRoot, "missing.pdf")), pathToPdfResourceUri("/not-allowed.pdf")]) {
       for (const [server, request] of [[legacy, legacyRequest], [modern, modernRequest]]) {
@@ -370,7 +376,7 @@ describe("MCP v2 dual-era stdio", () => {
     await server.request(modernRequest("discover", "server/discover"));
     await legacyInitialize(server);
     const tools = await server.request(legacyRequest("tools", "tools/list"));
-    expect(tools.result.tools).toHaveLength(59);
+    expect(tools.result.tools.map(tool => tool.name).sort()).toEqual(EXPECTED_TOOL_NAMES);
     assertNoModernResultFields(tools.result);
     await server.close();
   });

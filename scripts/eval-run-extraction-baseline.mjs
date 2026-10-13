@@ -16,6 +16,7 @@ import {
   sha256,
 } from "../test/eval/extraction-manifest.js";
 import { scoreExtractionCase } from "../test/eval/extraction-scorer.js";
+import { captureChildCurrentRssReader, maximumRssOrUnavailable } from "./child-process-rss.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_MANIFEST = path.join(REPO_ROOT, "test", "fixtures", "eval", "extraction", "manifest.v1.json");
@@ -36,17 +37,6 @@ function clockMs() {
   return Number(process.hrtime.bigint()) / 1_000_000;
 }
 
-async function rssBytes(pid) {
-  if (!pid || process.platform !== "linux") return null;
-  try {
-    const status = await fs.readFile(`/proc/${pid}/status`, "utf8");
-    const match = status.match(/^VmRSS:\s+(\d+)\s+kB$/m);
-    return match ? Number(match[1]) * 1024 : null;
-  } catch {
-    return null;
-  }
-}
-
 async function withTimeout(operation, timeoutMs) {
   let timer;
   try {
@@ -61,17 +51,14 @@ async function withTimeout(operation, timeoutMs) {
   }
 }
 
-async function measuredCall(client, transport, request) {
+async function measuredCall(client, readRssBytes, request) {
   const started = clockMs();
-  let peakRss = await rssBytes(transport.pid);
-  let stopped = false;
-  const sampler = setInterval(async () => {
-    if (stopped) return;
-    const sample = await rssBytes(transport.pid);
-    if (sample !== null) peakRss = Math.max(peakRss ?? 0, sample);
-  }, 5);
+  let peakRss = maximumRssOrUnavailable([readRssBytes()]);
+  const sample = () => { peakRss = maximumRssOrUnavailable([peakRss, readRssBytes()]); };
+  const sampler = setInterval(sample, 5);
   try {
     const result = await withTimeout(client.callTool(request), TOOL_TIMEOUT_MS);
+    sample();
     const raw = canonicalJson(result);
     return {
       ok: result.isError !== true,
@@ -85,7 +72,6 @@ async function measuredCall(client, transport, request) {
       peak_rss_bytes: peakRss,
     };
   } finally {
-    stopped = true;
     clearInterval(sampler);
   }
 }
@@ -236,13 +222,13 @@ export function classifyCaseError(error, { handoffComplete }) {
   return "product_failure";
 }
 
-async function runCase({ fixture, fixturePath, client, transport, evaluationPolicy }) {
+async function runCase({ fixture, fixturePath, client, readRssBytes, evaluationPolicy }) {
   const sourceBytes = await fs.readFile(fixturePath);
   const beforeSha = sha256(sourceBytes);
   const calls = [];
   const started = clockMs();
 
-  const readPages = await measuredCall(client, transport, {
+  const readPages = await measuredCall(client, readRssBytes, {
     name: "read_pdf_pages",
     arguments: {
       pdf_path: fixturePath,
@@ -252,7 +238,7 @@ async function runCase({ fixture, fixturePath, client, transport, evaluationPoli
     },
   });
   calls.push(retainedCall("read_pdf_pages", readPages));
-  const readContent = await measuredCall(client, transport, {
+  const readContent = await measuredCall(client, readRssBytes, {
     name: "read_pdf_content",
     arguments: { pdf_path: fixturePath, max_pages: fixture.expected.page_geometry.length },
   });
@@ -260,7 +246,7 @@ async function runCase({ fixture, fixturePath, client, transport, evaluationPoli
     extraction_mode: readContent.result.structuredContent?.extraction_mode ?? null,
     extraction_status: readContent.result.structuredContent?.extraction_status ?? null,
   }));
-  const analysis = await measuredCall(client, transport, {
+  const analysis = await measuredCall(client, readRssBytes, {
     name: "get_page_analysis",
     arguments: { pdf_path: fixturePath },
   });
@@ -268,7 +254,7 @@ async function runCase({ fixture, fixturePath, client, transport, evaluationPoli
 
   const rasterPages = [];
   for (const expectedPage of fixture.expected.pages.filter(page => page.modality === "raster")) {
-    const rendered = await measuredCall(client, transport, {
+    const rendered = await measuredCall(client, readRssBytes, {
       name: "render_pdf_page",
       arguments: { pdf_path: fixturePath, page: expectedPage.page, max_dimension_px: 1200 },
     });
@@ -350,7 +336,7 @@ async function runCase({ fixture, fixturePath, client, transport, evaluationPoli
     metrics: scoreExtractionCase(fixture, observation, evaluationPolicy),
     resources: {
       latency_ms: Number((clockMs() - started).toFixed(3)),
-      peak_rss_bytes: calls.reduce((peak, call) => Math.max(peak ?? 0, call.peak_rss_bytes ?? 0), null),
+      peak_rss_bytes: maximumRssOrUnavailable(calls.map(call => call.peak_rss_bytes)),
     },
     privacy: {
       source_immutable: beforeSha === afterSha,
@@ -399,6 +385,7 @@ export async function runExtractionBaseline({
   let tools;
   try {
     await client.connect(transport);
+    const readRssBytes = captureChildCurrentRssReader(transport.pid);
     tools = await client.listTools();
     for (const fixture of loaded.manifest.fixtures) {
       try {
@@ -406,7 +393,7 @@ export async function runExtractionBaseline({
           fixture,
           fixturePath: resolveExtractionFixture(manifestPath, fixture),
           client,
-          transport,
+          readRssBytes,
           evaluationPolicy: loaded.manifest.evaluation_policy,
         }));
       } catch (error) {

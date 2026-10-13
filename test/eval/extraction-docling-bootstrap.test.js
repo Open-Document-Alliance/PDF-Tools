@@ -121,13 +121,17 @@ describe("Docling calibration-bootstrap bypass", () => {
         : value === "$OUT_OF_BAND_PROTECTED_ROOTS_JSON" ? handoff.protected_roots_json : value);
     const result = spawnSync(command[0], command.slice(1), {
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: process.env,
+      timeout: 10_000,
     });
     expect(result.status, result.stderr).toBe(0);
     const envelope = JSON.parse(result.stdout);
     expect(envelope.verified).toBe(true);
     expect(envelope.calibration_bootstrap).toBe(true);
     expect(envelope.qualifying).toBe(false);
-  });
+    // This verifies a retained snapshot through another Node process, not a
+    // product-latency contract. Allow bounded setup plus the bounded child on
+    // supported macOS hosts rather than the generic five-second unit budget.
+  }, 15_000);
 
   it("keeps the taint in the authority setup envelope by construction", async () => {
     // The setup action runs the full uv toolchain, which a unit bank cannot,

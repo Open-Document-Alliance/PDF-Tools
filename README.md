@@ -163,7 +163,7 @@ proposal. No signup tracking or analytics reporting is enabled by this work.
 - Inspect page-level details like orientation, text presence, images, and likely blank pages
 - Review source-bound page geometry, bounded metadata, form widgets, ordinary annotations, and file identity
 - Inspect exactly eight shallow catalog-level accessibility signals with explicit missing or unavailable states and required human review
-- Build a private schema-bound extraction workspace, cite source chunks, and retain exact, computed, ambiguous, not-found, or failed verification states without numeric confidence
+- Build a private schema-bound extraction workspace, cite source chunks, and retain exact, computed, ambiguous, unverified, or failed results without numeric confidence; absence declarations remain unverified and uncertain results allow append-only correction
 
 See [Verified extraction workspaces](docs/VERIFIED_EXTRACTION.md) for the
 complete lifecycle, supported methods, privacy boundary, and current limits.
@@ -173,8 +173,9 @@ text layer. If the selected `read_pdf_content` result contains no text, the tool
 may return a rendered image of page 1 for vision-capable host/model inspection.
 Page and region rendering produces raster images, not recognized text. A mixed
 text/raster PDF, or raster pages after page 1, may therefore contain content the
-broad text read does not recognize. Optional local OCR remains a planned
-improvement rather than a shipped capability.
+broad text read does not recognize. Optional local OCR adapters and resumable
+proposal jobs require a separately installed engine and explicit configuration;
+their output remains unverified until reviewed. See [Optional local OCR](docs/LOCAL_OCR.md).
 
 `get_pdf_info` binds these observations to the exact race-aware source
 SHA-256, keeps widget annotations separate from ordinary annotations, and
@@ -312,7 +313,13 @@ the `.mcpb` manifest that ordinary model workflows discover.
 - `read_extraction_chunk`
 - `submit_extraction_proposal`
 - `verify_extraction_proposal`
+- `verify_extraction_batch`
+- `review_extraction_workspace`
 - `delete_extraction_workspace`
+
+The [Evidence view](docs/EVIDENCE_REVIEW.md) connects extraction values to
+source text, page coverage, and correction history. Optional local OCR and
+resumable page jobs require [explicit adapter setup](docs/LOCAL_OCR.md).
 
 ### Active Document and Host Helpers
 

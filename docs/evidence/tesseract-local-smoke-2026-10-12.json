@@ -1,0 +1,28 @@
+{
+  "schema": "pdf-tools.local-ocr-smoke.v1",
+  "status": "passed",
+  "fixture": "generated-raster-invoice",
+  "platform": "linux",
+  "architecture": "x64",
+  "node": "v24.19.0",
+  "engine": {
+    "language": "eng",
+    "name": "tesseract",
+    "pillow_version": "12.3.0",
+    "pypdfium2_version": "5.13.0",
+    "tesseract_version": "tesseract 5.3.4"
+  },
+  "helper_sha256": "a66ec8fe3d77f846cabac126812425dfe5a6ed2b2b533bb863fdcf6e05c999c0",
+  "source_sha256": "98fabf68913fec19f642a32fe8ab7250603477e1bb6837eac2244d65da606b37",
+  "proposal_sha256": "ab6f7e946cf803ee587172004ae377d4e62e548137d53512dcfb22be1d0ee7cd",
+  "render_png_sha256": "224a1f423d752b755b8edc421e5aa82c12ff08a6e86d9f7b28f49abe404cf006",
+  "duration_ms": 755,
+  "checks": {
+    "invoice_id_recognized": true,
+    "total_recognized": true,
+    "source_unchanged": true,
+    "source_render_replayed": true,
+    "words_remain_unverified": true
+  },
+  "limitation": "One synthetic fixture; not general OCR accuracy or installed-host qualification."
+}

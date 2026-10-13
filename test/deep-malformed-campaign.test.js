@@ -16,9 +16,9 @@
  *      512 MiB inflate from 522 KiB of input.
  *
  * Point 4 is measured, not assumed. On Linux /proc/<pid>/status VmHWM reports
- * the true high-water mark of the child, so the assertion is against observed
- * peak RSS rather than a proxy. Where that file is unavailable the memory
- * assertion is skipped explicitly instead of silently passing.
+ * the true high-water mark of the identity-bound server, so the assertion is
+ * against observed peak RSS rather than a proxy. An unavailable measurement
+ * fails on Linux; only other platforms take the explicit unsupported branch.
  *
  * Cost control: the default run uses the quick corpus against the mutating
  * tools most likely to allocate. Set DEEP_FUZZ=1 for the full-scale corpus,
@@ -26,7 +26,6 @@
  */
 
 import fs from "node:fs/promises";
-import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
@@ -44,6 +43,7 @@ import {
   makeDeepMalformedFixture,
   makeDeepMalformedFixtures,
 } from "./helpers/deep-malformed-fixtures.js";
+import { captureChildPeakRssReader } from "../scripts/child-process-rss.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FULL_SCALE = process.env.DEEP_FUZZ === "1";
@@ -85,16 +85,6 @@ const PROBE_TOOLS = [
   },
 ];
 
-function readPeakRssBytes(pid) {
-  try {
-    const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
-    const match = status.match(/^VmHWM:\s+(\d+)\s+kB$/m);
-    return match ? Number(match[1]) * 1024 : null;
-  } catch {
-    return null;
-  }
-}
-
 // A client timeout does not guarantee cancellation of server-side work. The
 // observer must let the bounded parser stages settle before probing liveness;
 // these tests make no claim that cancellation prevents mutations or writes.
@@ -103,6 +93,7 @@ describe(`deep malformed campaign (${SCALE} scale)`, () => {
   let client;
   let transport;
   let serverPid;
+  let readPeakRssBytes;
   let serverClosedUnexpectedly = false;
   let closingTransport = false;
   let controlPdfPath;
@@ -143,6 +134,7 @@ describe(`deep malformed campaign (${SCALE} scale)`, () => {
     await client.connect(transport);
     serverPid = transport.pid;
     expect(serverPid).toEqual(expect.any(Number));
+    readPeakRssBytes = captureChildPeakRssReader(serverPid);
   }, 180_000);
 
   afterAll(async () => {
@@ -323,10 +315,10 @@ describe(`deep malformed campaign (${SCALE} scale)`, () => {
   }
 
   it("holds peak resident memory within bounds across the whole campaign", () => {
-    const peak = readPeakRssBytes(serverPid);
+    const peak = readPeakRssBytes();
     if (peak === null) {
       // Explicit rather than a silent pass on platforms without /proc.
-      expect(process.platform).not.toBe("linux");
+      expect(process.platform, "The server's identity-bound VmHWM measurement is unavailable").not.toBe("linux");
       return;
     }
     expect(

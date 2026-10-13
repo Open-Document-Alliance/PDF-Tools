@@ -66,7 +66,12 @@ function makeFakeFetch({ body, contentType = "application/pdf", status = 200, st
         return null;
       },
     },
-    arrayBuffer: async () => body ? body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) : new ArrayBuffer(0),
+    body: new ReadableStream({
+      start(controller) {
+        if (body?.length) controller.enqueue(new Uint8Array(body));
+        controller.close();
+      },
+    }),
   });
 }
 
@@ -853,7 +858,9 @@ function makeRedirectFetch(redirects) {
           return null;
         },
       },
-      arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+      body: new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(body)); controller.close(); },
+      }),
     };
   };
 }

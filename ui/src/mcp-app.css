@@ -19,6 +19,31 @@
   --shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 
+.evidence-panel { flex: 0 0 360px; width: 360px; min-width: 250px; max-width: 45%; overflow-y: auto; flex-direction: column; gap: 12px; padding: 18px; border-left: 1px solid var(--border-color); background: var(--bg-primary); font-size: 12px; line-height: 1.5; }
+.evidence-panel h2 { font-size: 17px; }
+.evidence-panel h3 { font-size: 13px; overflow-wrap: anywhere; }
+.evidence-panel button { border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 6px 9px; color: var(--text-primary); background: var(--bg-secondary); cursor: pointer; font: inherit; text-align: left; }
+.evidence-panel button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.evidence-panel button:disabled { cursor: default; opacity: .55; }
+.evidence-panel pre, .evidence-identity p { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; user-select: text; }
+.evidence-panel pre { padding: 8px; background: var(--bg-secondary); border-radius: var(--radius-sm); font-size: 12px; }
+.evidence-identity summary { cursor: pointer; }
+.evidence-identity p, .evidence-count, .evidence-boundary { font-size: 11px; color: var(--text-secondary); }
+.evidence-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.evidence-list { display: flex; flex-direction: column; gap: 12px; }
+.evidence-item { padding: 12px 0; border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 7px; }
+.evidence-warning { color: var(--warning); }
+.evidence-settled { color: var(--success); }
+.evidence-citation { border-left: 3px solid var(--accent); padding-left: 9px; overflow-wrap: anywhere; }
+.evidence-citation blockquote { white-space: pre-wrap; user-select: text; margin-bottom: 6px; }
+.evidence-status { color: var(--text-secondary); }
+.evidence-summary { font-weight: 600; }
+.text-layer .evidence-citation-highlight { background: rgba(255, 190, 20, .38); outline: 1px solid rgba(190, 120, 0, .75); }
+@media (max-width: 620px) {
+  .viewer-body:has(.evidence-panel[style*="flex"]) { flex-direction: column; }
+  .evidence-panel { flex: 1 1 45%; width: 100%; max-width: none; min-height: 180px; border-left: 0; border-top: 1px solid var(--border-color); }
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv";
 import { generateExtractionFixtures } from "../../scripts/eval-generate-extraction-fixtures.mjs";
 import {
@@ -11,6 +11,7 @@ import {
   verifyExtractionReport,
 } from "../../scripts/eval-run-extraction-baseline.mjs";
 import {
+  canonicalJson,
   loadExtractionManifest,
   resolveExtractionFixture,
   sha256,
@@ -35,6 +36,34 @@ afterEach(async () => {
 });
 
 describe("structured extraction Phase 0", () => {
+  it("preserves the v1 report contract and scores when current RSS measurements are unavailable", async () => {
+    const [historical, schema, loaded] = await Promise.all([
+      fs.readFile(path.join(REPO_ROOT, "docs", "evidence", "extraction-phase0-current-product.v1.json"), "utf8").then(JSON.parse),
+      fs.readFile(REPORT_SCHEMA_PATH, "utf8").then(JSON.parse),
+      loadExtractionManifest(MANIFEST_PATH, MANIFEST_SCHEMA_PATH),
+    ]);
+    const validate = new AjvJsonSchemaValidator().getValidator(schema);
+    const verify = report => verifyExtractionReport(report, {
+      manifest: loaded.manifest,
+      manifestSha256: loaded.manifest_sha256,
+      schemaSha256: loaded.schema_sha256,
+    });
+    expect(validate(historical).valid).toBe(true);
+    expect(verify(historical)).toBe(true);
+    const current = structuredClone(historical);
+    for (const item of current.cases) {
+      for (const call of item.calls) call.peak_rss_bytes = null;
+      item.resources.peak_rss_bytes = null;
+      item.bindings.raw_result_sha256 = sha256(Buffer.from(canonicalJson(item.calls)));
+    }
+    expect(validate(current).valid).toBe(true);
+    expect(verify(current)).toBe(true);
+    expect(current.report_schema_version).toBe(1);
+    expect(current.denominator).toEqual(historical.denominator);
+    expect(current.aggregate_metrics).toEqual(historical.aggregate_metrics);
+    expect(current.cases.map(item => item.metrics)).toEqual(historical.cases.map(item => item.metrics));
+  });
+
   it("validates eight exact licensed and private-safe fixture contracts", async () => {
     const { manifest } = await loadExtractionManifest(MANIFEST_PATH, MANIFEST_SCHEMA_PATH);
     expect(manifest.fixtures).toHaveLength(8);
@@ -235,87 +264,97 @@ describe("structured extraction Phase 0", () => {
     expect(scoreExtractionCase(fixture, outOfBounds, manifest.evaluation_policy).evidence_bbox.numerator).toBe(0);
   });
 
-  it("retains the full attempted denominator and counts unavailable required extraction as product failure", async () => {
-    const output = path.join(await temporaryDirectory(), "report.json");
-    const report = await runExtractionBaseline({
-      manifestPath: MANIFEST_PATH,
-      manifestSchemaPath: MANIFEST_SCHEMA_PATH,
-      reportSchemaPath: REPORT_SCHEMA_PATH,
-      outputPath: output,
-    });
-    expect(report.benchmark_claim_ready).toBe(false);
-    expect(report.calibration_claim_ready).toBe(false);
-    expect(report.denominator).toMatchObject({
-      planned: 8,
-      attempted: 8,
-      completed: 0,
-      product_failures: 8,
-      product_timeouts: 0,
-      invalid_outputs: 0,
-      harness_failures: 0,
-    });
-    expect(report.cases).toHaveLength(8);
-    expect(report.cases.every(item => item.outcome === "product_failure")).toBe(true);
-    expect(report.aggregate_metrics.ocr).toMatchObject({
-      applicable_cases: 3,
-      measured_cases: 0,
-      unavailable_cases: 3,
-      scored_cases: 3,
-      mean_score_over_applicable: 0,
-    });
-    expect(report.aggregate_metrics.raster_render).toMatchObject({
-      applicable_cases: 3,
-      measured_cases: 3,
-      mean_score_over_applicable: 1,
-    });
-    expect(report.aggregate_metrics.table_topology.unavailable_cases).toBe(1);
-    expect(report.aggregate_metrics.field_correctness.unavailable_cases).toBe(8);
-    expect(report.aggregate_metrics.evidence_fact).toMatchObject({
-      applicable_cases: 8,
-      measured_cases: 0,
-      unavailable_cases: 8,
-      mean_score_over_applicable: 0,
-    });
-  }, 30_000);
+  describe("live baseline report", () => {
+    let liveReport;
 
-  it("rejects case, binding, denominator, readiness, and aggregate report tampering", async () => {
-    const report = await runExtractionBaseline({
-      manifestPath: MANIFEST_PATH,
-      manifestSchemaPath: MANIFEST_SCHEMA_PATH,
-      reportSchemaPath: REPORT_SCHEMA_PATH,
-    });
-    const loaded = await loadExtractionManifest(MANIFEST_PATH, MANIFEST_SCHEMA_PATH);
-    const verify = mutant => verifyExtractionReport(mutant, {
-      manifest: loaded.manifest,
-      manifestSha256: loaded.manifest_sha256,
-      schemaSha256: loaded.schema_sha256,
-    });
-    expect(verify(report)).toBe(true);
-    const mutants = [
-      value => { value.cases.pop(); },
-      value => { [value.cases[0], value.cases[1]] = [value.cases[1], value.cases[0]]; },
-      value => { value.cases[0].source.sha256 = "0".repeat(64); },
-      value => { value.cases[0].calls[0].result_sha256 = "0".repeat(64); },
-      value => { value.cases[0].bindings.page_result_sha256 = "0".repeat(64); },
-      value => { value.cases[0].category = "table"; },
-      value => { value.cases[0].partition = "held_out_calibration"; },
-      value => { value.cases[0].source.independent_geometry[0].media_box.width = 611; },
-      value => { value.cases[0].source.observed_geometry[0].width = 611; },
-      value => { value.cases[0].bindings.evidence_ids.pop(); },
-      value => { value.benchmark_claim_ready = true; },
-      value => { value.denominator.attempted = 7; },
-      value => { value.aggregate_metrics.ocr.measured_cases = 1; },
-      value => { value.aggregate_metrics.evidence_page.mean_score_over_applicable = 1; },
-      value => {
-        value.cases[4].metrics.evidence_page.numerator = 1;
-        value.cases[4].metrics.evidence_page.score = 1;
-        value.aggregate_metrics.evidence_page.mean_score_over_applicable += 0.125;
-      },
-    ];
-    for (const mutate of mutants) {
-      const mutant = structuredClone(report);
-      mutate(mutant);
-      expect(() => verify(mutant)).toThrow();
-    }
-  }, 30_000);
+    // Both consumers inspect the same live eight-fixture run. Keeping setup in
+    // this suite also runs it when either consumer is selected on its own.
+    beforeAll(async () => {
+      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-extraction-live-test-"));
+      try {
+        liveReport = await runExtractionBaseline({
+          manifestPath: MANIFEST_PATH,
+          manifestSchemaPath: MANIFEST_SCHEMA_PATH,
+          reportSchemaPath: REPORT_SCHEMA_PATH,
+          outputPath: path.join(directory, "report.json"),
+        });
+      } finally {
+        await fs.rm(directory, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it("retains the full attempted denominator and counts unavailable required extraction as product failure", async () => {
+      const report = structuredClone(liveReport);
+      expect(report.benchmark_claim_ready).toBe(false);
+      expect(report.calibration_claim_ready).toBe(false);
+      expect(report.denominator).toMatchObject({
+        planned: 8,
+        attempted: 8,
+        completed: 0,
+        product_failures: 8,
+        product_timeouts: 0,
+        invalid_outputs: 0,
+        harness_failures: 0,
+      });
+      expect(report.cases).toHaveLength(8);
+      expect(report.cases.every(item => item.outcome === "product_failure")).toBe(true);
+      expect(report.aggregate_metrics.ocr).toMatchObject({
+        applicable_cases: 3,
+        measured_cases: 0,
+        unavailable_cases: 3,
+        scored_cases: 3,
+        mean_score_over_applicable: 0,
+      });
+      expect(report.aggregate_metrics.raster_render).toMatchObject({
+        applicable_cases: 3,
+        measured_cases: 3,
+        mean_score_over_applicable: 1,
+      });
+      expect(report.aggregate_metrics.table_topology.unavailable_cases).toBe(1);
+      expect(report.aggregate_metrics.field_correctness.unavailable_cases).toBe(8);
+      expect(report.aggregate_metrics.evidence_fact).toMatchObject({
+        applicable_cases: 8,
+        measured_cases: 0,
+        unavailable_cases: 8,
+        mean_score_over_applicable: 0,
+      });
+    }, 30_000);
+
+    it("rejects case, binding, denominator, readiness, and aggregate report tampering", async () => {
+      const report = structuredClone(liveReport);
+      const loaded = await loadExtractionManifest(MANIFEST_PATH, MANIFEST_SCHEMA_PATH);
+      const verify = mutant => verifyExtractionReport(mutant, {
+        manifest: loaded.manifest,
+        manifestSha256: loaded.manifest_sha256,
+        schemaSha256: loaded.schema_sha256,
+      });
+      expect(verify(report)).toBe(true);
+      const mutants = [
+        value => { value.cases.pop(); },
+        value => { [value.cases[0], value.cases[1]] = [value.cases[1], value.cases[0]]; },
+        value => { value.cases[0].source.sha256 = "0".repeat(64); },
+        value => { value.cases[0].calls[0].result_sha256 = "0".repeat(64); },
+        value => { value.cases[0].bindings.page_result_sha256 = "0".repeat(64); },
+        value => { value.cases[0].category = "table"; },
+        value => { value.cases[0].partition = "held_out_calibration"; },
+        value => { value.cases[0].source.independent_geometry[0].media_box.width = 611; },
+        value => { value.cases[0].source.observed_geometry[0].width = 611; },
+        value => { value.cases[0].bindings.evidence_ids.pop(); },
+        value => { value.benchmark_claim_ready = true; },
+        value => { value.denominator.attempted = 7; },
+        value => { value.aggregate_metrics.ocr.measured_cases = 1; },
+        value => { value.aggregate_metrics.evidence_page.mean_score_over_applicable = 1; },
+        value => {
+          value.cases[4].metrics.evidence_page.numerator = 1;
+          value.cases[4].metrics.evidence_page.score = 1;
+          value.aggregate_metrics.evidence_page.mean_score_over_applicable += 0.125;
+        },
+      ];
+      for (const mutate of mutants) {
+        const mutant = structuredClone(report);
+        mutate(mutant);
+        expect(() => verify(mutant)).toThrow();
+      }
+    }, 30_000);
+  });
 });

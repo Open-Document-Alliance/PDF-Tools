@@ -5,6 +5,8 @@ import { constants as fsConstants } from "fs";
 import path from "path";
 import { homedir } from "os";
 import { createHash, randomUUID } from "crypto";
+import { isIP } from "node:net";
+import { fetchPdfDownloadResponse, isBlockedDownloadAddress } from "./download-transport.js";
 import {
   EncryptedPDFError,
   PDFArray,
@@ -3863,15 +3865,8 @@ export function isPrivateHost(hostname) {
   const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (h === "localhost" || h === "::1" || h === "0.0.0.0") return true;
   if (h.endsWith(".localhost") || h.endsWith(".local")) return true;
-  const ipv4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4) {
-    const [a, b] = ipv4.slice(1).map(Number);
-    if (a === 10 || a === 127 || a === 0) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-  }
-  if (h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80:")) return true;
+  const family = isIP(h);
+  if (family) return isBlockedDownloadAddress(h, family);
   return false;
 }
 
@@ -3887,6 +3882,9 @@ function validateFetchTarget(urlString, allowPrivateHosts) {
   if (!["http:", "https:"].includes(parsed.protocol)) {
     throw new Error(`Only http and https URLs are supported (got ${parsed.protocol}).`);
   }
+  if (parsed.username || parsed.password) {
+    throw new Error("URLs with embedded credentials are not supported.");
+  }
   if (!allowPrivateHosts && isPrivateHost(parsed.hostname)) {
     throw new Error(
       `Refusing to download from private/loopback host "${parsed.hostname}". ` +
@@ -3896,10 +3894,92 @@ function validateFetchTarget(urlString, allowPrivateHosts) {
   return parsed;
 }
 
-// Download a PDF from a URL to a local file.
-// Returns { path, bytes, contentType, sourceUrl, finalUrl, redirectHops }.
-// Rejects: non-http(s), private hosts (unless allowPrivateHosts), non-PDF content, oversize,
-// redirects to private hosts (each redirect is re-validated — prevents redirect-based SSRF).
+function pdfDownloadAbortError(cancelled) {
+  const error = new Error(cancelled
+    ? "PDF download was cancelled."
+    : "PDF download exceeded its time limit.");
+  error.code = cancelled ? "PDF_DOWNLOAD_CANCELLED" : "PDF_DOWNLOAD_TIMEOUT";
+  return error;
+}
+
+function createPdfDownloadBudget(timeoutMs, sourceSignal) {
+  const controller = new AbortController();
+  const cancel = () => controller.abort(pdfDownloadAbortError(true));
+  if (sourceSignal?.aborted) cancel();
+  else sourceSignal?.addEventListener("abort", cancel, { once: true });
+  const timer = setTimeout(() => controller.abort(pdfDownloadAbortError(false)), timeoutMs);
+  return {
+    signal: controller.signal,
+    close() {
+      clearTimeout(timer);
+      sourceSignal?.removeEventListener("abort", cancel);
+    },
+  };
+}
+
+function awaitPdfDownload(promise, signal) {
+  if (signal.aborted) {
+    void Promise.resolve(promise).catch(() => {});
+    return Promise.reject(signal.reason);
+  }
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    Promise.resolve(promise).then(resolve, reject)
+      .finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+function disposePdfDownloadResponse(response) {
+  try { response?.dispose?.(); } catch {}
+  if (response?.body && !response.body.locked) {
+    try { void response.body.cancel().catch(() => {}); } catch {}
+  }
+}
+
+async function readBoundedPdfDownload(response, maxBytes, maxSizeMb, signal) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("PDF download did not provide a readable response stream.");
+  const chunks = [];
+  let total = 0;
+  let block = null;
+  let blockUsed = 0;
+  try {
+    for (;;) {
+      signal.throwIfAborted();
+      const { done, value } = await awaitPdfDownload(reader.read(), signal);
+      if (done) break;
+      if (!(value instanceof Uint8Array)) throw new Error("PDF download returned invalid response bytes.");
+      if (value.byteLength > maxBytes - total) {
+        throw new Error(`PDF exceeds ${maxSizeMb} MB limit.`);
+      }
+      total += value.byteLength;
+      // Coalesce small transport chunks into bounded blocks. A list entry per
+      // byte would let a slow producer grow bookkeeping far beyond the byte cap.
+      let offset = 0;
+      while (offset < value.byteLength) {
+        if (block === null || blockUsed === block.length) {
+          block = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes));
+          blockUsed = 0;
+          chunks.push(block);
+        }
+        const copied = Math.min(value.byteLength - offset, block.length - blockUsed);
+        block.set(value.subarray(offset, offset + copied), blockUsed);
+        blockUsed += copied;
+        offset += copied;
+      }
+    }
+    signal.throwIfAborted();
+    return Buffer.concat(chunks, total);
+  } finally {
+    // Cancellation must not wait for an unresponsive producer to acknowledge it.
+    try { void reader.cancel().catch(() => {}); } catch {}
+    reader.releaseLock();
+  }
+}
+
+// Download a PDF to a local file. One network deadline spans DNS, every redirect
+// and decoded body reads; the existing atomic writer owns publication afterward.
 export async function downloadPdfFromUrl(url, {
   filename = null,
   destinationDir = null,
@@ -3909,64 +3989,86 @@ export async function downloadPdfFromUrl(url, {
   headers = {},
   allowPrivateHosts = false,
   maxRedirects = 5,
-  fetchFn = fetch,
+  timeoutMs = 30_000,
+  signal = null,
+  fetchFn = fetchPdfDownloadResponse,
   assertPathAllowed = async () => {},
 } = {}) {
-  // Initial validation — defends against the naive SSRF case.
-  validateFetchTarget(url, allowPrivateHosts);
-
-  // Manual redirect loop — re-validates each hop so a public URL cannot 302
-  // to a private host (AWS metadata endpoint, localhost, RFC1918, etc.).
-  let currentUrl = url;
-  let response;
+  const initialUrl = validateFetchTarget(url, allowPrivateHosts);
+  const maxBytes = Math.floor(maxSizeMb * 1024 * 1024);
+  if (typeof maxSizeMb !== "number" || !Number.isFinite(maxSizeMb)
+    || maxBytes < 1 || !Number.isSafeInteger(maxBytes)) {
+    throw new Error("maxSizeMb must specify a positive, finite byte limit.");
+  }
+  if (typeof allowPrivateHosts !== "boolean") {
+    throw new Error("allowPrivateHosts must be a boolean.");
+  }
+  if (!Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 20) {
+    throw new Error("maxRedirects must be an integer from 0 to 20.");
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000) {
+    throw new Error("timeoutMs must be an integer from 1 to 300000.");
+  }
+  let requestHeaders = Object.fromEntries(new Headers(headers));
+  const budget = createPdfDownloadBudget(timeoutMs, signal);
+  let currentUrl = initialUrl.toString();
   let hops = 0;
-  while (true) {
-    let parsed;
-    try {
-      response = await fetchFn(currentUrl, { headers, redirect: "manual" });
-    } catch (err) {
-      parsed = new URL(currentUrl);
-      throw new Error(`Could not reach ${parsed.hostname}: ${err.message}`);
+  let contentType;
+  let buffer;
+  try {
+    for (;;) {
+      budget.signal.throwIfAborted();
+      let response;
+      try {
+        let pending;
+        try {
+          pending = Promise.resolve(fetchFn(currentUrl, {
+            headers: requestHeaders,
+            redirect: "manual",
+            signal: budget.signal,
+            allowPrivateHosts,
+          }));
+          // A test/transport may resolve after the deadline. Close that response
+          // too, without reviving the timed-out operation or creating an output.
+          pending.then(late => {
+            if (budget.signal.aborted) disposePdfDownloadResponse(late);
+          }, () => {});
+          response = await awaitPdfDownload(pending, budget.signal);
+        } catch (error) {
+          if (budget.signal.aborted) throw budget.signal.reason;
+          throw new Error(`Could not reach ${new URL(currentUrl).hostname}: ${error.message}`);
+        }
+        const status = response.status;
+        if ([301, 302, 303, 307, 308].includes(status)) {
+          if (hops >= maxRedirects) throw new Error(`Too many redirects (>${maxRedirects}) starting from ${url}.`);
+          const location = response.headers.get("location");
+          if (!location) throw new Error(`HTTP ${status} redirect from ${currentUrl} with no Location header.`);
+          const previousUrl = new URL(currentUrl);
+          const nextUrl = validateFetchTarget(new URL(location, previousUrl).toString(), allowPrivateHosts);
+          if (previousUrl.protocol === "https:" && nextUrl.protocol !== "https:") {
+            throw new Error("Refusing an HTTPS-to-HTTP download redirect.");
+          }
+          // Treat all caller-supplied headers as origin-bound, including custom
+          // service headers. Once dropped, never reintroduce them on later hops.
+          if (nextUrl.origin !== previousUrl.origin) requestHeaders = {};
+          currentUrl = nextUrl.toString();
+          hops++;
+          continue;
+        }
+        if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText} from ${currentUrl}`);
+        contentType = response.headers.get("content-type") || "";
+        const length = response.headers.get("content-length");
+        if (length !== null && /^\d+$/.test(length) && Number(length) > maxBytes) {
+          throw new Error(`PDF exceeds ${maxSizeMb} MB limit. Increase max_size_mb to override.`);
+        }
+        buffer = await readBoundedPdfDownload(response, maxBytes, maxSizeMb, budget.signal);
+        break;
+      } finally {
+        disposePdfDownloadResponse(response);
+      }
     }
-    const status = response.status;
-    const isRedirect = [301, 302, 303, 307, 308].includes(status);
-    if (!isRedirect) break;
-
-    if (hops >= maxRedirects) {
-      throw new Error(`Too many redirects (>${maxRedirects}) starting from ${url}.`);
-    }
-    const location = response.headers.get("location");
-    if (!location) {
-      throw new Error(`HTTP ${status} redirect from ${currentUrl} with no Location header.`);
-    }
-    // Resolve relative Location against current URL; absolute URLs pass through.
-    const nextUrl = new URL(location, currentUrl).toString();
-    // Re-validate the target of every hop — blocks redirect-based SSRF.
-    validateFetchTarget(nextUrl, allowPrivateHosts);
-    currentUrl = nextUrl;
-    hops++;
-  }
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} ${response.statusText} from ${currentUrl}`);
-  }
-
-  const contentType = response.headers.get("content-type") || "";
-  const contentLengthHeader = response.headers.get("content-length");
-  const advertisedLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : 0;
-  const maxBytes = maxSizeMb * 1024 * 1024;
-  if (advertisedLength && advertisedLength > maxBytes) {
-    throw new Error(
-      `PDF is ${(advertisedLength / 1048576).toFixed(1)} MB, exceeds ${maxSizeMb} MB limit. ` +
-      `Increase max_size_mb to override.`
-    );
-  }
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  if (buffer.length > maxBytes) {
-    throw new Error(
-      `PDF is ${(buffer.length / 1048576).toFixed(1)} MB, exceeds ${maxSizeMb} MB limit.`
-    );
+  } finally {
+    budget.close();
   }
 
   const magic = buffer.subarray(0, 5).toString("ascii");

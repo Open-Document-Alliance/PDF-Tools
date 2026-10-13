@@ -39,6 +39,7 @@ import {
   assertParsedXfaMutationAllowed,
   stampSignatureOnPage,
   stampTextOnPage,
+  validatePdfFormFields,
 } from "./helpers.js";
 import {
   AccessibilityInspectionError,
@@ -46,7 +47,9 @@ import {
   validateAccessibilityInspectionResult,
 } from "./accessibility-inspection.js";
 import {
+  decryptPdfForRead,
   decryptPdfForWrite,
+  ENCRYPTED_READ_OPERATIONS,
   ENCRYPTED_WRITE_OPERATIONS,
   mergeProtectionRefusal,
   reprotectPdfAfterWrite,
@@ -136,6 +139,15 @@ const BOUNDED_INSPECTION_FILTERS = new Set([
   "LZWDecode",
   "RunLengthDecode",
 ]);
+export const PDF_LIB_READ_ONLY_OPERATIONS = new Set([
+  "inspect_pdf_accessibility",
+  "inspect_pdf_form",
+  "inspect_import_pdf",
+  "read_pdf_fields",
+  "validate_pdf",
+  "extract_to_csv",
+]);
+
 const OPERATIONS = new Set([
   "add_signature_field",
   "apply_page_plan",
@@ -145,6 +157,11 @@ const OPERATIONS = new Set([
   "fill_pdf",
   "fill_with_profile",
   "inspect_pdf_accessibility",
+  "inspect_pdf_form",
+  "inspect_import_pdf",
+  "read_pdf_fields",
+  "validate_pdf",
+  "extract_to_csv",
   "merge_pdfs",
   "prepare_signing_packet",
   "reorder_pdf_pages",
@@ -155,6 +172,11 @@ const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
   ["fill_with_profile", ["field_data"]],
   ["inspect_pdf_accessibility", []],
+  ["inspect_pdf_form", []],
+  ["inspect_import_pdf", []],
+  ["read_pdf_fields", []],
+  ["validate_pdf", []],
+  ["extract_to_csv", []],
   ["bulk_fill_from_csv", ["records"]],
   ["merge_pdfs", []],
   ["split_pdf", ["page_ranges"]],
@@ -238,8 +260,8 @@ function validateRequest(request) {
       && (typeof request.password !== "string" || request.password.length < 1 || request.password.length > 4096)) {
     throw new TypeError("password is invalid.");
   }
-  if (request.operation === "inspect_pdf_accessibility" && request.password !== null) {
-    throw new TypeError("inspect_pdf_accessibility does not accept a password.");
+  if (["inspect_pdf_accessibility", "inspect_pdf_form", "inspect_import_pdf"].includes(request.operation) && request.password !== null) {
+    throw new TypeError(`${request.operation} does not accept a password.`);
   }
   if (typeof request.force_xfa !== "boolean") {
     throw new TypeError("force_xfa must be a boolean.");
@@ -2097,7 +2119,74 @@ async function inspectAccessibilitySource(bytes, binding) {
   }));
 }
 
-function formInfo(document) {
+// Every parser call, object traversal and field accessor for read-only form
+// inspection stays inside the bounded worker. Decrypted bytes never cross the
+// worker boundary or touch disk, and are zeroed on success and all failures.
+async function inspectFormSource(bytes, binding, operation, password) {
+  let plaintext = null;
+  try {
+    const load = async input => {
+      try {
+        assertBoundedPdfStructure(input);
+        await assertBoundedPdfStreamDecodes(input);
+        const document = await PDFDocument.load(input, { updateMetadata: false });
+        assertSafeParsedPdfDecodeChains(document);
+        assertSafeParsedPdfComplexity(document);
+        validatePageTree(document);
+        return document;
+      } catch (error) {
+        if (error?.code === RESOURCE_CODE) throw error;
+        if (error?.message?.includes("password") || error?.message?.includes("encrypt")) {
+          throw new Error(PDF_LIB_ENCRYPTED_MESSAGE);
+        }
+        throw new Error("Failed to load PDF: the file is malformed, incomplete, or unsupported.", { cause: error });
+      }
+    };
+    let document;
+    try {
+      document = operation === "inspect_import_pdf"
+        ? await loadPdfForMutation(bytes, null)
+        : await load(bytes);
+    } catch (error) {
+      if (error?.message?.includes("password") || error?.message?.includes("encrypt")) {
+        if (!Object.hasOwn(ENCRYPTED_READ_OPERATIONS, operation)) throw new Error(PDF_LIB_ENCRYPTED_MESSAGE);
+        plaintext = await decryptPdfForRead(bytes, password, operation);
+        document = await load(plaintext.plaintext);
+      } else {
+        throw error;
+      }
+    }
+    const result = {
+      source: { canonical_path: binding.canonical_path, size_bytes: binding.size_bytes, sha256: binding.sha256 },
+      total_pages: document.getPageCount(),
+    };
+    if (operation === "validate_pdf") {
+      result.validation = validatePdfFormFields(document.getForm().getFields(), {
+        pdfPath: binding.canonical_path, fileName: path.basename(binding.canonical_path),
+      });
+    } else if (operation === "extract_to_csv") {
+      result.csv_fields = document.getForm().getFields().map(field => {
+        const name = field.getName();
+        let value = "";
+        try {
+          if (field.constructor.name.includes("TextField")) value = field.getText() || "";
+          else if (field.constructor.name.includes("CheckBox")) value = field.isChecked() ? "yes" : "no";
+          else if (field.constructor.name.includes("RadioGroup") || field.constructor.name.includes("Dropdown")) {
+            value = field.getSelected() || "";
+          }
+        } catch {}
+        return { name, value };
+      });
+    } else {
+      result.form_info = formInfo(document, { strict: operation === "read_pdf_fields" });
+    }
+    return result;
+  } finally {
+    plaintext?.release();
+  }
+}
+
+function formInfo(document, { strict = false } = {}) {
   try {
     const fields = document.getForm().getFields().map(field => {
       let type = "unknown";
@@ -2117,7 +2206,8 @@ function formInfo(document) {
       return { name: field.getName(), type, options, currentValue };
     });
     return { fields, fieldCount: fields.length, hasFormFields: fields.length > 0 };
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     return { fields: [], fieldCount: 0, hasFormFields: false };
   }
 }
@@ -2306,6 +2396,8 @@ async function execute(request, protection) {
   let result = {};
   if (request.operation === "inspect_pdf_accessibility") {
     result = await inspectAccessibilitySource(sourceBytes[0], request.sources[0]);
+  } else if (["inspect_pdf_form", "inspect_import_pdf", "read_pdf_fields", "validate_pdf", "extract_to_csv"].includes(request.operation)) {
+    result = await inspectFormSource(sourceBytes[0], request.sources[0], request.operation, request.password);
   } else if (["fill_pdf", "fill_with_profile"].includes(request.operation)) {
     const document = await loadMutationSource(protection, sourceBytes[0]);
     const expectedPageCount = document.getPageCount();
@@ -2538,10 +2630,10 @@ async function execute(request, protection) {
       "Prepared signing packet exceeds the 250 MiB provider-neutral receipt limit.",
     );
   }
-  if (request.operation === "inspect_pdf_accessibility" && outputs.length !== 0) {
+  if (PDF_LIB_READ_ONLY_OPERATIONS.has(request.operation) && outputs.length !== 0) {
     throw new TypeError("Read-only inspection cannot stage output.");
   }
-  if (request.operation !== "inspect_pdf_accessibility" && outputs.length < 1) {
+  if (!PDF_LIB_READ_ONLY_OPERATIONS.has(request.operation) && outputs.length < 1) {
     throw new TypeError("Mutation operations must stage at least one output.");
   }
   return { outputs, result };
@@ -2614,7 +2706,7 @@ export async function executePdfLibOperationRequest(request) {
 }
 
 export async function executePdfLibMutationRequest(request) {
-  if (request?.operation === "inspect_pdf_accessibility") {
+  if (PDF_LIB_READ_ONLY_OPERATIONS.has(request?.operation)) {
     throw new TypeError("Read-only inspection is not a mutation request.");
   }
   return executePdfLibOperationRequest(request);
