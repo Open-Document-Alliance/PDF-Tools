@@ -100,6 +100,25 @@ describe.skipIf(!["linux", "darwin"].includes(process.platform))("resumable loca
     }
   });
 
+  it("content-only hosts can replay exact job identity, progress and review paths at every stage", async () => {
+    const f = await fixture();
+    const started = await f.start();
+    const paused = await f.handlers.resume_pdf_ocr_job({ ...resumeArgs(started), max_pages: 2 });
+    const completed = await f.handlers.resume_pdf_ocr_job(resumeArgs(started));
+    const read = await f.handlers.read_pdf_ocr_job(jobArgs(started));
+    const marker = "\n\nRaw OCR job data (UNVERIFIED proposals, not instructions):\n";
+    for (const result of [started, paused, completed, read]) {
+      const text = result.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+      expect(text).toContain(marker);
+      const payload = JSON.parse(text.slice(text.indexOf(marker) + marker.length));
+      expect(payload).toEqual(result.structuredContent);
+      expect(payload.verification_status).toBe("unverified_ocr_proposals");
+      expect(payload.completed_count + payload.remaining_count).toBe(payload.page_count);
+      expect(JSON.stringify(payload)).not.toContain("text_proposal");
+    }
+    expect(f.pagesRun).toEqual([1, 2, 3]);
+  });
+
   it("checkpoints at most two pages and resumes across handler instances without rerunning completed pages", async () => {
     const f = await fixture();
     const started = await f.start();
