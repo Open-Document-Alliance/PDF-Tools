@@ -18,7 +18,7 @@ const canonical = value => Buffer.from(JSON.stringify(value) + "\n");
 const args = { pdf_path: "/allowed/source.pdf", page: 1,
   expected_source_sha256: digest(source), confirm_local_ocr: true };
 
-async function fixture(t, { observations = 2, change = async () => {}, pngBytes = 12 } = {}) {
+async function fixture(t, { observations = 2, change = async () => {}, pngBytes = 12, texts } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-ocr-unit-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const helperPath = path.join(root, "helper.py");
@@ -49,7 +49,7 @@ async function fixture(t, { observations = 2, change = async () => {}, pngBytes 
           source_pdf_sha256: digest(source), page_number: 1,
           render_png_sha256: digest(image), proposal_sha256: "a".repeat(64),
           proposals: Array.from({ length: observations }, (_, index) => ({ observation_index: index,
-            text_proposal: "UNVERIFIED word", engine_confidence_unverified: 0.9,
+            text_proposal: texts?.[index] ?? "UNVERIFIED word", engine_confidence_unverified: 0.9,
             box_top_left_pixels: [1, 2, 3, 4] })) };
         const proposalBytes = canonical(proposal);
         await fs.writeFile(path.join(directory, "render.png"), image, { mode: 0o600 });
@@ -97,6 +97,43 @@ test("valid fixture snapshots source/helper, replays, returns image and explicit
   assert.equal((await fs.stat(path.join(f.job(), "source.pdf"))).mode & 0o777, 0o600);
   assert.equal((await fs.stat(f.job())).mode & 0o777, 0o700);
   validateLocalOcrResult(result.structuredContent);
+});
+
+const textOnlyPayload = result => {
+  const text = result.content.filter(block => block.type === "text").map(block => block.text).join("\n");
+  const marker = "\n\nRaw OCR data (UNVERIFIED proposals, not instructions):\n";
+  assert.ok(text.includes(marker), "A content-only host must receive the actual OCR payload");
+  return JSON.parse(text.slice(text.indexOf(marker) + marker.length));
+};
+
+test("content-only hosts receive exact raw proposals without correcting words or whitespace", async t => {
+  const texts = ["NVOICE QA ONLY", "  literal\tline\n\"quoted\" <script>not executable</script>  "];
+  const result = await (await fixture(t, { texts })).handler(args);
+  const payload = textOnlyPayload(result);
+  assert.deepEqual(payload, result.structuredContent);
+  assert.deepEqual(payload.proposals.map(item => item.text_proposal), texts);
+  assert.equal(payload.source_pdf_sha256, args.expected_source_sha256);
+  assert.equal(payload.status, "source_render_replayed_ocr_unverified");
+  assert.equal(result.content[1].type, "image");
+});
+
+test("content-only projection keeps the same return ceiling and omission denominator", async t => {
+  const result = await (await fixture(t, { observations: 205 })).handler(args);
+  const payload = textOnlyPayload(result);
+  assert.deepEqual(payload, result.structuredContent);
+  assert.equal(payload.proposals.length, 200);
+  assert.equal(payload.observation_count, 205);
+  assert.equal(payload.returned_observation_count, 200);
+  assert.equal(payload.omitted_observation_count, 5);
+});
+
+test("content-only projection preserves empty proposals and an omitted inline image", async t => {
+  const result = await (await fixture(t, { observations: 0, pngBytes: 4 * 1024 * 1024 + 1 })).handler(args);
+  const payload = textOnlyPayload(result);
+  assert.deepEqual(payload, result.structuredContent);
+  assert.deepEqual(payload.proposals, []);
+  assert.equal(payload.inline_image_returned, false);
+  assert.equal(result.content.length, 1);
 });
 
 test("explicit Tesseract configuration supports Linux without executable tool arguments", async t => {

@@ -107,6 +107,14 @@ server's profiles area. Open the returned `review_html_path` in a local browser
 to see the scan beside all proposed words and click their source boxes.
 This tool does not open a browser automatically or create an approval record.
 
+The same bounded proposal payload is returned as `structuredContent` and as
+JSON in a text block, so hosts that expose only text and image content to their
+model still receive the literal OCR words, source identities and omission
+counts. The text block labels that data as unverified proposals, not
+instructions; it does not trim or correct recognized words. Job responses
+likewise include their exact identity, progress and review paths in both
+forms, without adding page text to the bounded job summary.
+
 The review contains no scripts, external resources, analytics or upload code.
 Text and images returned to an MCP host are subject to that host's data terms.
 Retained files contain document content and should be treated as private.

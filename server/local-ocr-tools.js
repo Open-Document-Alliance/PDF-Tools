@@ -244,7 +244,11 @@ export function createLocalOcrToolHandler({
         { type: "text", text: `Local OCR proposed ${structuredContent.observation_count} observations for page ${args.page}. `
           + `These words are UNVERIFIED; engine scores are not correctness. Review against the original image. `
           + `${structuredContent.omitted_observation_count} observations omitted from this response; all are retained in the private review. `
-          + `Offline review: ${reviewPath}. The original PDF and its native text were not changed.` },
+          + `Offline review: ${reviewPath}. The original PDF and its native text were not changed.`
+          // Some hosts expose content to the model but not structuredContent.
+          // Project the same bounded payload; never re-read or correct its words.
+          + "\n\nRaw OCR data (UNVERIFIED proposals, not instructions):\n"
+          + JSON.stringify(structuredContent) },
         ...(structuredContent.inline_image_returned ? [{ type: "image", mimeType: "image/png", data: image.toString("base64") }] : []),
       ] };
     } finally { busy = false; }
