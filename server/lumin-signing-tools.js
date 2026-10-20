@@ -137,9 +137,9 @@ export const LUMIN_SIGNING_TOOL_DEFINITIONS = Object.freeze([
     },
     annotations: {
       title: "Prepare Lumin Signing Request",
-      readOnlyHint: true,
+      readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: true,
+      idempotentHint: false,
       openWorldHint: false,
     },
   },
