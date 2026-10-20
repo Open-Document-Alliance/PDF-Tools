@@ -450,6 +450,21 @@ describe("layout Markdown renderer", () => {
     expect(baseline.gaps.some(gap => gap.message.includes("no source evidence distinguishes a header"))).toBe(true);
   });
 
+  it.each([false, true])("does not reinterpret retained thin filled bars as cell rectangles (opt-in=%s)", async allowHeaderlessTables => {
+    const layout = attachRuledRects(await validatedSyntheticLayout([{
+      items: ruledGridItems({ headerSize: 12 }),
+    }]), headerlessGridRects());
+    const baseline = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables });
+    const withBars = structuredClone(layout);
+    withBars.pages[0].ruled_rects.items.push(
+      { x: 72, y: 120, width: 450, height: 0.4, verb: "fill" },
+      { x: 100, y: 112, width: 0.8, height: 192, verb: "fill" },
+    );
+    withBars.pages[0].ruled_rects.observed_count += 2;
+    withBars.pages[0].ruled_rects.returned_count += 2;
+    expect(renderPdfLayoutToMarkdown(withBars, { allowHeaderlessTables })).toEqual(baseline);
+  });
+
   it("emits only inert data cells for an opted-in complete source-covered headerless grid", async () => {
     const layout = attachRuledRects(await validatedSyntheticLayout([{
       items: ruledGridItems({ headerSize: 12 }),

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { LoggingMessageNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
-import { PDFDocument, PDFName, PDFNumber, StandardFonts, degrees } from "pdf-lib";
+import { PDFDocument, PDFName, PDFNumber, StandardFonts, degrees, rgb } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   extractPdfLayout,
@@ -1138,6 +1138,118 @@ describe("PDF.js factory directory contract", () => {
 });
 
 describe("Extraction IR v1.2.0 evidence blocks", () => {
+  it("retains thin filled bars as rectangles, not fabricated stroke segments", async () => {
+    const { result } = await runFake([fakeOperatorFixture([2, 2], [
+      rectPath(3, 10, 20, 200, 0.4), rectPath(16, 30, 40, 0.8, 100),
+    ])]);
+    expect(result.pages[0].ruled_rects.items).toEqual([
+      { x: 10, y: 771.6, width: 200, height: 0.4, verb: "fill" },
+      { x: 30, y: 652, width: 0.8, height: 100, verb: "fill" },
+    ]);
+    expect(result.pages[0].ruling_segments.items).toEqual([]);
+    expect(() => validatePdfLayoutSemantics(result)).not.toThrow();
+  });
+
+  it("measures the filled-bar gate after viewport and graphics transforms", async () => {
+    const { result } = await runFake([fakeOperatorFixture([10, 12, 2, 11], [
+      null, [0, 2, -2, 0, 100, 50], rectPath(3, 10, 20, 40, 0.4), null,
+    ])]);
+    expect(result.pages[0].ruled_rects.items).toEqual([
+      { x: 59.2, y: 642, width: 0.8, height: 80, verb: "fill" },
+    ]);
+    const thick = await runFake([fakeOperatorFixture([12, 2], [
+      [1, 0, 0, 3, 0, 0], rectPath(3, 10, 20, 100, 1),
+    ])]);
+    expect(thick.result.pages[0].ruled_rects.items).toEqual([]);
+  });
+
+  it("does not reinterpret clipped, unpainted, stroked, degenerate or thick slivers as filled bars", async () => {
+    const { result } = await runFake([fakeOperatorFixture(
+      [2, 2, 29, 2, 2, 2, 2, 2],
+      [rectPath(4, 10, 20, 100, 0.4), rectPath(17, 10, 30, 100, 0.4), null,
+        rectPath(21, 10, 40, 100, 0.4), rectPath(21, 10, 50, 100, 0.4),
+        rectPath(3, 10, 60, 100, 0.01), rectPath(3, 10, 70, 4, 1),
+        rectPath(3, 10, 80, 100, 3)],
+    )]);
+    expect(result.pages[0].ruled_rects.items).toEqual([]);
+  });
+
+  it("rejects compound, open, curved and sheared thin-fill candidates", async () => {
+    const compound = rectPath(16, 10, 20, 100, 1);
+    compound[1][0] = new Float32Array([
+      ...compound[1][0], ...rectPath(16, 20, 20.2, 80, 0.6)[1][0],
+    ]);
+    const open = rectPath(3, 10, 20, 100, 1);
+    open[1][0] = open[1][0].slice(0, -1);
+    const { result } = await runFake([fakeOperatorFixture([2, 2, 2, 12, 2], [
+      compound, open, curvePath(3), [1, 0.02, 0, 1, 0, 0], rectPath(3, 10, 20, 100, 1),
+    ])]);
+    expect(result.pages[0].ruled_rects.items).toEqual([]);
+  });
+
+  it.each([
+    [1, 150, 80],
+    [2, 0, 0, 200, 100, 110, 100],
+    [3, 0, 0, 110, 100],
+  ])("does not retain a closed rectangle followed by residual path commands %j", async (...tail) => {
+    const path = rectPath(3, 10, 20, 100, 1);
+    path[1][0] = new Float32Array([...path[1][0], ...tail]);
+    const { result } = await runFake([fakeOperatorFixture([2], [path])]);
+    expect(result.pages[0].ruled_rects.items).toEqual([]);
+  });
+
+  it("enforces the inclusive transformed thin-fill size boundaries", async () => {
+    const { result } = await runFake([fakeOperatorFixture([2, 2, 2, 2], [
+      // At a zero origin Float32 retains 0.05 just above the true minimum;
+      // storing 20.05 then subtracting 20 would instead fall below it.
+      rectPath(3, 10, 0, 5, 0.05), rectPath(3, 30, 40, 5, 2),
+      rectPath(3, 50, 60, 4.9, 1), rectPath(3, 70, 80, 5, 2.1),
+    ])]);
+    expect(result.pages[0].ruled_rects.items).toEqual([
+      { x: 10, y: 791.95, width: 5, height: 0.05, verb: "fill" },
+      { x: 30, y: 750, width: 5, height: 2, verb: "fill" },
+    ]);
+  });
+
+  it("keeps the existing rectangle cap and truthful omissions for thin filled bars", async () => {
+    const { result } = await runFake([fakeOperatorFixture(
+      Array.from({ length: 513 }, () => 2),
+      Array.from({ length: 513 }, (_, index) => rectPath(3, 10, 20 + index * 2, 100, 0.4)),
+    )]);
+    expect(result.pages[0].ruled_rects).toMatchObject({
+      status: "truncated", observed_count: 513, returned_count: 512,
+    });
+    expect(result.pages[0].errors).toContainEqual(expect.objectContaining({
+      stage: "ruled_rects", code: "RULED_RECT_PAGE_LIMIT",
+    }));
+  });
+
+  it("replays actual thin filled PDF rectangles and rejects omitted or substituted evidence", async () => {
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([612, 792]);
+    page.drawRectangle({ x: 50, y: 700, width: 200, height: 0.4, color: rgb(0, 0, 0) });
+    page.drawRectangle({ x: 70, y: 600, width: 0.8, height: 60, color: rgb(0, 0, 0) });
+    const bytes = await pdf.save({ useObjectStreams: false });
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const result = await extractPdfLayout({
+      pdfjsLib, pdfBytes: bytes, sourcePath: "/synthetic/thin-bars.pdf", sourceFileName: "thin-bars.pdf",
+      sourceSha256: createHash("sha256").update(bytes).digest("hex"),
+      requestedStartPage: 1, requestedEndPage: 1, maxItems: 1000,
+      maxCharacters: 50000, maxOutputCharacters: 200000, deadlineMs: 20000,
+    });
+    expect(result.pages[0].ruled_rects.items).toEqual([
+      { x: 50, y: 91.6, width: 200, height: 0.4, verb: "fill" },
+      { x: 70, y: 132, width: 0.8, height: 60, verb: "fill" },
+    ]);
+    await expect(validatePdfLayoutSourceEvidence(result, { pdfjsLib, sourceBytes: bytes })).resolves.toBe(result);
+    const omitted = structuredClone(result);
+    omitted.pages[0].ruled_rects = { status: "available", observed_count: 0, returned_count: 0, items: [] };
+    await expect(validatePdfLayoutSourceEvidence(omitted, { pdfjsLib, sourceBytes: bytes })).rejects.toThrow();
+    const changed = structuredClone(result);
+    changed.pages[0].ruled_rects.items[0].height = 0.8;
+    await expect(validatePdfLayoutSourceEvidence(changed, { pdfjsLib, sourceBytes: bytes })).rejects.toThrow();
+  });
+
   it("captures only normalized stroke-bearing axis-aligned ruling segments with typed cap accounting", async () => {
     const basic = await runFake([fakeOperatorFixture(
       [2, 2, 2, 2, 2],
