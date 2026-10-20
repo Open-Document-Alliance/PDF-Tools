@@ -7168,6 +7168,9 @@ async function handleToolCall(request) {
           };
         } catch (error) {
           const publicError = publicPdfObservationError(error);
+          if (["PASSWORD_REQUIRED", "PASSWORD_INCORRECT"].includes(publicError.code)) {
+            publicError.message = PDFJS_NO_PASSWORD_ARGUMENT_MESSAGE;
+          }
           return createTypedToolError(publicError);
         }
       }
@@ -8081,6 +8084,7 @@ async function handleToolCall(request) {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
+    error = passwordlessReadError(error);
     let errorCode = error?.code === "path_policy_denied"
       ? "path_policy_denied"
       : "tool_execution_failed";

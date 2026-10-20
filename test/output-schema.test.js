@@ -82,10 +82,13 @@ const STRUCTURED_TOOLS = [
   "verify_table_proposal",
 ].sort();
 const TEXT_ONLY_TOOLS = [
+  "get_pdf_unlock_status",
   "list_pdfs",
   "list_profiles",
   "load_profile",
+  "lock_pdf",
   "save_profile",
+  "unlock_pdf",
 ].sort();
 
 function collectKeys(value, output = new Set()) {
@@ -173,7 +176,7 @@ describe("output schema definitions", () => {
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(STRUCTURED_TOOLS).toHaveLength(61);
-    expect(TEXT_ONLY_TOOLS).toHaveLength(4);
+    expect(TEXT_ONLY_TOOLS).toHaveLength(7);
   });
 
   it("preserves stable Lumin failure codes in structured errors", () => {
