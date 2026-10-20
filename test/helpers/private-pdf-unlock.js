@@ -43,7 +43,10 @@ export async function createPrivatePdfUnlockHarness(directory) {
       assert.notEqual(opened.isError, true, "unlock_pdf must open the private entry surface");
       let captured;
       for (let count = 0; count < 100; count += 1) {
-        try { captured = await fs.readFile(capture, "utf8"); break; }
+        try {
+          captured = await fs.readFile(capture, "utf8");
+          if (captured) break;
+        }
         catch (error) { if (error.code !== "ENOENT") throw error; }
         await delay(20);
       }
@@ -68,6 +71,8 @@ export async function createPrivatePdfUnlockHarness(directory) {
       }
       const status = await call(client, "get_pdf_unlock_status", { pdf_path: pdfPath });
       assert.notEqual(status.isError, true);
+      const state = JSON.parse(status.content.filter(entry => entry.type === "text").map(entry => entry.text).join("\n"));
+      assert.equal(state.status, accepted ? "unlocked" : "awaiting_password");
       for (const value of responses) assert.ok(!value.includes(password), "MCP response leaked a synthetic password");
       return { response, body, status };
     },
