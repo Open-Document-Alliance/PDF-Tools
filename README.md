@@ -251,12 +251,15 @@ that same view and reports raw pixels unavailable.
 
 ## Core Tools
 
-This list is complete: it names every tool the server registers. One of them,
-`read_pdf_bytes`, is available only to the in-app viewer and is not packed into
+This list is complete for default discovery. Three tools, `read_pdf_bytes`,
+`open_pdf_workspace`, and `import_host_pdf`, are app-only and are not packed into
 the `.mcpb` manifest that ordinary model workflows discover.
 
 ### Viewer and Reading
 
+- `unlock_pdf` (opens private local password entry, outside chat)
+- `get_pdf_unlock_status` (checks the current session's unlock state)
+- `lock_pdf` (forgets the current session's credential)
 - `display_pdf`
 - `fetch_pdf_from_url`
 - `list_pdfs`
