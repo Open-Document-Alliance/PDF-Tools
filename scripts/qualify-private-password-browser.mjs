@@ -30,6 +30,7 @@ const transport = new StdioClientTransport({ command: process.execPath, args: [s
 const logs = [];
 transport.stderr.on("data", chunk => logs.push(chunk.toString()));
 const client = new Client({ name: "private-password-browser-qualification", version: "1" });
+let phase = "connect";
 try {
   await client.connect(transport);
   const before = await harness.call(client, "get_pdf_info", { pdf_path: fixture });
@@ -43,17 +44,22 @@ try {
   }
   assert.ok(url);
   const capability = new URL(url).hash.slice(1);
+  phase = "open_private_page";
   run("batch", `open ${url}`, "wait --text 'Enter this document'", "snapshot -i");
   assert.ok(!run("get", "url").includes(capability), "page must remove its capability from history");
+  phase = "wrong_password";
   run("batch", `fill '#password' '${provenance.passwords.wrong_password_oracle}'`, "click '#unlock'",
     "wait --text 'could not be unlocked'");
   assert.equal(JSON.parse((await harness.call(client, "get_pdf_unlock_status", { pdf_path: fixture })).content[0].text).status, "awaiting_password");
+  phase = "valid_password";
   run("batch", `fill '#password' '${provenance.passwords.user}'`, "click '#unlock'",
     "wait --text 'Document unlocked'");
   const unlocked = await harness.call(client, "get_pdf_info", { pdf_path: fixture });
+  phase = "source_and_input_check";
   assert.notEqual(unlocked.isError, true);
   assert.equal(unlocked.structuredContent.source.sha256, provenance.encrypted_fixture.sha256);
   assert.equal(run("get", "value", "#password").trim(), "");
+  phase = "visible_lock";
   run("batch", "click '#lock'", "wait --text 'Document locked'");
   const locked = await harness.call(client, "get_pdf_info", { pdf_path: fixture });
   assert.equal(locked.structuredContent.error.code, "PASSWORD_REQUIRED");
@@ -66,7 +72,7 @@ try {
     limitation: "Isolated browser and real MCP server; platform opener substituted by test harness, not a native Claude or ChatGPT host acceptance run." }));
 } catch (error) {
   // A browser CLI error can carry the URL or synthetic credential in argv.
-  console.error(`Private password browser qualification failed: ${error?.code ?? error?.name ?? "unknown"}.`);
+  console.error(`Private password browser qualification failed at ${phase}: ${error?.code ?? error?.name ?? "unknown"}.`);
   process.exitCode = 1;
 } finally {
   try { run("close"); } catch {}

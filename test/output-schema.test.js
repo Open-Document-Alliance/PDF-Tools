@@ -264,6 +264,16 @@ describe("output schema definitions", () => {
       isError: true,
     };
     expect(validateStructuredToolResult("get_active_document", toolError)).toBe(toolError);
+    const legacyPasswordError = {
+      content: [{ type: "text", text: "Use unlock_pdf for private password entry." }],
+      structuredContent: { status: "failed", error: {
+        error_schema_version: 1, code: "PRIVATE_PDF_PASSWORD_ARGUMENT_FORBIDDEN",
+      } },
+      isError: true,
+    };
+    for (const tool of ["fill_pdf", "get_pdf_info", "read_pdf_layout", "compare_pdfs", "unlock_pdf"]) {
+      expect(validateStructuredToolResult(tool, legacyPasswordError)).toBe(legacyPasswordError);
+    }
 
     const malformedToolError = validateStructuredToolResult("get_active_document", {
       content: [{ type: "text", text: "Error: malformed" }],

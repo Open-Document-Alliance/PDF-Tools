@@ -407,7 +407,7 @@ describe("compare_pdfs deterministic product", () => {
      * and this tool takes two, so the refusal says so by name.
      */
     const unknownText = unknown.content?.map(part => part.text ?? "").join("\n") ?? "";
-    expect(unknownText).toContain("Passwords are never tool arguments");
+    expect(unknownText).toContain("Passwords are never accepted in tool arguments");
     expect(unknownText).toContain("absolute");
     // Naming the accepted arguments is safe — they are in the published input
     // schema. Naming the caller's own rejected key is not, and never happens.

@@ -308,8 +308,13 @@ Use these stage semantics:
   report `CONTENT_UNAVAILABLE_PASSWORD_REQUIRED`, plan no tools, and list the
   failed PDF content-read tool as prohibited under the current decision.
   Do not retry it or substitute another password-dependent content read.
-  Reconsider content reads only in a new planning turn after the password is
-  supplied.
+  Offer unlock_pdf so the user can enter the password in its private local
+  window. Never ask for a password in chat or pass password, before_password,
+  or after_password as a tool argument. Reconsider content reads after
+  get_pdf_unlock_status reports unlocked. Use lock_pdf to clear session access;
+  access also expires after ten minutes or when the source changes. A schema
+  label such as pdf_password in a planning record means missing private access,
+  never a request to collect the credential in the record.
 
 Use these record boundaries:
 
