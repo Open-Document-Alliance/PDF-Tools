@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { PDFDocument } from "pdf-lib";
 import { PDF_LIB_ENCRYPTED_MESSAGE } from "../server/helpers.js";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 import {
   createTestTempDirectory,
   removeTestTempDirectory,
@@ -661,6 +662,7 @@ describe.each(RUNTIMES)("$name malformed PDF containment", ({ root }) => {
   let serverPid;
   let toolsWithOutputSchema;
   let discoveredMutatingPdfTools;
+  let unlock;
 
   beforeAll(async () => {
     stateRoot = await createTestTempDirectory(REPO_ROOT, "malformed-pdfs");
@@ -678,11 +680,13 @@ describe.each(RUNTIMES)("$name malformed PDF containment", ({ root }) => {
     serverClosedUnexpectedly = false;
     serverErrors = [];
     closingTransport = false;
+    unlock = await createPrivatePdfUnlockHarness(stateRoot);
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(root, "server", "index.js")],
       cwd: root,
       env: {
+        ...unlock.env,
         ALLOWED_DIRECTORIES: stateRoot,
         DEFAULT_PDF_DIR: stateRoot,
         DEFAULT_DOWNLOAD_DIR: stateRoot,
@@ -826,16 +830,20 @@ describe.each(RUNTIMES)("$name malformed PDF containment", ({ root }) => {
       "definitely-wrong-layout-password",
       "oda-layout-user-2026",
     ]) {
+      if (password === undefined) await unlock.lock(client, encryptedPath);
+      else await unlock.enter(client, encryptedPath, password, {
+        accepted: password === "oda-layout-user-2026",
+      });
+      const outputPath = path.join(
+        stateRoot,
+        `encrypted-${password === undefined ? "missing" : sha256(password).slice(0, 8)}.pdf`,
+      );
       const result = await callToolBounded(client, {
         name: "fill_pdf",
         arguments: {
           pdf_path: encryptedPath,
-          output_path: path.join(
-            stateRoot,
-            `encrypted-${password === undefined ? "missing" : sha256(password).slice(0, 8)}.pdf`,
-          ),
+          output_path: outputPath,
           field_data: {},
-          ...(password === undefined ? {} : { password }),
         },
       });
       // fill_pdf decrypts now, and restores the document's protection before
@@ -846,9 +854,11 @@ describe.each(RUNTIMES)("$name malformed PDF containment", ({ root }) => {
       const text = result.content?.[0]?.text ?? "";
       if (password === "oda-layout-user-2026") {
         expect(result.isError, "correct password").not.toBe(true);
+        expect((await fs.readFile(outputPath)).toString("latin1")).toContain("/Encrypt");
       } else {
         expect(result.isError, "missing or wrong password").toBe(true);
         expect(text).not.toBe(`Error: ${PDF_LIB_ENCRYPTED_MESSAGE}`);
+        await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
       }
       if (password !== undefined) {
         expect(text, "must never echo the password").not.toContain(password);

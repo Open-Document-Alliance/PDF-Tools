@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { PDFDocument, PDFName } from "pdf-lib";
 import { createTestTempDirectory, removeTestTempDirectory } from "./helpers/temp-directory.js";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(__dirname, "..");
@@ -34,6 +35,7 @@ function textFromToolResult(result) {
 describe("detect_signature_zones tool result", () => {
   let client;
   let transport;
+  let unlock;
 
   beforeAll(async () => {
     TMP_DIR = await createTestTempDirectory(REPO_ROOT, "detect-zones-tool");
@@ -57,12 +59,14 @@ describe("detect_signature_zones tool result", () => {
     unresolvedWidgetPdfPath = path.join(TMP_DIR, "unresolved-widget.pdf");
     await fs.writeFile(unresolvedWidgetPdfPath, await unresolvedDocument.save(), { mode: 0o600 });
 
+    unlock = await createPrivatePdfUnlockHarness(TMP_DIR);
     client = new Client({ name: "pdf-tools-detect-zones-tool-test-client", version: "1.0.0" });
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server", "index.js")],
       cwd: REPO_ROOT,
       env: {
+        ...unlock.env,
         ALLOWED_DIRECTORIES: `${TMP_DIR}${path.delimiter}${REPO_ROOT}`,
         DEFAULT_PROFILES_DIR: path.join(TMP_DIR, "profiles"),
       },
@@ -144,9 +148,10 @@ describe("detect_signature_zones tool result", () => {
       encryptedProvenance.passwords.user,
       encryptedProvenance.passwords.owner,
     ]) {
+      await unlock.enter(client, encryptedPdfPath, password);
       const result = await client.callTool({
         name: "detect_signature_zones",
-        arguments: { pdf_path: encryptedPdfPath, password },
+        arguments: { pdf_path: encryptedPdfPath },
       });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toMatchObject({
@@ -167,25 +172,21 @@ describe("detect_signature_zones tool result", () => {
     }
   }, 30_000);
 
-  it("returns typed, non-leaking errors for missing and incorrect encrypted-PDF passwords", async () => {
-    const cases = [
-      [undefined, "PASSWORD_REQUIRED"],
-      [encryptedProvenance.passwords.wrong_password_oracle, "PASSWORD_INCORRECT"],
-    ];
-    for (const [password, code] of cases) {
+  it("returns a typed locked result after missing or rejected private entry", async () => {
+    for (const password of [undefined, encryptedProvenance.passwords.wrong_password_oracle]) {
+      if (password === undefined) await unlock.lock(client, encryptedPdfPath);
+      else await unlock.enter(client, encryptedPdfPath, password, { accepted: false });
       const result = await client.callTool({
         name: "detect_signature_zones",
-        arguments: {
-          pdf_path: encryptedPdfPath,
-          ...(password ? { password } : {}),
-        },
+        arguments: { pdf_path: encryptedPdfPath },
       });
       expect(result.isError).toBe(true);
       expect(result.structuredContent).toEqual({
         status: "failed",
-        error: { error_schema_version: 1, code },
+        error: { error_schema_version: 1, code: "PASSWORD_REQUIRED" },
       });
       const text = textFromToolResult(result);
+      expect(text).toContain("unlock_pdf");
       if (password) expect(text).not.toContain(password);
     }
   }, 30_000);
