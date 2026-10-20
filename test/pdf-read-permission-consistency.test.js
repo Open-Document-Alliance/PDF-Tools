@@ -347,11 +347,11 @@ async function preparePrivateReadContext(document, privatePassword) {
   }
 }
 
-async function observe(name, document, { privatePassword, ...extras } = { tag: "" }) {
+async function observe(name, document, { privatePassword, privateContextPrepared = false, ...extras } = { tag: "" }) {
   const build = READ_CALL_RECIPES[name];
   let result;
   try {
-    await preparePrivateReadContext(document, privatePassword);
+    if (!privateContextPrepared) await preparePrivateReadContext(document, privatePassword);
     result = await client.callTool({ name, arguments: await build(document, extras) });
   } catch (error) {
     return { outcome: "transport-error", detail: String(error?.message ?? error).slice(0, 80) };
@@ -558,10 +558,18 @@ describe("every tool that reads a document treats /P the same way", () => {
   it("never leaves a caller worse off for supplying the owner password", async () => {
     const family = await readFamily();
     const downgraded = [];
+    const withoutOwner = new Map();
+    // Group the two contexts so this matrix does not open dozens of browser
+    // windows or exhaust the production entry rate limit. Every read in each
+    // pass still reaches the real MCP tool with its exact document binding.
     for (const name of family) {
-      const without = await observe(name, fixturePaths.extractDenied, { tag: "-nopw" });
+      withoutOwner.set(name, await observe(name, fixturePaths.extractDenied, { tag: "-nopw" }));
+    }
+    await preparePrivateReadContext(fixturePaths.extractDenied, OWNER_PASSWORD);
+    for (const name of family) {
+      const without = withoutOwner.get(name);
       const withOwner = await observe(
-        name, fixturePaths.extractDenied, { tag: "-ownerpw", privatePassword: OWNER_PASSWORD },
+        name, fixturePaths.extractDenied, { tag: "-ownerpw", privateContextPrepared: true },
       );
       if (without.outcome === "allowed" && withOwner.outcome !== "allowed") {
         downgraded.push({ name, without, withOwner });
