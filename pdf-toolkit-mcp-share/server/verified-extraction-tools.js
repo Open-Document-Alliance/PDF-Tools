@@ -210,7 +210,6 @@ export const VERIFIED_EXTRACTION_TOOL_DEFINITIONS = Object.freeze([
       additionalProperties: false,
       properties: {
         pdf_path: { type: "string" },
-        password: { type: "string" },
         workspace_id: { type: "string", pattern: "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$" },
         schema: { type: "object" },
         max_pages: { type: "integer", minimum: 1, maximum: 200 },
@@ -266,7 +265,6 @@ export const VERIFIED_EXTRACTION_TOOL_DEFINITIONS = Object.freeze([
       additionalProperties: false,
       properties: {
         pdf_path: { type: "string" },
-        password: { type: "string" },
         workspace_id: { type: "string" },
         workspace_identity_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         chunk_id: { type: "string", pattern: "^chunk\\.[a-f0-9]{64}$" },
@@ -305,7 +303,6 @@ export const VERIFIED_EXTRACTION_TOOL_DEFINITIONS = Object.freeze([
       additionalProperties: false,
       properties: {
         pdf_path: { type: "string" },
-        password: { type: "string" },
         workspace_id: { type: "string" },
         workspace_identity_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         proposal_generation_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
@@ -334,7 +331,6 @@ export const VERIFIED_EXTRACTION_TOOL_DEFINITIONS = Object.freeze([
       type: "object", additionalProperties: false,
       properties: {
         pdf_path: { type: "string" },
-        password: { type: "string" },
         workspace_id: { type: "string" },
         workspace_identity_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
         parent_generation_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },

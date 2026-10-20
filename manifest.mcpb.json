@@ -50,6 +50,9 @@
   ],
   "icon": "icon.png",
   "tools": [
+    { "name": "unlock_pdf", "description": "Open private local PDF password entry outside chat" },
+    { "name": "get_pdf_unlock_status", "description": "Check this document's private session access" },
+    { "name": "lock_pdf", "description": "Clear this document's private in-memory password" },
     {
       "name": "display_pdf",
       "description": "Display an interactive PDF viewer with search, navigation, zoom, and form field detection"

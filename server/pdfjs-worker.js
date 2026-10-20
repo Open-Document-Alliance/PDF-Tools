@@ -2204,7 +2204,7 @@ function passwordError(error, pdfjs) {
   if (error?.name !== "PasswordException" || !pdfjs?.PasswordResponses) return null;
   if (error.code === pdfjs.PasswordResponses.NEED_PASSWORD) {
     const mapped = new Error(
-      "This PDF requires a password. Provide it with the password parameter and try again.",
+      "This PDF requires a password. Use unlock_pdf and enter it in the private local window, then retry. Never put passwords in chat or tool arguments.",
     );
     mapped.code = "PASSWORD_REQUIRED";
     return mapped;

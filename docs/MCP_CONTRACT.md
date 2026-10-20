@@ -33,7 +33,7 @@ template discovery is also unsupported and deterministically returns JSON-RPC
 
 ### Tools
 
-The runtime returns 61 uniquely named tools. Every tool has an object input
+The runtime returns 64 uniquely named tools. Every tool has an object input
 schema plus `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, and
 `openWorldHint` annotations. Annotations are user-interface hints, never an
 authorization boundary; path allowlists and signature-intent checks remain the
@@ -42,7 +42,7 @@ every tool in both runtime copies. The handler evidence and classification
 rules are recorded in
 [`TOOL_ANNOTATION_AUDIT_2026-07-21.md`](TOOL_ANNOTATION_AUDIT_2026-07-21.md).
 
-The source manifest lists all 61 tools. The packed MCPB manifest lists the 58
+The source manifest lists all 64 tools. The packed MCPB manifest lists the 61
 normal model-workflow tools and omits `read_pdf_bytes`, `open_pdf_workspace`
 and `import_host_pdf`, whose runtime metadata marks them `ui.visibility: ["app"]`.
 `tools_generated: true` explicitly tells MCPB hosts that runtime discovery
@@ -81,7 +81,7 @@ error branches where required.
 
 The separately configured optional `propose_pdf_ocr`, `start_pdf_ocr_job`,
 `resume_pdf_ocr_job`, and `read_pdf_ocr_job` tools add four structured handlers,
-bringing an opted-in runtime to 65 tools with 61 output schemas.
+bringing an opted-in runtime to 68 tools with 61 output schemas.
 They are absent from default discovery and both manifests. No OCR engine is bundled;
 see [Optional OCR setup and limitations](LOCAL_OCR.md).
 
@@ -123,7 +123,7 @@ exact-output-identity preconditions. New evaluation suites must bind v3
 explicitly. The grader selects the allowlisted contract and trust registry
 declared by each suite, so historical evidence remains valid under its original
 stack and is not silently rescored. The six existing trajectory jobs do not
-constitute behavioral trajectory coverage of all 61 tools.
+constitute behavioral trajectory coverage of all 64 tools.
 `get_pdf_identity` is covered by its contract, handler, filesystem-race, and
 agent-workflow tests rather than by those six retained jobs.
 

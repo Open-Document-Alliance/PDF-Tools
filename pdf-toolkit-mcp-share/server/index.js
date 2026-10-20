@@ -91,11 +91,12 @@ import {
 import {
   PDF_LIB_MUTATION_TOOL_NAMES,
   forceTerminateAllPdfLibMutations,
-  runPdfLibInspection,
+  runPdfLibInspection as runIsolatedPdfLibInspection,
   inspectHostPdfBytes,
-  runPdfLibMutation,
+  runPdfLibMutation as runIsolatedPdfLibMutation,
   terminateAllPdfLibMutations,
 } from "./pdf-lib-subprocess.js";
+import { createPrivatePdfCredentials } from "./private-pdf-credentials.js";
 import {
   VERIFIED_EXTRACTION_TOOL_DEFINITIONS,
   createVerifiedExtractionToolHandler,
@@ -1818,6 +1819,41 @@ async function bindPdfLibInspectionSource(resolvedPath) {
   return bindPdfjsSubprocessSource(resolvedPath);
 }
 
+// Credentials only enter through the local user window. Dispatch uses the
+// actual source envelope that the isolated parser will reopen and verify.
+const privatePdfCredentials = createPrivatePdfCredentials({
+  bindSource: async pdfPath => bindPdfjsSubprocessSource(resolvePath(pdfPath)),
+  validatePassword: async (source, password) => {
+    await runPdfjsSubprocess(createPdfjsSubprocessRequest({
+      operation: "observe_document",
+      source,
+      password,
+      options: { max_pages: 1, max_output_characters: 20_000 },
+      allowedDirectories: ALLOWED_DIRECTORIES.map(directory => directory.canonical),
+    }), { timeoutMs: 20_000 });
+    return true;
+  },
+  openWindow: url => new Promise((resolve, reject) => {
+    const platform = osPlatform();
+    const command = platform === "darwin" ? "open" : platform === "win32" ? "rundll32.exe" : "xdg-open";
+    const args = platform === "win32" ? ["url.dll,FileProtocolHandler", url] : [url];
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.once("error", () => reject(new Error("Unable to open the local PDF password window.")));
+    child.once("spawn", () => { child.unref(); resolve(); });
+  }),
+});
+
+async function runPdfLibInspection(request, ...rest) {
+  const password = ["read_pdf_fields", "validate_pdf", "extract_to_csv"].includes(request.operation)
+    ? privatePdfCredentials.passwordForSources(request.sources) ?? null : null;
+  return runIsolatedPdfLibInspection({ ...request, password }, ...rest);
+}
+
+async function runPdfLibMutation(request, ...rest) {
+  const password = privatePdfCredentials.passwordForSources(request.sources) ?? null;
+  return runIsolatedPdfLibMutation({ ...request, password }, ...rest);
+}
+
 async function runPdfjsOperation(resolvedPath, {
   operation,
   options,
@@ -1825,6 +1861,7 @@ async function runPdfjsOperation(resolvedPath, {
   timeoutMs = 30_000,
 }) {
   const source = await bindPdfjsSubprocessSource(resolvedPath);
+  password = privatePdfCredentials.passwordForSource(source) ?? null;
   const result = await runPdfjsSubprocess(createPdfjsSubprocessRequest({
     operation,
     source,
@@ -2191,6 +2228,7 @@ for (const [signal, exitCode] of new Map([
   process.once(signal, () => {
     if (workerShutdown !== null) return;
     workerShutdown = settleAllShutdownOperations([
+      privatePdfCredentials.close(),
       terminateAllPdfjsSubprocesses(),
       terminateAllPdfLibMutations(),
       // A decryption worker is a live thread and keeps the process alive. It
@@ -2203,6 +2241,7 @@ for (const [signal, exitCode] of new Map([
   });
 }
 process.once("exit", () => {
+  void privatePdfCredentials.close();
   forceTerminateAllPdfjsSubprocesses();
   forceTerminateAllPdfLibMutations();
   forceTerminateAllDecryptionWorkers();
@@ -3329,14 +3368,9 @@ function formatCSVValue(value) {
   return `"${String(value ?? "").replace(/"/g, "\"\"")}"`;
 }
 
-// read_pdf_content, read_pdf_pages, and search_pdf_text decrypt through PDF.js
-// but expose no password argument, so PDF.js's stock "provide it with the
-// password parameter" advice names an input those tools cannot accept. Name the
-// read tools that do take one instead.
 const PDFJS_NO_PASSWORD_ARGUMENT_MESSAGE =
-  "This PDF is encrypted and this tool accepts no password. Use read_pdf_layout, "
-  + "convert_pdf_to_markdown, or get_pdf_info, which do accept a password, or decrypt "
-  + "the file first (for example with qpdf) and retry.";
+  "This PDF requires private password entry. Use unlock_pdf to open the local password window, "
+  + "enter the password there, then retry. Never put the password in chat or tool arguments.";
 
 function passwordlessReadError(error) {
   if (!["PASSWORD_REQUIRED", "PASSWORD_INCORRECT"].includes(error?.code)) return error;
@@ -3346,10 +3380,41 @@ function passwordlessReadError(error) {
 }
 
 // List available tools
+const PRIVATE_PDF_TOOL_NAMES = new Set(["unlock_pdf", "get_pdf_unlock_status", "lock_pdf"]);
+const LEGACY_PDF_PASSWORD_KEYS = ["password", "before_password", "after_password"];
+const ENCRYPTED_GEOMETRY_UNSUPPORTED = new Set([
+  "compare_pdfs", "render_pdf_page", "render_pdf_region", "get_page_analysis",
+]);
+
+function withPrivatePasswordInputs(tool) {
+  const properties = { ...tool.inputSchema.properties };
+  const hadPassword = LEGACY_PDF_PASSWORD_KEYS.some(key => Object.hasOwn(properties, key));
+  for (const key of LEGACY_PDF_PASSWORD_KEYS) delete properties[key];
+  const passwordGuidance = ENCRYPTED_GEOMETRY_UNSUPPORTED.has(tool.name)
+    ? " Encrypted PDFs remain unsupported by this operation, even after unlock_pdf. Private entry does not enable encrypted geometry or comparison. Use an unencrypted copy for this operation."
+    : tool.name === "detect_signature_zones"
+      ? " For encrypted PDFs, use unlock_pdf for private entry. Authenticated text detection may return partial results with encrypted AcroForm scanning unavailable; inspect detection_status and warnings. Never pass passwords in chat or tool arguments."
+    : " For password-protected PDFs, use unlock_pdf and enter the password in its local window before retrying. Never pass passwords in chat or tool arguments.";
+  return {
+    ...tool,
+    ...(hadPassword ? { description: `${tool.description}${passwordGuidance}` } : {}),
+    inputSchema: { ...tool.inputSchema, properties },
+  };
+}
+
 async function listTools(request) {
   rejectUnissuedCursor(request, "tools/list");
   return {
     tools: [
+      ...[
+        ["unlock_pdf", "Open a private local window to enter this PDF's password. The password goes directly to PDF Tools and is never a tool argument. Access lasts at most ten minutes for this exact document in this server session. Does not grant modification permissions or remove encryption."],
+        ["get_pdf_unlock_status", "Check whether this exact PDF is unlocked in the current PDF Tools session. Returns status only, never a password or unlock link."],
+        ["lock_pdf", "Clear this PDF's in-memory password and cancel its pending unlock window. Already completed reads or saved outputs are not removed."],
+      ].map(([name, description]) => ({
+        name, description,
+        inputSchema: { type: "object", properties: { pdf_path: { type: "string", minLength: 1, maxLength: 32768 } }, required: ["pdf_path"], additionalProperties: false },
+        annotations: { title: { unlock_pdf: "Unlock PDF Privately", get_pdf_unlock_status: "PDF Unlock Status", lock_pdf: "Lock PDF" }[name], readOnlyHint: name === "get_pdf_unlock_status", destructiveHint: false, idempotentHint: name !== "unlock_pdf", openWorldHint: false },
+      })),
       {
         name: "import_host_pdf",
         title: "Import Host PDF",
@@ -4835,7 +4900,7 @@ async function listTools(request) {
       ...VERIFIED_EXTRACTION_TOOL_DEFINITIONS,
       EXTRACTION_REVIEW_TOOL_DEFINITION,
       ...(LOCAL_OCR_CONFIGURATION ? [LOCAL_OCR_TOOL_DEFINITION, ...LOCAL_OCR_JOB_TOOL_DEFINITIONS] : []),
-    ].map(withToolOutputSchema),
+    ].map(withPrivatePasswordInputs).map(withToolOutputSchema),
   };
 }
 
@@ -4844,6 +4909,26 @@ async function handleToolCall(request) {
   const { name, arguments: args } = request.params;
 
   try {
+    // Credential positions are rejected before any filesystem, parser or
+    // browser action. Free-form PDF field/schema names remain ordinary data.
+    if (args && LEGACY_PDF_PASSWORD_KEYS.some(key => Object.hasOwn(args, key))) {
+      return createTypedToolError({
+        message: "PDF passwords are not accepted in tool arguments. Use unlock_pdf and enter the password in the local window. Never put a password in chat.",
+        code: "PRIVATE_PDF_PASSWORD_ARGUMENT_FORBIDDEN",
+      });
+    }
+    if (PRIVATE_PDF_TOOL_NAMES.has(name)) {
+      if (!args || typeof args !== "object" || Array.isArray(args)
+          || Object.keys(args).length !== 1 || typeof args.pdf_path !== "string"
+          || args.pdf_path.length < 1 || args.pdf_path.length > 32768) {
+        throw new Error("This tool requires only a local pdf_path.");
+      }
+      const status = await (name === "unlock_pdf" ? privatePdfCredentials.requestUnlock(args.pdf_path)
+        : name === "lock_pdf" ? privatePdfCredentials.lock(args.pdf_path)
+          : privatePdfCredentials.status(args.pdf_path));
+      // The service deliberately returns no password or browser capability.
+      return { content: [{ type: "text", text: JSON.stringify(status) }] };
+    }
     if (name === LOCAL_OCR_TOOL_DEFINITION.name) {
       return await handleLocalOcrTool(args ?? {});
     }
@@ -4862,7 +4947,14 @@ async function handleToolCall(request) {
       };
     }
     if (VERIFIED_EXTRACTION_TOOL_NAMES.has(name)) {
-      const structuredContent = await handleVerifiedExtractionTool(name, args ?? {});
+      // The layout cache keys its private authorization context. Resolve it
+      // before cache access, not only later when a parser is invoked.
+      let extractionArgs = args ?? {};
+      if (typeof extractionArgs.pdf_path === "string") {
+        const source = await bindPdfjsSubprocessSource(resolvePath(extractionArgs.pdf_path));
+        extractionArgs = { ...extractionArgs, password: privatePdfCredentials.passwordForSource(source) ?? null };
+      }
+      const structuredContent = await handleVerifiedExtractionTool(name, extractionArgs);
       const summary = name === "create_extraction_workspace"
         ? `Created verified extraction workspace ${structuredContent.workspace_identity_sha256} at generation ${structuredContent.generation_sha256}.`
         : name === "verify_extraction_proposal"
@@ -7078,6 +7170,9 @@ async function handleToolCall(request) {
           };
         } catch (error) {
           const publicError = publicPdfObservationError(error);
+          if (["PASSWORD_REQUIRED", "PASSWORD_INCORRECT"].includes(publicError.code)) {
+            publicError.message = PDFJS_NO_PASSWORD_ARGUMENT_MESSAGE;
+          }
           return createTypedToolError(publicError);
         }
       }
@@ -7803,7 +7898,7 @@ async function handleToolCall(request) {
             : null;
           if (passwordCode) {
             const message = passwordCode === "PASSWORD_REQUIRED"
-              ? "This PDF requires a password. Provide it with the password parameter and try again."
+              ? "This PDF requires a password. Use unlock_pdf and enter it in the private local window, then retry."
               : "The PDF password was not accepted. Check the password and try again.";
             return {
               isError: true,
@@ -7991,6 +8086,7 @@ async function handleToolCall(request) {
         throw new Error(`Unknown tool: ${name}`);
     }
   } catch (error) {
+    error = passwordlessReadError(error);
     let errorCode = error?.code === "path_policy_denied"
       ? "path_policy_denied"
       : "tool_execution_failed";
@@ -8186,6 +8282,8 @@ function buildPdfToolsServer({ era }) {
 
 // Initialize and start the server
 async function main() {
+  process.stdin.once("end", () => { void privatePdfCredentials.close(); });
+  process.stdin.once("close", () => { void privatePdfCredentials.close(); });
   // Ensure profiles and signatures directories exist
   for (const directory of [PROFILES_DIR, SIGNATURES_DIR, BACKUPS_DIR]) {
     await fs.mkdir(directory, { recursive: true, mode: 0o700 }).catch(() => {});

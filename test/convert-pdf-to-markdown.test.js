@@ -9,6 +9,7 @@ import { PDFDocument, PDFName, PDFNumber, PDFString, StandardFonts, degrees, rgb
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TOOL_OUTPUT_SCHEMAS } from "../server/output-schemas.js";
 import { projectMarkdownTable, scoreTable } from "./eval/extraction-bakeoff-scorer.js";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MIXED = path.join(REPO_ROOT, "test/fixtures/eval/extraction/synthetic/mixed-text-raster.pdf");
@@ -244,6 +245,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
   let client;
   let transport;
   let temporaryRoot;
+  let unlock;
   let structureFixture;
   let denseFixture;
   let geometryFixture;
@@ -260,6 +262,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
 
   beforeAll(async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-markdown-"));
+    unlock = await createPrivatePdfUnlockHarness(temporaryRoot);
     structureFixture = path.join(temporaryRoot, "structure.pdf");
     denseFixture = path.join(temporaryRoot, "dense.pdf");
     geometryFixture = path.join(temporaryRoot, "geometry.pdf");
@@ -290,7 +293,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server/index.js")],
       cwd: REPO_ROOT,
-      env: { ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter) },
+      env: { ...unlock.env, ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter) },
       stderr: "ignore",
     });
     client = new Client({ name: "pdf-markdown-test", version: "1.0.0" });
@@ -741,19 +744,21 @@ describe("convert_pdf_to_markdown MCP tool", () => {
       error: { error_schema_version: 1, code: "PASSWORD_REQUIRED" },
     });
 
+    await unlock.enter(client, ENCRYPTED, "definitely-wrong-layout-password", { accepted: false });
     const wrong = await client.callTool({
       name: "convert_pdf_to_markdown",
-      arguments: { pdf_path: ENCRYPTED, password: "definitely-wrong-layout-password" },
+      arguments: { pdf_path: ENCRYPTED },
     });
     expect(wrong.isError).toBe(true);
     expect(wrong.structuredContent).toEqual({
       status: "failed",
-      error: { error_schema_version: 1, code: "PASSWORD_INCORRECT" },
+      error: { error_schema_version: 1, code: "PASSWORD_REQUIRED" },
     });
 
+    await unlock.enter(client, ENCRYPTED, "oda-layout-user-2026");
     const correct = await client.callTool({
       name: "convert_pdf_to_markdown",
-      arguments: { pdf_path: ENCRYPTED, password: "oda-layout-user-2026" },
+      arguments: { pdf_path: ENCRYPTED },
     });
     expect(correct.isError).not.toBe(true);
     expect(correct.structuredContent.provenance.source.sha256).toBe(

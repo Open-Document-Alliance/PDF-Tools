@@ -14,8 +14,8 @@
 //   3. a tool that can decrypt does not carry the "cannot decrypt" text, and
 //      says what it actually does — including, on a write path, that the
 //      document's protection is put back rather than removed;
-//   4. every tool the honest message points at genuinely opens the same
-//      document with the same password.
+//   4. private entry unlocks the exact document for supported tools without
+//      exposing a password or browser capability in MCP messages.
 //
 // (4) is what stops the message from drifting into naming a tool that does not
 // work, (2) is what stops the old "please provide the correct password" advice
@@ -24,6 +24,7 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -32,38 +33,22 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { PDFDocument } from "pdf-lib";
 import { PDF_LIB_ENCRYPTED_MESSAGE } from "../server/helpers.js";
 import { createTestTempDirectory, removeTestTempDirectory } from "./helpers/temp-directory.js";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PLAINTEXT_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 const USER_PASSWORD = "encrypted-truth-user-2026";
 const WRONG_PASSWORD = "encrypted-truth-wrong-2026";
 
-// Every tool that advertises a `password` argument and reads only through
-// PDF.js. The honest pdf-lib message is allowed to name these and nothing else.
+// Supported PDF.js readers named by encrypted-operation recovery messages.
 const PDFJS_PASSWORD_TOOLS = Object.freeze(["convert_pdf_to_markdown", "get_pdf_info", "read_pdf_layout"]);
-// PDF.js-backed password consumers that are truthful but are not suitable
-// destinations for the general pdf-lib refusal message. The verifier requires
-// a proposal packet as well as a password, so naming it as generic recovery
-// advice would send callers to a tool they cannot use from the refusal alone.
-const PDFJS_SPECIALIZED_PASSWORD_TOOLS = Object.freeze(["verify_table_proposal"]);
 
 // Tools that read through pdf-lib but decrypt first, via the vendored qpdf
 // runtime in server/qpdf-decrypt.js. They are read-only — none writes a PDF
-// back — which is why they are allowed to decrypt at all. Their password
-// argument is genuinely usable, so the "cannot decrypt" text would be a lie on
+// back. Their privately entered credential is usable, so "cannot decrypt" is false on
 // them and this suite must not require it.
 const DECRYPTING_PASSWORD_TOOLS = Object.freeze(["read_pdf_fields", "validate_pdf"]);
 
-// Tools that decrypt, change the document, and then restore the document's own
-// encryption before saving. Their password argument is usable too, so the
-// "cannot decrypt" text would be a lie on them as well. What they must say
-// instead is what they actually do to the protection, because a caller's real
-// question on a write path is whether the file comes back protected.
-const REPROTECTING_PASSWORD_TOOLS = Object.freeze([
-  "add_signature_field", "apply_page_plan", "apply_signature", "apply_text",
-  "bulk_fill_from_csv", "fill_pdf", "fill_with_profile", "merge_pdfs",
-  "prepare_signing_packet", "reorder_pdf_pages", "rotate_pdf_pages", "split_pdf",
-]);
 
 function probeQpdf() {
   try {
@@ -80,6 +65,31 @@ function probeQpdf() {
 const QPDF = probeQpdf();
 
 describe("encrypted PDF password truthfulness", () => {
+  it("captures private browser launches inside and outside the ESM package", async () => {
+    const roots = [];
+    try {
+      roots.push(await createTestTempDirectory(REPO_ROOT, "private-opener-esm"));
+      roots.push(await fs.mkdtemp(path.join(os.tmpdir(), "private-opener-outside-")));
+      for (const root of roots) {
+        const harness = await createPrivatePdfUnlockHarness(root);
+        const url = `http://127.0.0.1:12345/#${"a".repeat(64)}`;
+        for (const command of ["open", "xdg-open", "rundll32.exe"]) {
+          await fs.rm(harness.env.PDF_TOOLS_TEST_OPENER_CAPTURE, { force: true });
+          // Node runs the generated script here; the real stdio tests exercise
+          // its executable shebang through the production OS-opener command.
+          const result = spawnSync(process.execPath, [path.join(root, "private-unlock-test", "bin", command), url], {
+            env: { ...process.env, ...harness.env }, encoding: "utf8", timeout: 5_000,
+          });
+          expect(result.status, result.stderr).toBe(0);
+          expect(await fs.readFile(harness.env.PDF_TOOLS_TEST_OPENER_CAPTURE, "utf8")).toBe(url);
+          expect((await fs.stat(harness.env.PDF_TOOLS_TEST_OPENER_CAPTURE)).mode & 0o777).toBe(0o600);
+        }
+      }
+    } finally {
+      for (const root of roots) await removeTestTempDirectory(root);
+    }
+  });
+
   // Always runs, so the report states the guard's status instead of quietly
   // omitting it. A skipped encryption guard must be loud: a silent skip is how
   // a truthfulness regression reaches a release unnoticed.
@@ -101,8 +111,9 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
   let tempDirectory;
   let encryptedPath;
   let encryptedBytes;
+  let unlock;
 
-  const callTool = async (name, args) => await client.callTool({ name, arguments: args });
+  const callTool = async (name, args) => await unlock.call(client, name, args);
   const toolText = result => result.content?.map(part => part.text ?? "").join("\n") ?? "";
 
   beforeAll(async () => {
@@ -121,13 +132,14 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
       throw new Error(`qpdf encryption failed (${encrypt.status}): ${encrypt.stderr}`);
     }
     encryptedBytes = await fs.readFile(encryptedPath);
+    unlock = await createPrivatePdfUnlockHarness(tempDirectory);
 
     client = new Client({ name: "encrypted-password-truth-test", version: "1.0.0" });
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server/index.js")],
       cwd: REPO_ROOT,
-      env: { ALLOWED_DIRECTORIES: [REPO_ROOT, tempDirectory].join(path.delimiter) },
+      env: { ...unlock.env, ALLOWED_DIRECTORIES: [REPO_ROOT, tempDirectory].join(path.delimiter) },
       stderr: "ignore",
     });
     await client.connect(transport);
@@ -195,20 +207,21 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
     // wrong password must say which of the two it was, produce no file, and
     // never quote the password back.
     const filled = path.join(tempDirectory, "filled.pdf");
-    const attempt = async password => callTool("fill_pdf", {
+    const attempt = async () => callTool("fill_pdf", {
       pdf_path: encryptedPath,
       field_data: {},
       output_path: filled,
-      ...(password === undefined ? {} : { password }),
     });
 
-    const omitted = await attempt(undefined);
+    await unlock.lock(client, encryptedPath);
+    const omitted = await attempt();
     expect(omitted.isError, "fill_pdf with no password").toBe(true);
-    expect(toolText(omitted)).toMatch(/cannot be opened without a password/i);
+    expect(toolText(omitted)).toContain("unlock_pdf");
 
-    const wrong = await attempt(WRONG_PASSWORD);
+    await unlock.enter(client, encryptedPath, WRONG_PASSWORD, { accepted: false });
+    const wrong = await attempt();
     expect(wrong.isError, "fill_pdf with a wrong password").toBe(true);
-    expect(toolText(wrong)).toMatch(/password was not accepted/i);
+    expect(toolText(wrong)).toContain("unlock_pdf");
     expect(toolText(wrong), "must not echo the password").not.toContain(WRONG_PASSWORD);
     // The pdf-lib limit is no longer the truth on this path, so citing it
     // would be the new lie.
@@ -217,7 +230,8 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
     // Neither failure may have produced a file.
     await expect(fs.access(filled)).rejects.toThrow();
 
-    const accepted = await attempt(USER_PASSWORD);
+    await unlock.enter(client, encryptedPath, USER_PASSWORD);
+    const accepted = await attempt();
     expect(accepted.isError, "fill_pdf with the correct password").not.toBe(true);
     expect(toolText(accepted), "must not echo the password").not.toContain(USER_PASSWORD);
     // And what it wrote is still an encrypted document: a write path that
@@ -233,20 +247,24 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
     // rather than disappears: each outcome must describe what actually
     // happened, and no outcome may contain the password.
     for (const tool of DECRYPTING_PASSWORD_TOOLS) {
-      const accepted = await callTool(tool, { pdf_path: encryptedPath, password: USER_PASSWORD });
+      await unlock.enter(client, encryptedPath, USER_PASSWORD);
+      const accepted = await callTool(tool, { pdf_path: encryptedPath });
       expect(accepted.isError, `${tool} with the correct password`).not.toBe(true);
       expect(toolText(accepted), `${tool} must not echo the password`).not.toContain(USER_PASSWORD);
 
-      const rejected = await callTool(tool, { pdf_path: encryptedPath, password: WRONG_PASSWORD });
-      expect(toolText(rejected), `${tool} with a wrong password`).toMatch(/password was not accepted/i);
+      await unlock.enter(client, encryptedPath, WRONG_PASSWORD, { accepted: false });
+      const rejected = await callTool(tool, { pdf_path: encryptedPath });
+      expect(rejected.isError).toBe(true);
+      expect(toolText(rejected), `${tool} with a wrong local password`).toContain("unlock_pdf");
       expect(toolText(rejected), `${tool} must not echo the password`).not.toContain(WRONG_PASSWORD);
       // The old "supply the correct password" advice must not come back in the
       // one case where it is still wrong to imply pdf-lib could use it.
       expect(toolText(rejected), `${tool} must not cite the pdf-lib limit`)
         .not.toContain(PDF_LIB_ENCRYPTED_MESSAGE);
 
+      await unlock.lock(client, encryptedPath);
       const omitted = await callTool(tool, { pdf_path: encryptedPath });
-      expect(toolText(omitted), `${tool} with no password`).toMatch(/cannot be opened without a password/i);
+      expect(toolText(omitted), `${tool} with no password`).toContain("unlock_pdf");
     }
   }, 120_000);
 
@@ -254,11 +272,12 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
     // Binds the advice to behavior: if one of these stops working, the message
     // is no longer true and this test fails.
     const invocations = {
-      convert_pdf_to_markdown: { pdf_path: encryptedPath, password: USER_PASSWORD, start_page: 1, end_page: 1 },
-      get_pdf_info: { pdf_path: encryptedPath, password: USER_PASSWORD },
-      read_pdf_layout: { pdf_path: encryptedPath, password: USER_PASSWORD, start_page: 1, end_page: 1 },
+      convert_pdf_to_markdown: { pdf_path: encryptedPath, start_page: 1, end_page: 1 },
+      get_pdf_info: { pdf_path: encryptedPath },
+      read_pdf_layout: { pdf_path: encryptedPath, start_page: 1, end_page: 1 },
     };
     expect(Object.keys(invocations).sort()).toEqual([...PDFJS_PASSWORD_TOOLS].sort());
+    await unlock.enter(client, encryptedPath, USER_PASSWORD);
     for (const tool of PDFJS_PASSWORD_TOOLS) {
       const result = await callTool(tool, invocations[tool]);
       expect(result.isError, `${tool} with the correct password`).not.toBe(true);
@@ -269,6 +288,7 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
   it("does not point a password-less read tool at a password parameter it lacks", async () => {
     // read_pdf_content and its siblings decrypt through PDF.js but expose no
     // password argument, so the advice must name tools that do accept one.
+    await unlock.lock(client, encryptedPath);
     const { tools } = await client.listTools();
     const byName = new Map(tools.map(tool => [tool.name, tool]));
     for (const tool of ["read_pdf_content", "read_pdf_pages", "search_pdf_text"]) {
@@ -285,8 +305,7 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
       const text = toolText(result);
       expect(result.isError, tool).toBe(true);
       expect(text, tool).not.toMatch(/provide it with the password parameter/i);
-      expect(PDFJS_PASSWORD_TOOLS.filter(named => text.includes(named)), tool)
-        .toEqual([...PDFJS_PASSWORD_TOOLS]);
+      expect(text, tool).toContain("unlock_pdf");
     }
   }, 90_000);
 
@@ -298,12 +317,11 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
     // observation's RAW_PAGE_GEOMETRY_UNAVAILABLE reached its structure
     // channel. Both argument shapes are checked, because that is exactly the
     // difference that used to change the answer.
+    await unlock.enter(client, encryptedPath, USER_PASSWORD);
     for (const includeVisual of [true, false]) {
       const result = await callTool("compare_pdfs", {
         before_pdf_path: encryptedPath,
         after_pdf_path: encryptedPath,
-        before_password: USER_PASSWORD,
-        after_password: USER_PASSWORD,
         include_visual: includeVisual,
       });
       const text = toolText(result);
@@ -317,7 +335,7 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
       // can actually be read.
       expect(text, label).toContain("Both comparison inputs are encrypted");
       expect(text, label).toMatch(/pdf-lib, which has no decryption support/);
-      expect(text, label).toMatch(/supplying a password here will not help/);
+      expect(text, label).not.toMatch(/provide.*password.*argument/i);
       for (const named of PDFJS_PASSWORD_TOOLS) expect(text, `${label} ${named}`).toContain(named);
       expect(text, label).not.toContain(USER_PASSWORD);
       // The other way this refusal has been lost: re-reported as a generic
@@ -327,22 +345,19 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
     }
   }, 180_000);
 
-  it("tells a caller who used 'password' that this tool names two", async () => {
-    // compare_pdfs is the only read tool that takes two documents and therefore
-    // two password arguments. Every other tool here takes `password`, so that
-    // is what a caller reaches for — and an unknown argument is refused with a
-    // message that used to name nothing at all, making a perfectly good call
-    // look like a broken document.
-    const result = await callTool("compare_pdfs", {
-      before_pdf_path: encryptedPath,
-      after_pdf_path: encryptedPath,
-      password: USER_PASSWORD,
-    });
-    const text = toolText(result);
-    expect(result.isError).toBe(true);
-    expect(text).toContain("before_password");
-    expect(text).toContain("after_password");
-    expect(text).not.toContain(USER_PASSWORD);
+  it("rejects all legacy password arguments before work, including empty and null values", async () => {
+    for (const field of ["password", "before_password", "after_password"]) {
+      for (const value of [USER_PASSWORD, "", null]) {
+        const output = path.join(tempDirectory, `legacy-${field}-${value === null ? "null" : value.length}.pdf`);
+        const result = await callTool("fill_pdf", {
+          pdf_path: PLAINTEXT_PDF, field_data: {}, output_path: output, [field]: value,
+        });
+        expect(result.isError, `${field}=${value === null ? "null" : "string"}`).toBe(true);
+        expect(toolText(result)).toContain("unlock_pdf");
+        expect(JSON.stringify(result)).not.toContain(USER_PASSWORD);
+        await expect(fs.access(output)).rejects.toThrow();
+      }
+    }
   }, 60_000);
 
   it("refuses a mixed-encryption merge with the two routes that would work", async () => {
@@ -356,11 +371,12 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
       "--bits=256", "--", PLAINTEXT_PDF, second,
     ], { encoding: "utf8" });
     expect(encrypt.status, encrypt.stderr).toBe(0);
+    await unlock.enter(client, encryptedPath, USER_PASSWORD);
+    await unlock.enter(client, second, USER_PASSWORD);
 
     const refused = await callTool("merge_pdfs", {
       input_paths: [encryptedPath, second],
       output_path: path.join(tempDirectory, "merged-mixed.pdf"),
-      password: USER_PASSWORD,
     });
     const text = toolText(refused);
     expect(refused.isError).toBe(true);
@@ -379,55 +395,76 @@ describe.skipIf(!QPDF.available)("encrypted PDF password truthfulness (qpdf pres
     const copy = path.join(tempDirectory, "aes256-encrypted-copy.pdf");
     await fs.writeFile(copy, encryptedBytes);
     const merged = path.join(tempDirectory, "merged-identical.pdf");
+    const lockedCopy = await callTool("merge_pdfs", {
+      input_paths: [encryptedPath, copy], output_path: merged,
+    });
+    expect(lockedCopy.isError, "credentials must not transfer to another path with identical bytes").toBe(true);
+    await expect(fs.access(merged)).rejects.toThrow();
+    await unlock.enter(client, copy, USER_PASSWORD);
     const accepted = await callTool("merge_pdfs", {
       input_paths: [encryptedPath, copy],
       output_path: merged,
-      password: USER_PASSWORD,
     });
     expect(accepted.isError, toolText(accepted)).not.toBe(true);
     expect((await fs.readFile(merged)).toString("latin1")).toContain("/Encrypt");
   }, 180_000);
 
-  it("never advertises a usable password on a pdf-lib-backed tool", async () => {
-    // The schema text is the other place the claim can drift.
+  it("never advertises public password inputs and exposes only document-scoped entry controls", async () => {
     const { tools } = await client.listTools();
     for (const tool of tools) {
-      const description = tool.inputSchema?.properties?.password?.description;
-      if (typeof description !== "string") continue;
-      if (PDFJS_PASSWORD_TOOLS.includes(tool.name)
-        || PDFJS_SPECIALIZED_PASSWORD_TOOLS.includes(tool.name)) {
-        expect(description, `${tool.name} password description`).not.toMatch(/pdf-lib/);
-        continue;
+      for (const field of ["password", "before_password", "after_password"]) {
+        expect(tool.inputSchema?.properties ?? {}, tool.name).not.toHaveProperty(field);
       }
-      if (REPROTECTING_PASSWORD_TOOLS.includes(tool.name)) {
-        expect(description, `${tool.name} password description`).not.toMatch(/cannot decrypt/i);
-        expect(description, `${tool.name} password description`).not.toMatch(/never used/i);
-        // It must state the one thing a write path has to promise.
-        expect(description, `${tool.name} password description`)
-          .toMatch(/never removed, changed, or added/i);
-        continue;
-      }
-      if (DECRYPTING_PASSWORD_TOOLS.includes(tool.name)) {
-        // These decrypt, so they must NOT carry the "cannot decrypt" text —
-        // the same drift guard, pointing the other way.
-        expect(description, `${tool.name} password description`).not.toMatch(/cannot decrypt/i);
-        expect(description, `${tool.name} password description`).not.toMatch(/never used/i);
-        // This used to require the text "permissions allow", back when these
-        // three refused an owner-locked document whose `/P` denied extraction.
-        // They no longer do — `/P` governs writes only — so advertising that
-        // caveat would now be the drift, and the assertion is inverted to catch
-        // it coming back.
-        expect(description, `${tool.name} password description`)
-          .not.toMatch(/permissions allow|permissions deny/i);
-        // What has to stay true is the size bound and the promise that this is
-        // not a way to take a document's protection off.
-        expect(description, `${tool.name} password description`).toMatch(/16 MiB/);
-        expect(description, `${tool.name} password description`)
-          .toMatch(/never removes or weakens/i);
-        continue;
-      }
-      expect(description, `${tool.name} password description`).toMatch(/pdf-lib/);
-      expect(description, `${tool.name} password description`).toMatch(/cannot decrypt/i);
+    }
+    for (const name of ["unlock_pdf", "get_pdf_unlock_status", "lock_pdf"]) {
+      const tool = tools.find(value => value.name === name);
+      expect(tool, name).toBeDefined();
+      expect(Object.keys(tool.inputSchema.properties), name).toEqual(["pdf_path"]);
+    }
+    for (const response of unlock.responses) {
+      expect(response).not.toContain(USER_PASSWORD);
+      expect(response).not.toContain(WRONG_PASSWORD);
     }
   }, 30_000);
+
+  it("serves the same private-entry contract from the share bundle with isolated server sessions", async () => {
+    await unlock.enter(client, encryptedPath, USER_PASSWORD);
+    const shareClient = new Client({ name: "encrypted-password-share-test", version: "1.0.0" });
+    const shareTransport = new StdioClientTransport({
+      command: process.execPath,
+      args: [path.join(REPO_ROOT, "pdf-toolkit-mcp-share/server/index.js")],
+      cwd: REPO_ROOT,
+      env: { ...unlock.env, ALLOWED_DIRECTORIES: [REPO_ROOT, tempDirectory].join(path.delimiter) },
+      stderr: "ignore",
+    });
+    try {
+      await shareClient.connect(shareTransport);
+      const [sourceTools, shareTools] = await Promise.all([client.listTools(), shareClient.listTools()]);
+      for (const name of ["unlock_pdf", "get_pdf_unlock_status", "lock_pdf", "read_pdf_fields", "fill_pdf"]) {
+        expect(shareTools.tools.find(tool => tool.name === name)?.inputSchema, name)
+          .toEqual(sourceTools.tools.find(tool => tool.name === name)?.inputSchema);
+      }
+      const stillLocked = await unlock.call(shareClient, "read_pdf_fields", { pdf_path: encryptedPath });
+      expect(stillLocked.isError, "one server's credential must not unlock another server").toBe(true);
+      expect(toolText(stillLocked)).toContain("unlock_pdf");
+      const legacy = await unlock.call(shareClient, "read_pdf_fields", {
+        pdf_path: encryptedPath, password: USER_PASSWORD,
+      });
+      expect(legacy.isError).toBe(true);
+      expect(JSON.stringify(legacy)).not.toContain(USER_PASSWORD);
+      await unlock.enter(shareClient, encryptedPath, USER_PASSWORD);
+      const opened = await unlock.call(shareClient, "read_pdf_fields", { pdf_path: encryptedPath });
+      expect(opened.isError, toolText(opened)).not.toBe(true);
+      expect(opened.structuredContent.fieldCount).toBeGreaterThan(0);
+      const output = path.join(tempDirectory, "share-filled.pdf");
+      const written = await unlock.call(shareClient, "fill_pdf", {
+        pdf_path: encryptedPath, field_data: {}, output_path: output,
+      });
+      expect(written.isError, toolText(written)).not.toBe(true);
+      expect((await fs.readFile(output)).toString("latin1")).toContain("/Encrypt");
+    } finally {
+      await shareClient.close();
+      await shareTransport.close();
+    }
+  }, 120_000);
 });

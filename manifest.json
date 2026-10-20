@@ -50,6 +50,9 @@
   ],
   "icon": "icon.png",
   "tools": [
+    { "name": "unlock_pdf", "description": "Open private local PDF password entry outside chat" },
+    { "name": "get_pdf_unlock_status", "description": "Check this document's private session access" },
+    { "name": "lock_pdf", "description": "Clear this document's private in-memory password" },
     {
       "name": "import_host_pdf",
       "description": "Import app-supplied PDF bytes into the already-permitted private workspace (app-only)"

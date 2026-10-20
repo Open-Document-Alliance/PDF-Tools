@@ -82,10 +82,13 @@ const STRUCTURED_TOOLS = [
   "verify_table_proposal",
 ].sort();
 const TEXT_ONLY_TOOLS = [
+  "get_pdf_unlock_status",
   "list_pdfs",
   "list_profiles",
   "load_profile",
+  "lock_pdf",
   "save_profile",
+  "unlock_pdf",
 ].sort();
 
 function collectKeys(value, output = new Set()) {
@@ -173,7 +176,7 @@ describe("output schema definitions", () => {
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(STRUCTURED_TOOLS).toHaveLength(61);
-    expect(TEXT_ONLY_TOOLS).toHaveLength(4);
+    expect(TEXT_ONLY_TOOLS).toHaveLength(7);
   });
 
   it("preserves stable Lumin failure codes in structured errors", () => {
@@ -264,6 +267,16 @@ describe("output schema definitions", () => {
       isError: true,
     };
     expect(validateStructuredToolResult("get_active_document", toolError)).toBe(toolError);
+    const legacyPasswordError = {
+      content: [{ type: "text", text: "Use unlock_pdf for private password entry." }],
+      structuredContent: { status: "failed", error: {
+        error_schema_version: 1, code: "PRIVATE_PDF_PASSWORD_ARGUMENT_FORBIDDEN",
+      } },
+      isError: true,
+    };
+    for (const tool of ["fill_pdf", "get_pdf_info", "read_pdf_layout", "compare_pdfs", "unlock_pdf"]) {
+      expect(validateStructuredToolResult(tool, legacyPasswordError)).toBe(legacyPasswordError);
+    }
 
     const malformedToolError = validateStructuredToolResult("get_active_document", {
       content: [{ type: "text", text: "Error: malformed" }],

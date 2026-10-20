@@ -163,16 +163,16 @@ describe.each(RUNTIMES)("$name accessibility inspection MCP contract", ({ root }
     expect(rejectedReason.isError).toBe(true);
     expect(rejectedReason.structuredContent.error.code).toBe("internal_validation_error");
 
-    for (const argumentsValue of [
-      { pdf_path: EXAMPLE_PDF, password: "secret" },
-      { pdf_path: EXAMPLE_PDF, reviewer: "self-appointed" },
+    for (const [argumentsValue, expectedCode] of [
+      [{ pdf_path: EXAMPLE_PDF, password: "secret" }, "PRIVATE_PDF_PASSWORD_ARGUMENT_FORBIDDEN"],
+      [{ pdf_path: EXAMPLE_PDF, reviewer: "self-appointed" }, "tool_execution_failed"],
     ]) {
       const rejected = await client.callTool({
         name: "inspect_pdf_accessibility",
         arguments: argumentsValue,
       });
       expect(rejected.isError).toBe(true);
-      expect(rejected.structuredContent.error.code).toBe("tool_execution_failed");
+      expect(rejected.structuredContent.error.code).toBe(expectedCode);
       expect(JSON.stringify(rejected)).not.toContain("secret");
       expect(JSON.stringify(rejected)).not.toContain("self-appointed");
     }

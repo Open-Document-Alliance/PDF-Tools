@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "13dd65eed63634710f7e87327950d3043ea5d30008809e89ad0ee83065c11574",
+  "tools_sha256": "93202e8e6e04b8914f81003624692177e9dbe02c6fc93aa877ebf7e82b2556a7",
   "tools": [
     {
       "name": "add_signature_field",
@@ -47,10 +47,6 @@
           "allow_resign": {
             "type": "boolean",
             "description": "Proceed even if the PDF already contains cryptographic signature fields (default: false). Warning: saving will invalidate any existing signatures."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
           },
           "force_xfa": {
             "type": "boolean",
@@ -129,10 +125,6 @@
             "required": [
               "page_order"
             ]
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
           },
           "force_xfa": {
             "type": "boolean",
@@ -241,10 +233,6 @@
             "type": "boolean",
             "description": "Deprecated compatibility field. true is accepted as a no-op when the destination does not exist or output_path identifies the same canonical document as pdf_path. It never authorizes replacing a distinct existing output; that requires expected_output_identity."
           },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
-          },
           "expected_output_identity": {
             "type": "object",
             "additionalProperties": false,
@@ -343,10 +331,6 @@
             "type": "boolean",
             "description": "Deprecated compatibility field. true is accepted as a no-op when the destination does not exist or output_path identifies the same canonical document as pdf_path. It never authorizes replacing a distinct existing output; that requires expected_output_identity."
           },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
-          },
           "expected_output_identity": {
             "type": "object",
             "additionalProperties": false,
@@ -406,10 +390,6 @@
           "filename_column": {
             "type": "string",
             "description": "CSV column to use for output filenames (optional)"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
           },
           "force_xfa": {
             "type": "boolean",
@@ -491,16 +471,6 @@
             "type": "string",
             "description": "Absolute path to the later PDF."
           },
-          "before_password": {
-            "type": "string",
-            "maxLength": 4096,
-            "description": "Optional password for the earlier PDF. Password for encrypted PDFs. PDF.js uses it, but this operation also loads page geometry with pdf-lib, which cannot decrypt PDFs, so an encrypted document still fails with the correct password."
-          },
-          "after_password": {
-            "type": "string",
-            "maxLength": 4096,
-            "description": "Optional password for the later PDF. Password for encrypted PDFs. PDF.js uses it, but this operation also loads page geometry with pdf-lib, which cannot decrypt PDFs, so an encrypted document still fails with the correct password."
-          },
           "mode": {
             "type": "string",
             "enum": [
@@ -541,10 +511,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Absolute path to the local PDF file."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF, when required."
           },
           "start_page": {
             "type": "integer",
@@ -643,9 +609,6 @@
           "pdf_path": {
             "type": "string"
           },
-          "password": {
-            "type": "string"
-          },
           "workspace_id": {
             "type": "string",
             "pattern": "^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$"
@@ -735,10 +698,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Path to the PDF file"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for encrypted PDFs. PDF.js uses it, but this operation also loads page geometry with pdf-lib, which cannot decrypt PDFs, so an encrypted document still fails with the correct password."
           }
         },
         "required": [
@@ -907,10 +866,6 @@
             "type": "object",
             "description": "Object with field names as keys and values to fill"
           },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
-          },
           "force_xfa": {
             "type": "boolean",
             "description": "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
@@ -969,10 +924,6 @@
           "additional_data": {
             "type": "object",
             "description": "Additional fields to fill/override (optional)"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
           },
           "expected_output_identity": {
             "type": "object",
@@ -1046,10 +997,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Path to the PDF file"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for encrypted PDFs. PDF.js uses it, but this operation also loads page geometry with pdf-lib, which cannot decrypt PDFs, so an encrypted document still fails with the correct password."
           }
         },
         "required": [
@@ -1085,11 +1032,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Path to the PDF file"
-          },
-          "password": {
-            "type": "string",
-            "maxLength": 4096,
-            "description": "Password for encrypted PDFs (optional)"
           },
           "max_pages": {
             "type": "integer",
@@ -1128,6 +1070,23 @@
             "pdf_path": "/Users/alice/Documents/report.pdf"
           }
         ]
+      }
+    },
+    {
+      "name": "get_pdf_unlock_status",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768
+          }
+        },
+        "required": [
+          "pdf_path"
+        ],
+        "additionalProperties": false
       }
     },
     {
@@ -1253,6 +1212,23 @@
       }
     },
     {
+      "name": "lock_pdf",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768
+          }
+        },
+        "required": [
+          "pdf_path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "merge_pdfs",
       "input_schema": {
         "type": "object",
@@ -1267,10 +1243,6 @@
           "output_path": {
             "type": "string",
             "description": "Path where the merged PDF will be saved"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
           },
           "expected_output_identity": {
             "type": "object",
@@ -1504,10 +1476,6 @@
             "type": "boolean",
             "description": "Proceed even if the PDF already contains cryptographic signature fields (default: false). Warning: saving will invalidate any existing signatures."
           },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
-          },
           "force_xfa": {
             "type": "boolean",
             "description": "Proceed even if the PDF uses XFA forms (default: false). Warning: the XFA layer will be stripped."
@@ -1552,9 +1520,6 @@
         "type": "object",
         "properties": {
           "pdf_path": {
-            "type": "string"
-          },
-          "password": {
             "type": "string"
           },
           "workspace_id": {
@@ -1675,10 +1640,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Path to the PDF file"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory to complete this read (encrypted inputs are limited to 16 MiB). Leave it unset for an unencrypted document, or for an encrypted one that opens without a password. A document that needs a password cannot be read without it, and this tool never removes or weakens a document's protection."
           }
         },
         "required": [
@@ -1694,10 +1655,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Absolute path, or ~/ path, to the local PDF file."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF, when required."
           },
           "start_page": {
             "type": "integer",
@@ -1784,10 +1741,6 @@
           "max_dimension_px": {
             "type": "number",
             "description": "Target size of the page image's longer side in pixels, an integer from 64 to 8192 (default: 1800). The render scale is held between 1 and 2.5 pixels per PDF.js viewport point, so a page whose longer side exceeds this many points renders larger than the target, and a target above 2.5 times that side renders smaller. Use smaller values for lighter previews."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for encrypted PDFs. PDF.js uses it, but this operation also loads page geometry with pdf-lib, which cannot decrypt PDFs, so an encrypted document still fails with the correct password."
           }
         },
         "required": [
@@ -1834,10 +1787,6 @@
           "max_dimension_px": {
             "type": "number",
             "description": "Target size of the region image's longer side in pixels, an integer from 64 to 8192 (default: 1400). The render scale is held between 0.1 and 4 pixels per PDF.js viewport point, so a region whose longer side exceeds ten times the target renders larger than it, and a target above four times that side renders smaller."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for encrypted PDFs. PDF.js uses it, but this operation also loads page geometry with pdf-lib, which cannot decrypt PDFs, so an encrypted document still fails with the correct password."
           }
         },
         "required": [
@@ -1880,10 +1829,6 @@
               "type": "number"
             },
             "description": "Array of 1-based page numbers in desired order, e.g. [3, 1, 2, 4]"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
           },
           "expected_output_identity": {
             "type": "object",
@@ -2007,10 +1952,6 @@
           "degrees": {
             "type": "number",
             "description": "Rotation angle: 90, 180, or 270"
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
           },
           "expected_output_identity": {
             "type": "object",
@@ -2183,10 +2124,6 @@
             "type": "string",
             "description": "Directory where split PDFs will be saved"
           },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory, changed, and then saved with exactly the encryption and permissions it already had (encrypted inputs are limited to 16 MiB). The protection is never removed, changed, or added by this tool. Leave it unset for an unencrypted document. If the document's own permissions deny the change being made, the owner password is required, because that is the credential which authorises overriding them."
-          },
           "expected_output_identities": {
             "type": "array",
             "maxItems": 1000,
@@ -2280,6 +2217,23 @@
       }
     },
     {
+      "name": "unlock_pdf",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768
+          }
+        },
+        "required": [
+          "pdf_path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "name": "validate_pdf",
       "input_schema": {
         "type": "object",
@@ -2287,10 +2241,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Absolute path to the fillable PDF on the user's machine."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF. Supply the user or owner password and the document is decrypted in memory to complete this read (encrypted inputs are limited to 16 MiB). Leave it unset for an unencrypted document, or for an encrypted one that opens without a password. A document that needs a password cannot be read without it, and this tool never removes or weakens a document's protection."
           }
         },
         "required": [
@@ -2304,9 +2254,6 @@
         "type": "object",
         "properties": {
           "pdf_path": {
-            "type": "string"
-          },
-          "password": {
             "type": "string"
           },
           "workspace_id": {
@@ -2394,9 +2341,6 @@
           "pdf_path": {
             "type": "string"
           },
-          "password": {
-            "type": "string"
-          },
           "workspace_id": {
             "type": "string"
           },
@@ -2468,10 +2412,6 @@
           "pdf_path": {
             "type": "string",
             "description": "Absolute path, or ~/ path, to the same local PDF used to obtain the proposal packet."
-          },
-          "password": {
-            "type": "string",
-            "description": "Password for an encrypted PDF, when required."
           },
           "region_id": {
             "type": "string",

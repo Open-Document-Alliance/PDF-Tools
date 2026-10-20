@@ -85,8 +85,8 @@
     {
       "role": "output_schemas_module",
       "path": "server/output-schemas.js",
-      "bytes": 84378,
-      "sha256": "8a906a082d2b4d5541b9d2a98f07faba1ca40380c236879b5939da4102fa3941"
+      "bytes": 84427,
+      "sha256": "beb9255b64456319bf2b747e643c32d3d175c29f51feddfdf5f419da19f9fc3c"
     },
     {
       "role": "package_json",
@@ -103,8 +103,8 @@
     {
       "role": "pdf_comparison_module",
       "path": "server/pdf-comparison.js",
-      "bytes": 76373,
-      "sha256": "0c29a25eb4a773be59cf3cdd509591c6c4cff12d5f24f651f716cd4842a71e93"
+      "bytes": 76289,
+      "sha256": "69d30b70e7e786b2459d7baa5a51b0e39eeb6750f11a2ffd35da602edcc9ba22"
     },
     {
       "role": "pdf_observations_module",
@@ -131,7 +131,7 @@
       "sha256": "ef40501b2afbe4cd2adfa80480344783bbec1a00e8e9850086a5d044231d1f53"
     }
   ],
-  "validator_source_set_sha256": "39715c5df6682ed5ecd398f6b3cfef18447a45f752bb500673cf2f6281402d39",
+  "validator_source_set_sha256": "afb4e11f1360d5732f977351c7787117e18c70aaf90f80ad02bb45572ee3ce59",
   "pdfjs_version": "5.4.624",
   "generation_contract": {
     "source_path": "source.pdf",

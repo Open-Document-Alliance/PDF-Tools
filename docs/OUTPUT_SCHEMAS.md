@@ -82,9 +82,9 @@ an `isError` result is never forced through a success schema.
 | `verify_extraction_batch` | one new immutable generation containing ordered per-proposal replay results and their separate typed statuses |
 | `review_extraction_workspace` | source-bound viewer metadata plus a bounded generation-pinned page of current values, correction history/citations, or page coverage |
 
-The following four tools remain intentionally text-only and therefore do not
+The following seven tools remain intentionally text-only and therefore do not
 advertise `outputSchema`: `list_pdfs`, `list_profiles`, `load_profile`,
-and `save_profile`. Their error results are also
+`save_profile`, `unlock_pdf`, `get_pdf_unlock_status`, and `lock_pdf`. Their error results are also
 text-only; attaching an undeclared `structuredContent` error would create a
 wire contract that discovery does not publish.
 
@@ -204,9 +204,9 @@ before loading the target PDF, writing output, or changing active-document
 state.
 
 The executable source of truth is `server/output-schemas.js`. The MCP contract
-tests assert this complete matrix of 61 structured tools and four text-only
+tests assert this complete matrix of 61 structured tools and seven text-only
 tools, including the configured-only OCR contracts. Default discovery still
-has 57 structured tools and four text-only tools; enabling local OCR adds four
+has 57 structured tools and seven text-only tools; enabling local OCR adds four
 structured tools. Tests compile every schema through the pinned SDK validator, reject newer
 unsupported JSON Schema keywords, exercise live success and error branches, and
 require byte-identical source/share runtime files.

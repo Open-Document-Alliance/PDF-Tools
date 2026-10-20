@@ -85,6 +85,7 @@ export const SHARE_FILES = [
   "server/pdfjs-worker.js",
   "server/qpdf-decrypt-worker.js",
   "server/qpdf-decrypt.js",
+  "server/private-pdf-credentials.js",
   "server/resource-uri.js",
   "server/skill-files.js",
   "server/skills.js",

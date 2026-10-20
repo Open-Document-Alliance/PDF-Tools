@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 import {
   ENCRYPTED_READ_OPERATIONS,
   ENCRYPTED_WRITE_OPERATIONS,
@@ -84,6 +85,7 @@ async function encryptFixture(sourceBytes, encryptArgs) {
 let temporaryRoot;
 let client;
 let transport;
+let unlock;
 const fixturePaths = {};
 let workspaceSequence = 0;
 
@@ -109,11 +111,13 @@ beforeAll(async () => {
     await fs.writeFile(target, await encryptFixture(extractionBytes, args));
     fixturePaths[`${name}Extraction`] = target;
   }
+  unlock = await createPrivatePdfUnlockHarness(temporaryRoot);
   transport = new StdioClientTransport({
     command: process.execPath,
     args: [path.join(REPO_ROOT, "server/index.js")],
     cwd: REPO_ROOT,
     env: {
+      ...unlock.env,
       ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter),
       DEFAULT_PROFILES_DIR: path.join(temporaryRoot, "profiles"),
     },
@@ -138,7 +142,7 @@ afterAll(async () => {
  * says so. That is deliberate: the alternative is a new tool silently escaping
  * the rule, which is the failure this whole file exists to prevent.
  */
-async function extractionWorkspace(document, tag, { leafNames = ["missing"], password } = {}) {
+async function extractionWorkspace(document, tag, { leafNames = ["missing"] } = {}) {
   const sourceDocument = document === fixturePaths.extractDenied
     ? fixturePaths.extractDeniedExtraction
     : fixturePaths.extractAllowedExtraction;
@@ -149,7 +153,6 @@ async function extractionWorkspace(document, tag, { leafNames = ["missing"], pas
     arguments: {
       pdf_path: sourceDocument,
       workspace_id: workspaceId,
-      ...(password ? { password } : {}),
       schema: {
         type: "object",
         additionalProperties: false,
@@ -185,7 +188,6 @@ const READ_CALL_RECIPES = Object.freeze({
     before_pdf_path: doc,
     after_pdf_path: fixturePaths.plain,
     include_visual: false,
-    ...(extras.password ? { before_password: extras.password } : {}),
   }),
   convert_pdf_to_markdown: (doc, extras) => ({ pdf_path: doc, start_page: 1, end_page: 1, ...extras }),
   create_extraction_workspace: (doc, extras) => ({
@@ -194,7 +196,6 @@ const READ_CALL_RECIPES = Object.freeze({
       : fixturePaths.extractAllowedExtraction,
     workspace_id: `permission-create-${path.basename(doc, ".pdf")}${extras.tag}`
       .replace(/[^a-z0-9_-]/gu, "-"),
-    ...(extras.password ? { password: extras.password } : {}),
     schema: { type: "object", properties: { value: { type: "string" } } },
   }),
   detect_signature_zones: (doc, extras) => ({ pdf_path: doc, ...extras }),
@@ -210,10 +211,9 @@ const READ_CALL_RECIPES = Object.freeze({
   inspect_pdf_accessibility: doc => ({ pdf_path: doc }),
   prepare_lumin_request: doc => ({ pdf_path: doc }),
   read_extraction_chunk: async (doc, extras) => {
-    const prepared = await extractionWorkspace(doc, `chunk${extras.tag}`, { password: extras.password });
+    const prepared = await extractionWorkspace(doc, `chunk${extras.tag}`);
     return {
       pdf_path: prepared.sourceDocument,
-      ...(extras.password ? { password: extras.password } : {}),
       workspace_id: prepared.workspaceId,
       workspace_identity_sha256: prepared.created.workspace_identity_sha256,
       chunk_id: prepared.chunks[0].chunk_id,
@@ -230,8 +230,8 @@ const READ_CALL_RECIPES = Object.freeze({
   }),
   review_extraction_workspace: async (doc, extras) => {
     // Review hashes the original bytes and reads retained evidence; it has no
-    // password argument. Exercise the supplied password during workspace creation.
-    const prepared = await extractionWorkspace(doc, `review${extras.tag}`, { password: extras.password });
+    // password argument. Private entry precedes creation in the test context.
+    const prepared = await extractionWorkspace(doc, `review${extras.tag}`);
     return {
       pdf_path: prepared.sourceDocument,
       workspace_id: prepared.workspaceId,
@@ -247,7 +247,7 @@ const READ_CALL_RECIPES = Object.freeze({
   verify_extraction_batch: async (doc, extras) => {
     const leafNames = ["first", "second"];
     const prepared = await extractionWorkspace(doc, `batch${extras.tag}`, {
-      leafNames, password: extras.password,
+      leafNames,
     });
     let generation = prepared.created.generation_sha256;
     const items = [];
@@ -273,7 +273,6 @@ const READ_CALL_RECIPES = Object.freeze({
     }
     return {
       pdf_path: prepared.sourceDocument,
-      ...(extras.password ? { password: extras.password } : {}),
       workspace_id: prepared.workspaceId,
       workspace_identity_sha256: prepared.created.workspace_identity_sha256,
       parent_generation_sha256: generation,
@@ -281,7 +280,7 @@ const READ_CALL_RECIPES = Object.freeze({
     };
   },
   verify_extraction_proposal: async (doc, extras) => {
-    const prepared = await extractionWorkspace(doc, `verify${extras.tag}`, { password: extras.password });
+    const prepared = await extractionWorkspace(doc, `verify${extras.tag}`);
     const proposal = await client.callTool({
       name: "submit_extraction_proposal",
       arguments: {
@@ -296,7 +295,6 @@ const READ_CALL_RECIPES = Object.freeze({
     expect(proposal.isError, responseText(proposal)).not.toBe(true);
     return {
       pdf_path: prepared.sourceDocument,
-      ...(extras.password ? { password: extras.password } : {}),
       workspace_id: prepared.workspaceId,
       workspace_identity_sha256: prepared.created.workspace_identity_sha256,
       proposal_generation_sha256: proposal.structuredContent.generation_sha256,
@@ -307,7 +305,6 @@ const READ_CALL_RECIPES = Object.freeze({
   },
   verify_table_proposal: (doc, extras) => ({
     pdf_path: doc,
-    password: extras.password,
     region_id: "p1-t1",
     proposal_token: "0".repeat(64),
     cells: [{ row: 0, column: 0, rowspan: 1, colspan: 1, item_ids: [] }],
@@ -325,6 +322,8 @@ async function readFamily() {
     .filter(tool => Object.keys(tool.inputSchema?.properties ?? {})
       .some(property => DOCUMENT_PARAMETERS.includes(property)))
     .filter(tool => !writes.has(tool.name))
+    // These manage a credential session; they do not read PDF content.
+    .filter(tool => !["unlock_pdf", "get_pdf_unlock_status", "lock_pdf"].includes(tool.name))
     .map(tool => tool.name)
     .sort();
 }
@@ -339,10 +338,20 @@ const responseText = result => (result.content ?? [])
  * files. Names, sizes and digests are erased; whether the call worked, and what
  * it refused for if it did not, survives.
  */
-async function observe(name, document, extras = { tag: "" }) {
+async function preparePrivateReadContext(document, privatePassword) {
+  const extraction = document === fixturePaths.extractDenied
+    ? fixturePaths.extractDeniedExtraction : fixturePaths.extractAllowedExtraction;
+  for (const source of [document, extraction]) {
+    if (privatePassword === undefined) await unlock.lock(client, source);
+    else await unlock.enter(client, source, privatePassword);
+  }
+}
+
+async function observe(name, document, { privatePassword, privateContextPrepared = false, ...extras } = { tag: "" }) {
   const build = READ_CALL_RECIPES[name];
   let result;
   try {
+    if (!privateContextPrepared) await preparePrivateReadContext(document, privatePassword);
     result = await client.callTool({ name, arguments: await build(document, extras) });
   } catch (error) {
     return { outcome: "transport-error", detail: String(error?.message ?? error).slice(0, 80) };
@@ -458,8 +467,9 @@ describe("every tool that reads a document treats /P the same way", () => {
   it("really reviews and batch-verifies both permission variants with or without the owner password", async () => {
     for (const document of [fixturePaths.extractDenied, fixturePaths.extractAllowed]) {
       for (const password of [undefined, OWNER_PASSWORD]) {
+        await preparePrivateReadContext(document, password);
         for (const name of ["review_extraction_workspace", "verify_extraction_batch"]) {
-          const args = await READ_CALL_RECIPES[name](document, { tag: "-nonvacuous", password });
+          const args = await READ_CALL_RECIPES[name](document, { tag: "-nonvacuous" });
           const result = await client.callTool({ name, arguments: args });
           expect(result.isError, `${name}: ${responseText(result)}`).not.toBe(true);
           if (name === "review_extraction_workspace") {
@@ -548,10 +558,18 @@ describe("every tool that reads a document treats /P the same way", () => {
   it("never leaves a caller worse off for supplying the owner password", async () => {
     const family = await readFamily();
     const downgraded = [];
+    const withoutOwner = new Map();
+    // Group the two contexts so this matrix does not open dozens of browser
+    // windows or exhaust the production entry rate limit. Every read in each
+    // pass still reaches the real MCP tool with its exact document binding.
     for (const name of family) {
-      const without = await observe(name, fixturePaths.extractDenied, { tag: "-nopw" });
+      withoutOwner.set(name, await observe(name, fixturePaths.extractDenied, { tag: "-nopw" }));
+    }
+    await preparePrivateReadContext(fixturePaths.extractDenied, OWNER_PASSWORD);
+    for (const name of family) {
+      const without = withoutOwner.get(name);
       const withOwner = await observe(
-        name, fixturePaths.extractDenied, { tag: "-ownerpw", password: OWNER_PASSWORD },
+        name, fixturePaths.extractDenied, { tag: "-ownerpw", privateContextPrepared: true },
       );
       if (without.outcome === "allowed" && withOwner.outcome !== "allowed") {
         downgraded.push({ name, without, withOwner });
@@ -583,13 +601,13 @@ describe("the write gate is the one that survived, and it still bites", () => {
       .rejects.toMatchObject({ code: "ENOENT" });
 
     const written = path.join(temporaryRoot, "owner-authorised.pdf");
+    await unlock.enter(client, fixturePaths.extractDenied, OWNER_PASSWORD);
     const allowed = await client.callTool({
       name: "fill_pdf",
       arguments: {
         pdf_path: fixturePaths.extractDenied,
         output_path: written,
         field_data: { "topmostSubform[0].Page1[0].f1_1[0]": "authorised" },
-        password: OWNER_PASSWORD,
       },
     });
     expect(allowed.isError).not.toBe(true);

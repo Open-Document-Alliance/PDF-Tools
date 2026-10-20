@@ -121,6 +121,13 @@ one-click signup experience. An ordinary user should not need to create a
 developer app. If signing is not configured, ask the installation's maintainer;
 creating a personal Lumin account alone does not enable the integration.
 
+For password-protected local PDFs, ask PDF Tools to unlock the document. Enter
+the password in its private local browser window, never in chat. Access is
+limited to the exact file and the current server session, expires after ten
+minutes, and can be ended with `lock_pdf`. Unlocking preserves the document's
+permissions and encryption; it does not enable otherwise unsupported encrypted
+rendering or comparison. See [private password entry](https://github.com/Open-Document-Alliance/PDF-Tools/blob/abaf94096c7e99328d40407506adff5b16584d1d/docs/ENCRYPTED_PDF_CREDENTIAL_PROPOSAL.md).
+
 Once configured, ask PDF Tools to connect Lumin. Sign in and approve access in
 the browser, never by sharing passwords or callback URLs in chat. If you need
 an account, create it on Lumin's website. If signup does not return to the
@@ -244,12 +251,15 @@ that same view and reports raw pixels unavailable.
 
 ## Core Tools
 
-This list is complete: it names every tool the server registers. One of them,
-`read_pdf_bytes`, is available only to the in-app viewer and is not packed into
+This list is complete for default discovery. Three tools, `read_pdf_bytes`,
+`open_pdf_workspace`, and `import_host_pdf`, are app-only and are not packed into
 the `.mcpb` manifest that ordinary model workflows discover.
 
 ### Viewer and Reading
 
+- `unlock_pdf` (opens private local password entry, outside chat)
+- `get_pdf_unlock_status` (checks the current session's unlock state)
+- `lock_pdf` (forgets the current session's credential)
 - `display_pdf`
 - `fetch_pdf_from_url`
 - `list_pdfs`

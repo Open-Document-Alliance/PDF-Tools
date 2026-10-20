@@ -30,6 +30,7 @@ import zlib from "node:zlib";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 import {
   PDF_DECRYPTION_TIMEOUT_MESSAGE,
   PDF_DECRYPTION_TIMEOUT_MS,
@@ -381,13 +382,15 @@ describe("plaintext boundaries", () => {
 describe("the server while a hostile document is decrypting", () => {
   let client;
   let transport;
+  let unlock;
 
   beforeAll(async () => {
+    unlock = await createPrivatePdfUnlockHarness(temporaryRoot);
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server/index.js")],
       cwd: REPO_ROOT,
-      env: { ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter) },
+      env: { ...unlock.env, ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter) },
       stderr: "ignore",
     });
     client = new Client({ name: "pdf-tools-decrypt-isolation-test", version: "1.0.0" });
@@ -400,6 +403,7 @@ describe("the server while a hostile document is decrypting", () => {
   });
 
   it("answers an unrelated tool call before the decryption it is racing finishes", async () => {
+    await unlock.enter(client, hostilePath, PASSWORD);
     // The exposure, stated as a test. With QPDF on the server's own thread this
     // is impossible by construction: nothing on that thread runs until
     // `callMain` returns, so the second call could only ever be answered after
@@ -409,7 +413,7 @@ describe("the server while a hostile document is decrypting", () => {
 
     const decrypting = client.callTool({
       name: "read_pdf_fields",
-      arguments: { pdf_path: hostilePath, password: PASSWORD },
+      arguments: { pdf_path: hostilePath },
     }).then(result => {
       completed.push("decrypt");
       return result;

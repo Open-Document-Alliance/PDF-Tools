@@ -9,6 +9,7 @@ import { PDFArray, PDFDocument, PDFName, PDFNumber } from "pdf-lib";
 import { validateStructuredToolResult } from "../server/output-schemas.js";
 import { documentEnvelopeSha256 } from "../server/pdf-observations.js";
 import { createTestTempDirectory, removeTestTempDirectory } from "./helpers/temp-directory.js";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
@@ -25,15 +26,17 @@ describe("get_pdf_info source-bound observations", () => {
   let client;
   let transport;
   let tempDirectory;
+  let unlock;
 
   beforeAll(async () => {
     tempDirectory = await createTestTempDirectory(REPO_ROOT, "pdf-info-observations");
+    unlock = await createPrivatePdfUnlockHarness(tempDirectory);
     client = new Client({ name: "pdf-observation-test", version: "1.0.0" });
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server/index.js")],
       cwd: REPO_ROOT,
-      env: { ALLOWED_DIRECTORIES: REPO_ROOT },
+      env: { ...unlock.env, ALLOWED_DIRECTORIES: REPO_ROOT },
       stderr: "pipe",
     });
     await client.connect(transport);
@@ -169,16 +172,19 @@ describe("get_pdf_info source-bound observations", () => {
       name: "get_pdf_info",
       arguments: { pdf_path: ENCRYPTED_PDF },
     });
-    const wrong = await client.callTool({
+    const rejectedLegacy = await client.callTool({
       name: "get_pdf_info",
       arguments: {
         pdf_path: ENCRYPTED_PDF,
         password: provenance.passwords.wrong_password_oracle,
       },
     });
+    await unlock.enter(client, ENCRYPTED_PDF, provenance.passwords.wrong_password_oracle, { accepted: false });
+    const wrong = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: ENCRYPTED_PDF } });
+    await unlock.enter(client, ENCRYPTED_PDF, provenance.passwords.user);
     const correct = await client.callTool({
       name: "get_pdf_info",
-      arguments: { pdf_path: ENCRYPTED_PDF, password: provenance.passwords.user },
+      arguments: { pdf_path: ENCRYPTED_PDF },
     });
 
     expect(missing).toMatchObject({
@@ -187,8 +193,10 @@ describe("get_pdf_info source-bound observations", () => {
     });
     expect(wrong).toMatchObject({
       isError: true,
-      structuredContent: { error: { code: "PASSWORD_INCORRECT" } },
+      structuredContent: { error: { code: "PASSWORD_REQUIRED" } },
     });
+    expect(rejectedLegacy).toMatchObject({ isError: true, structuredContent: { error: { code: "PRIVATE_PDF_PASSWORD_ARGUMENT_FORBIDDEN" } } });
+    expect(JSON.stringify(rejectedLegacy)).not.toContain(provenance.passwords.wrong_password_oracle);
     expect(JSON.stringify(missing)).not.toContain(provenance.passwords.user);
     expect(JSON.stringify(wrong)).not.toContain(provenance.passwords.wrong_password_oracle);
     expect(correct.isError).not.toBe(true);
