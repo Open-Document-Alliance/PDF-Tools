@@ -3383,7 +3383,7 @@ function passwordlessReadError(error) {
 const PRIVATE_PDF_TOOL_NAMES = new Set(["unlock_pdf", "get_pdf_unlock_status", "lock_pdf"]);
 const LEGACY_PDF_PASSWORD_KEYS = ["password", "before_password", "after_password"];
 const ENCRYPTED_GEOMETRY_UNSUPPORTED = new Set([
-  "compare_pdfs", "render_pdf_page", "render_pdf_region", "get_page_analysis", "detect_signature_zones",
+  "compare_pdfs", "render_pdf_page", "render_pdf_region", "get_page_analysis",
 ]);
 
 function withPrivatePasswordInputs(tool) {
@@ -3392,6 +3392,8 @@ function withPrivatePasswordInputs(tool) {
   for (const key of LEGACY_PDF_PASSWORD_KEYS) delete properties[key];
   const passwordGuidance = ENCRYPTED_GEOMETRY_UNSUPPORTED.has(tool.name)
     ? " Encrypted PDFs remain unsupported by this operation, even after unlock_pdf. Private entry does not enable encrypted geometry or comparison. Use an unencrypted copy for this operation."
+    : tool.name === "detect_signature_zones"
+      ? " For encrypted PDFs, use unlock_pdf for private entry. Authenticated text detection may return partial results with encrypted AcroForm scanning unavailable; inspect detection_status and warnings. Never pass passwords in chat or tool arguments."
     : " For password-protected PDFs, use unlock_pdf and enter the password in its local window before retrying. Never pass passwords in chat or tool arguments.";
   return {
     ...tool,

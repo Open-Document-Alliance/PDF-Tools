@@ -242,7 +242,7 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // neutrally described and no longer exposes arbitrary credential headers.
 // 2026-10-20: version the optional tight-grid/caption repair as renderer 1.23.0.
 // 2026-10-20: private local password entry replaces public credential inputs.
-const TOOL_CONTRACT_SHA256 = "6d3e446ce92fb33e7c1e17b5d7d149b1ef5a0b8f2e9527818b4f2220f622be7e";
+const TOOL_CONTRACT_SHA256 = "17e2067e2c014bfc77e234432af45f7711494104f2a14d5f652e42e917251128";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

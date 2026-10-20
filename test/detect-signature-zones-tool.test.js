@@ -75,6 +75,15 @@ describe("detect_signature_zones tool result", () => {
     await client.connect(transport);
   }, 30_000);
 
+  it("advertises partial encrypted text detection rather than claiming it is unsupported", async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find(entry => entry.name === "detect_signature_zones");
+    expect(tool.description).toContain("Authenticated text detection may return partial results");
+    expect(tool.description).toContain("encrypted AcroForm scanning unavailable");
+    expect(tool.description).not.toContain("Encrypted PDFs remain unsupported");
+    expect(tool.inputSchema.properties).not.toHaveProperty("password");
+  });
+
   it("surfaces an unresolved-widget warning without fabricating page 1", async () => {
     const result = await client.callTool({
       name: "detect_signature_zones",

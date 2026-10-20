@@ -126,7 +126,7 @@ the password in its private local browser window, never in chat. Access is
 limited to the exact file and the current server session, expires after ten
 minutes, and can be ended with `lock_pdf`. Unlocking preserves the document's
 permissions and encryption; it does not enable otherwise unsupported encrypted
-rendering or comparison. See [private password entry](docs/ENCRYPTED_PDF_CREDENTIAL_PROPOSAL.md).
+rendering or comparison. See [private password entry](https://github.com/Open-Document-Alliance/PDF-Tools/blob/abaf94096c7e99328d40407506adff5b16584d1d/docs/ENCRYPTED_PDF_CREDENTIAL_PROPOSAL.md).
 
 Once configured, ask PDF Tools to connect Lumin. Sign in and approve access in
 the browser, never by sharing passwords or callback URLs in chat. If you need
