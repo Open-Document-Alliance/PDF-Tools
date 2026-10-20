@@ -10,6 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { LoggingMessageNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import { PDFDocument, PDFName, PDFNumber, StandardFonts, degrees, rgb } from "pdf-lib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 import {
   extractPdfLayout,
   inspectType3GlyphEvidenceForPage,
@@ -2114,6 +2115,7 @@ describe("read_pdf_layout MCP tool", () => {
     const dedicatedStderr = [];
     const protocolLogs = [];
     const rawProtocol = [];
+    const unlock = await createPrivatePdfUnlockHarness(temporaryRoot);
     const dedicatedTransport = new StdioClientTransport({
       command: process.execPath,
       args: [STDERR_SENTINEL_HELPER],
@@ -2121,6 +2123,7 @@ describe("read_pdf_layout MCP tool", () => {
       env: {
         ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter),
         PDF_TOOLS_TEST_STDERR_SENTINEL: sentinel,
+        ...unlock.env,
       },
       stderr: "pipe",
     });
@@ -2154,18 +2157,18 @@ describe("read_pdf_layout MCP tool", () => {
         receiveProtocolMessage?.(message, extra);
       };
       missingTrace = await callTraced({ pdf_path: ENCRYPTED_LAYOUT });
+      await unlock.enter(dedicatedClient, ENCRYPTED_LAYOUT, provenance.passwords.wrong_password_oracle, { accepted: false });
       wrongTrace = await callTraced({
         pdf_path: ENCRYPTED_LAYOUT,
-        password: provenance.passwords.wrong_password_oracle,
       });
+      await unlock.enter(dedicatedClient, ENCRYPTED_LAYOUT, provenance.passwords.user);
       userTrace = await callTraced({
         pdf_path: ENCRYPTED_LAYOUT,
-        password: provenance.passwords.user,
         max_output_characters: 200000,
       });
+      await unlock.enter(dedicatedClient, ENCRYPTED_LAYOUT, provenance.passwords.owner);
       ownerTrace = await callTraced({
         pdf_path: ENCRYPTED_LAYOUT,
-        password: provenance.passwords.owner,
         max_output_characters: 200000,
       });
       await dedicatedClient.listTools();
@@ -2188,7 +2191,7 @@ describe("read_pdf_layout MCP tool", () => {
     expect(wrongTrace.error).toBeNull();
     expect(wrong).toMatchObject({
       isError: true,
-      structuredContent: { status: "failed", error: { error_schema_version: 1, code: "PASSWORD_INCORRECT" } },
+      structuredContent: { status: "failed", error: { error_schema_version: 1, code: "PASSWORD_REQUIRED" } },
     });
     const correctUser = userTrace.result;
     expect(userTrace.error).toBeNull();

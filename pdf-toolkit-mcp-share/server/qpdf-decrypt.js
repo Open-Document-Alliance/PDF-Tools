@@ -397,7 +397,7 @@ export const PDF_PASSWORD_REJECTED_MESSAGE =
 
 export const PDF_PASSWORD_REQUIRED_MESSAGE =
   "This PDF is encrypted and cannot be opened without a password. Supply the document's "
-  + "password in the 'password' parameter and retry.";
+  + "password in the private window opened by unlock_pdf and retry. Never put passwords in chat or tool arguments.";
 
 export const PDF_PASSWORD_UNREPRESENTABLE_MESSAGE =
   "This password cannot be used: it contains a line break. Passwords are handed to the decryption "
@@ -477,8 +477,8 @@ export function pdfWritePermissionDeniedMessage(operation, deniedCapabilities) {
     .join(" and ");
   return `This PDF is encrypted and its permissions deny ${named}, so PDF Tools will not `
     + `${activity}. Supplying the user password proves you may open the document, but not that you `
-    + "may override a restriction its owner set. If you hold the owner password, supply it in the "
-    + "'password' parameter and retry; that is the credential which authorises this change.";
+    + "may override a restriction its owner set. If you hold the owner password, enter it in the "
+    + "private window opened by unlock_pdf and retry; that is the credential which authorises this change.";
 }
 
 /**

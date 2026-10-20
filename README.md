@@ -121,6 +121,13 @@ one-click signup experience. An ordinary user should not need to create a
 developer app. If signing is not configured, ask the installation's maintainer;
 creating a personal Lumin account alone does not enable the integration.
 
+For password-protected local PDFs, ask PDF Tools to unlock the document. Enter
+the password in its private local browser window, never in chat. Access is
+limited to the exact file and the current server session, expires after ten
+minutes, and can be ended with `lock_pdf`. Unlocking preserves the document's
+permissions and encryption; it does not enable otherwise unsupported encrypted
+rendering or comparison. See [private password entry](docs/ENCRYPTED_PDF_CREDENTIAL_PROPOSAL.md).
+
 Once configured, ask PDF Tools to connect Lumin. Sign in and approve access in
 the browser, never by sharing passwords or callback URLs in chat. If you need
 an account, create it on Lumin's website. If signup does not return to the

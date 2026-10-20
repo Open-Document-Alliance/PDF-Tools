@@ -107,6 +107,7 @@ export const SERVER_FILES = [
   "pdfjs-worker.js",
   "qpdf-decrypt-worker.js",
   "qpdf-decrypt.js",
+  "private-pdf-credentials.js",
   "resource-uri.js",
   "skill-files.js",
   "skills.js",

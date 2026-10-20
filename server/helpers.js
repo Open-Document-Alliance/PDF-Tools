@@ -34,7 +34,7 @@ export const PDF_LIB_ENCRYPTED_MESSAGE =
   + "which has no decryption support, so supplying a password here will not help. "
   + "Decrypt the file first (for example with qpdf) and retry. "
   + "To read an encrypted PDF as it is, use read_pdf_layout, convert_pdf_to_markdown, "
-  + "or get_pdf_info, which accept a password and decrypt with PDF.js.";
+  + "or get_pdf_info after entering the password in the private window opened by unlock_pdf. Those tools decrypt with PDF.js.";
 
 // Parameter text for tools that decrypt with PDF.js for one part of their work
 // but still load page geometry through pdf-lib, which stops on encryption.

@@ -1200,7 +1200,7 @@ export function pdfComparisonEncryptedMessage(sides) {
     + "Rather than report a comparison of whichever channels survive, it stops. Decrypt both "
     + "documents first (for example with qpdf) and compare the decrypted copies. To read an "
     + "encrypted PDF as it is, use read_pdf_layout, convert_pdf_to_markdown, or get_pdf_info, "
-    + "which accept a password and decrypt with PDF.js.";
+    + "after entering the password in the private window opened by unlock_pdf. Those tools decrypt with PDF.js.";
 }
 
 export function pdfComparisonEncryptedError(sides) {
@@ -1230,10 +1230,9 @@ export function pdfComparisonEncryptedError(sides) {
  */
 export const PDF_COMPARISON_INVALID_INPUT_MESSAGE =
   "The compare_pdfs arguments or PDF inputs are invalid. It accepts only before_pdf_path, "
-  + "after_pdf_path, before_password, after_password, mode, max_pages, include_visual and "
-  + "max_output_characters, and rejects any other argument. Note that the passwords are named "
-  + "before_password and after_password — compare_pdfs takes two documents, so it has no single "
-  + "'password' argument. Both paths must be absolute paths on this machine.";
+  + "after_pdf_path, mode, max_pages, include_visual and max_output_characters, and rejects "
+  + "any other argument. Passwords are never accepted in tool arguments. "
+  + "Both paths must be absolute paths on this machine.";
 
 export function publicPdfComparisonError(error) {
   const code = error?.code;

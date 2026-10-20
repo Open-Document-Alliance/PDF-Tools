@@ -287,6 +287,9 @@ const OPEN_IDEMPOTENT_SESSION_ACTION = Object.freeze({
 });
 
 const TOOL_EFFECT_ANNOTATIONS = {
+  unlock_pdf: CLOSED_SESSION_ACTION,
+  get_pdf_unlock_status: CLOSED_READ,
+  lock_pdf: { ...CLOSED_SESSION_ACTION, idempotentHint: true },
   start_lumin_authorization: OPEN_SESSION_ACTION,
   finish_lumin_authorization: OPEN_SESSION_ACTION,
   prepare_lumin_request: CLOSED_SESSION_ACTION,
@@ -534,6 +537,7 @@ describe("MCPB static declarations", () => {
       "pdf-lib-rss-monitor.js",
       "pdf-observations.js",
       "qpdf-decrypt.js",
+      "private-pdf-credentials.js",
       "qpdf-decrypt-worker.js",
       "resource-uri.js",
       "stderr-suppression.js",
@@ -548,7 +552,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(38);
+    expect(mirrored).toHaveLength(39);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",
@@ -643,7 +647,7 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
   });
 
   it("exposes the same uniquely named, fully annotated tool contract", () => {
-    expect(tools).toHaveLength(61);
+    expect(tools).toHaveLength(64);
     expect(new Set(names(tools)).size).toBe(tools.length);
     expect(sorted(names(tools))).toEqual(sorted(names(SOURCE_MANIFEST.tools)));
     expect(createHash("sha256").update(JSON.stringify(tools)).digest("hex"))

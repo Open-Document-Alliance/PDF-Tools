@@ -14,6 +14,7 @@ import {
 } from "../server/pdf-comparison.js";
 import { PDF_LIB_ENCRYPTED_MESSAGE } from "../server/helpers.js";
 import { createTestTempDirectory, removeTestTempDirectory } from "./helpers/temp-directory.js";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURES = path.join(REPO_ROOT, "test/fixtures/eval/comparison/synthetic");
@@ -47,15 +48,17 @@ describe("compare_pdfs deterministic product", () => {
   let transport;
   let materialResult;
   let tempDirectory;
+  let unlock;
 
   beforeAll(async () => {
     tempDirectory = await createTestTempDirectory(REPO_ROOT, "compare-pdfs");
+    unlock = await createPrivatePdfUnlockHarness(tempDirectory);
     client = new Client({ name: "compare-pdfs-test", version: "1.0.0" });
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server/index.js")],
       cwd: REPO_ROOT,
-      env: { ...process.env, ALLOWED_DIRECTORIES: REPO_ROOT },
+      env: { ...process.env, ...unlock.env, ALLOWED_DIRECTORIES: REPO_ROOT },
       stderr: "pipe",
     });
     await client.connect(transport);
@@ -88,12 +91,12 @@ describe("compare_pdfs deterministic product", () => {
       },
     });
     expect(tool.inputSchema.properties).toEqual(expect.objectContaining({
-      before_password: expect.objectContaining({ maxLength: 4096 }),
-      after_password: expect.objectContaining({ maxLength: 4096 }),
       mode: expect.objectContaining({ enum: ["default_material", "forensic"] }),
       max_pages: expect.objectContaining({ minimum: 1, maximum: 20 }),
       max_output_characters: expect.objectContaining({ minimum: 20000, maximum: 200000 }),
     }));
+    expect(tool.inputSchema.properties).not.toHaveProperty("before_password");
+    expect(tool.inputSchema.properties).not.toHaveProperty("after_password");
   });
 
   it.each(Object.entries(PAIRS))("discriminates the public synthetic %s comparison role", async (role, [afterName, expectedKinds]) => {
@@ -404,9 +407,7 @@ describe("compare_pdfs deterministic product", () => {
      * and this tool takes two, so the refusal says so by name.
      */
     const unknownText = unknown.content?.map(part => part.text ?? "").join("\n") ?? "";
-    expect(unknownText).toContain("before_password");
-    expect(unknownText).toContain("after_password");
-    expect(unknownText).toMatch(/no single 'password' argument/);
+    expect(unknownText).toContain("Passwords are never tool arguments");
     expect(unknownText).toContain("absolute");
     // Naming the accepted arguments is safe — they are in the published input
     // schema. Naming the caller's own rejected key is not, and never happens.
@@ -458,7 +459,7 @@ describe("compare_pdfs deterministic product", () => {
     // the right one would work. It would not: no password makes an encrypted
     // comparison run, so the refusal is the encryption one either way.
     expect(protectedResult.structuredContent.error.code)
-      .toBe("PDF_ENCRYPTED_COMPARISON_UNSUPPORTED");
+      .toBe("PRIVATE_PDF_PASSWORD_ARGUMENT_FORBIDDEN");
     expect(JSON.stringify(protectedResult)).not.toContain(passwordSentinel);
   });
 
@@ -525,7 +526,13 @@ describe("compare_pdfs deterministic product", () => {
         }],
       ];
       for (const [label, sides, args] of cases) {
-        const result = await compare(args);
+        await unlock.lock(client, ENCRYPTED);
+        const { before_password, after_password, ...publicArgs } = args;
+        const privatePassword = before_password ?? after_password;
+        if (privatePassword) await unlock.enter(client, ENCRYPTED, privatePassword, {
+          accepted: privatePassword !== passwords.wrong_password_oracle,
+        });
+        const result = await compare(publicArgs);
         expect(result.isError, label).toBe(true);
         // Asserted on the SERVED response, at the MCP boundary. A module that
         // returns the right thing is not the same claim as a caller receiving
