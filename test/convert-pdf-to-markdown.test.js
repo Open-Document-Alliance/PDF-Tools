@@ -67,16 +67,22 @@ const makeUniformGridFixture = target => drawGrid(target, { headerSize: 11, sepa
 // Identical size, but the header uses a second embed of the same visible font.
 const makeDoubleEmbedGridFixture = target => drawGrid(target, { headerSize: 11, separateHeaderResource: true });
 
-async function makeHeaderlessRectGridFixture(targetPath) {
+async function makeHeaderlessRectGridFixture(targetPath, { tight = false } = {}) {
   const document = await PDFDocument.create();
   const page = document.addPage([612, 792]);
   const font = await document.embedFont(StandardFonts.Helvetica);
   const rows = [["Region", "Q1", "Q2"], ["<img>&|'", "1200", "1450"],
     ["South", "980", "1020"], ["West", "1500", "1380"]];
-  rows.forEach((row, r) => row.forEach((value, c) => {
-    page.drawRectangle({ x: 72 + c * 150, y: 680 - (r + 1) * 48,
-      width: 150, height: 48, borderWidth: 1, borderColor: rgb(0, 0, 0) });
-    page.drawText(value, { x: 82 + c * 150, y: 650 - r * 48, size: 12, font });
+  const rowHeight = tight ? 10 : 48;
+  if (tight) {
+    page.drawText("Table 1:", { x: 82, y: 700, size: 8, font });
+    page.drawText("Quarterly values", { x: 260, y: 700, size: 8, font });
+  }
+  rows.forEach((row, r) => (tight ? [2, 1, 0] : [0, 1, 2]).forEach(c => {
+    page.drawRectangle({ x: 72 + c * 150, y: 680 - (r + 1) * rowHeight,
+      width: 150, height: rowHeight, borderWidth: 1, borderColor: rgb(0, 0, 0) });
+    page.drawText(row[c], { x: 82 + c * 150, y: (tight ? 671.6 : 650) - r * rowHeight,
+      size: tight ? 8 : 12, font });
   }));
   await fs.writeFile(targetPath, await document.save({ useObjectStreams: false }));
 }
@@ -250,6 +256,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
   let rotatedLinkFixture;
   let hostileLinkFixture;
   let headerlessRectFixture;
+  let tightHeaderlessRectFixture;
 
   beforeAll(async () => {
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "pdf-tools-markdown-"));
@@ -265,6 +272,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
     rotatedLinkFixture = path.join(temporaryRoot, "link-rotated.pdf");
     hostileLinkFixture = path.join(temporaryRoot, "link-hostile.pdf");
     headerlessRectFixture = path.join(temporaryRoot, "headerless-rect.pdf");
+    tightHeaderlessRectFixture = path.join(temporaryRoot, "tight-headerless-rect.pdf");
     await makeStructureFixture(structureFixture);
     await makeDenseFixture(denseFixture);
     await makeGeometryFixture(geometryFixture);
@@ -277,6 +285,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
     await makeLinkFixture(rotatedLinkFixture, { rotation: 90, crop: true });
     await makeLinkFixture(hostileLinkFixture, { url: "https://example.com/a(b)c" });
     await makeHeaderlessRectGridFixture(headerlessRectFixture);
+    await makeHeaderlessRectGridFixture(tightHeaderlessRectFixture, { tight: true });
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server/index.js")],
@@ -434,7 +443,7 @@ describe("convert_pdf_to_markdown MCP tool", () => {
     const opted = await client.callTool({ name: "convert_pdf_to_markdown",
       arguments: { ...args, allow_headerless_tables: true, emit_table_proposals: true, compact: true } });
     expect(opted.isError).not.toBe(true);
-    expect(opted.structuredContent.renderer.version).toBe("1.22.0");
+    expect(opted.structuredContent.renderer.version).toBe("1.23.0");
     expect(opted.structuredContent.options.allow_headerless_tables).toBe(true);
     expect(opted.structuredContent.markdown).toContain("<tr><td>&lt;img&gt;&amp;|&#39;</td><td>1200</td><td>1450</td></tr>");
     expect(opted.structuredContent.markdown).not.toContain("<th>");
@@ -444,6 +453,28 @@ describe("convert_pdf_to_markdown MCP tool", () => {
     const rejected = await client.callTool({ name: "convert_pdf_to_markdown",
       arguments: { ...args, allow_headerless_tables: "true" } });
     expect(rejected.isError).toBe(true);
+  }, 30_000);
+
+  it("retains a real tight captioned grid through the MCP tool", async () => {
+    const before = await fs.readFile(tightHeaderlessRectFixture);
+    const args = { pdf_path: tightHeaderlessRectFixture, max_markdown_bytes: 100000 };
+    const baseline = await client.callTool({ name: "convert_pdf_to_markdown", arguments: args });
+    const result = await client.callTool({ name: "convert_pdf_to_markdown", arguments: {
+      ...args, allow_headerless_tables: true, emit_table_proposals: true,
+    } });
+    expect(result.isError).not.toBe(true);
+    expect(baseline.structuredContent.markdown).not.toContain("<table>");
+    const converted = result.structuredContent;
+    expect(converted.renderer.version).toBe("1.23.0");
+    expect(converted.markdown.match(/<table>/gu)).toHaveLength(1);
+    expect(converted.markdown).toContain("<tr><td>Region</td><td>Q1</td><td>Q2</td></tr>");
+    expect(converted.markdown).toContain("<tr><td>West</td><td>1500</td><td>1380</td></tr>");
+    expect(converted.markdown.split("Table 1:")).toHaveLength(2);
+    expect(converted.markdown.indexOf("Table 1:")).toBeLessThan(converted.markdown.indexOf("<table>"));
+    expect(converted.markdown).not.toContain("<th>");
+    expect(converted.conversion_status).toBe("partial");
+    expect(converted.table_proposals).toHaveLength(1);
+    expect(await fs.readFile(tightHeaderlessRectFixture)).toEqual(before);
   }, 30_000);
 
   it("escapes a table cell delimiter exactly once", async () => {
