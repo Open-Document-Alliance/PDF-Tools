@@ -8,7 +8,7 @@ const RENDERER = Object.freeze({
   name: "pdf-tools.layout-markdown-renderer",
   version: "1.21.0",
 });
-const HEADERLESS_RENDERER = Object.freeze({ ...RENDERER, version: "1.22.0" });
+const HEADERLESS_RENDERER = Object.freeze({ ...RENDERER, version: "1.23.0" });
 const SUPPORTED_LAYOUT_IR_VERSION = "1.6.0";
 
 // Bounded geometric table inference. A run of adjacent lines is treated as a
@@ -2111,6 +2111,10 @@ function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables =
     }
     if (filledCells / totalCells < RECT_MIN_FILL_RATIO) return { reason: "ruling_unsupported" };
 
+    const candidateRows = lineRecords
+      .toSorted((left, right) => left.line.y - right.line.y)
+      .map(record => ({ line: record.line, cells: record.structuralInsideNonWhitespace }));
+    const headerless = !hasHeaderEvidence(candidateRows) && !hasFirstRowBandEvidence(bands);
     const cells = Array.from({ length: rowCount }, () => (
       Array.from({ length: columnCount }, () => [])
     ));
@@ -2129,7 +2133,8 @@ function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables =
             if (centerX >= xEdges[column] - RECT_CELL_ASSIGNMENT_SLACK
               && centerX <= xEdges[column + 1] + RECT_CELL_ASSIGNMENT_SLACK
               && box.y >= yEdges[row] - RECT_CELL_ASSIGNMENT_SLACK
-              && box.y <= yEdges[row + 1] + RECT_CELL_ASSIGNMENT_SLACK) {
+              && (allowHeaderlessTables && headerless ? rectBottom(box) : box.y)
+                <= yEdges[row + 1] + RECT_CELL_ASSIGNMENT_SLACK) {
               matches.push({ row, column });
             }
           }
@@ -2184,10 +2189,6 @@ function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables =
     if (emptyColumns.slice(firstColumn, lastColumn + 1).some(Boolean)) return { reason: "ruling_unsupported" };
     if (firstColumn > lastColumn) return { reason: "ruling_unsupported" };
     const trimmedGrid = grid.map(row => row.slice(firstColumn, lastColumn + 1));
-    const candidateRows = lineRecords
-      .sort((left, right) => left.line.y - right.line.y)
-      .map(record => ({ line: record.line, cells: record.structuralInsideNonWhitespace }));
-    const headerless = !hasHeaderEvidence(candidateRows) && !hasFirstRowBandEvidence(bands);
     if (headerless && !allowHeaderlessTables) {
       return { reason: "header" };
     }
@@ -2197,8 +2198,18 @@ function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables =
       // A partial rectangle census or a center-only cell assignment cannot
       // establish the complete grid this profile promises to preserve.
       const candidateLineIds = new Set(candidateRows.map(row => row.line.id));
-      if (candidateLineIds.size !== runLineIds.size
-        || [...runLineIds].some(id => !candidateLineIds.has(id))) {
+      const first = run.findIndex(row => candidateLineIds.has(row.line.id));
+      const last = run.findLastIndex(row => candidateLineIds.has(row.line.id));
+      const gridBox = { x: bounds.x, y: bounds.y,
+        width: bounds.right - bounds.x, height: bounds.bottom - bounds.y };
+      // One explicit caption can share the run with the grid. Keep it as
+      // text only when it precedes the complete contiguous grid and lies
+      // wholly outside its envelope. Other extra rows remain ambiguous.
+      if (first < 0 || last - first + 1 !== candidateLineIds.size
+        || run.slice(first, last + 1).some(row => !candidateLineIds.has(row.line.id))
+        || last !== run.length - 1 || first > 1
+        || (first === 1 && (!/^table\s+(?:\d+|[ivxlcdm]+)(?:[:.]|\s|$)/iu.test(run[0].line.text.trim())
+          || boxesOverlap(run[0].line, gridBox)))) {
         return { reason: "topology" };
       }
       // Vector paint makes an otherwise fully observed text page "partial"
@@ -2225,7 +2236,8 @@ function tryBuildRectGrid(page, run, clusters, itemById, allowHeaderlessTables =
         }
       }
       // Keep empty outer slots rather than trimming source grid columns.
-      return { kind: "table", grid, rows: candidateRows, headerless: true };
+      return { kind: "table", grid, rows: candidateRows, headerless: true,
+        leadingRows: run.slice(0, first) };
     }
     return { kind: "table", grid: trimmedGrid, rows: candidateRows };
   }
@@ -2670,10 +2682,12 @@ function segmentTextRows(page, rows, itemById, ruledClusters, allowHeaderlessTab
         ? tryBuildRectGrid(page, run, ruledClusters, itemById, allowHeaderlessTables)
         : null;
       if (ruling?.kind === "table") {
-        segments.push({ kind: "table", rows: run, grid: ruling.grid, ...(ruling.headerless ? { headerless: true } : {}) });
+        if (ruling.leadingRows?.length) segments.push({ kind: "text", rows: ruling.leadingRows });
+        segments.push({ kind: "table", rows: ruling.headerless ? ruling.rows : run,
+          grid: ruling.grid, ...(ruling.headerless ? { headerless: true } : {}) });
         if (ruling.headerless) {
           tableReason = "header";
-          regions.push({ run, reason: "header" });
+          regions.push({ run: ruling.rows, reason: "header" });
         }
       } else {
         // Preserve the reason from the rect-evidence attempt. The text path

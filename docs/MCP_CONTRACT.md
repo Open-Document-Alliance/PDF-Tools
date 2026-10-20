@@ -93,7 +93,7 @@ entrypoint with bounded value, history, citation, and page-coverage views.
 
 `convert_pdf_to_markdown` has a default-off `allow_headerless_tables` option
 for narrowly qualified complete ruled-rectangle grids. The opted-in renderer
-profile `1.22.0` emits escaped HTML data cells without assigning header roles;
+profile `1.23.0` emits escaped HTML data cells without assigning header roles;
 typed uncertainty remains. Omitted or false retains the unchanged default
 profile `1.21.0`. See [Header-neutral tables](HEADERLESS_TABLES.md).
 

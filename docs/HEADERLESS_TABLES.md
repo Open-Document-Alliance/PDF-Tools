@@ -2,7 +2,7 @@
 
 `convert_pdf_to_markdown` accepts the explicit, default-off
 `allow_headerless_tables: true` option. The selected renderer profile is
-`1.22.0`; ordinary calls and explicit `false` retain profile `1.21.0` and
+`1.23.0`; ordinary calls and explicit `false` retain profile `1.21.0` and
 the previous complete result envelope.
 
 This addresses a narrow representational limit: GFM assigns header semantics
@@ -20,6 +20,15 @@ truncated evidence, suspect text and ordinary aligned prose do not qualify.
 This does not broaden the captioned/solid-mask, segmented-rule, or unruled
 table paths. Those and existing GFM tables keep their prior rules. Source
 text is HTML-escaped, never interpreted as markup or an attribute.
+
+Profile `1.23.0` uses each complete text advance box when choosing its row,
+so tightly spaced rows do not become ambiguous merely because the top of
+one box is within the preceding row's tolerance. A single explicit `Table`
+caption may precede the complete grid in the same text run when its whole
+line is outside the grid. The caption stays ordinary text and is excluded
+from the cell proposal. Other extra rows, overlapping captions and text
+crossing cells still prevent conversion. The earlier `1.22.0` profile could
+reject these complete captioned grids; no header role is added by this repair.
 
 Example tool arguments:
 

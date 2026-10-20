@@ -428,6 +428,16 @@ describe("layout Markdown renderer", () => {
     expect(first.conversion_status).toBe("complete");
   });
 
+  it("keeps established header-evidenced GFM cells unchanged in the opt-in profile", async () => {
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items: ruledGridItems() }]), ruledGridRects());
+    const baseline = renderPdfLayoutToMarkdown(layout);
+    const opted = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+    expect(opted.pages).toEqual(baseline.pages);
+    expect(opted.gaps).toEqual(baseline.gaps);
+    expect(opted.markdown.split("## Conversion limitations")[0])
+      .toEqual(baseline.markdown.split("## Conversion limitations")[0]);
+  });
+
   it("keeps the complete default envelope unchanged when header-neutral mode is off", async () => {
     const layout = attachRuledRects(await validatedSyntheticLayout([{
       items: ruledGridItems({ headerSize: 12 }),
@@ -447,7 +457,7 @@ describe("layout Markdown renderer", () => {
     const result = renderPdfLayoutToMarkdown(layout, {
       allowHeaderlessTables: true, emitTableProposals: true, compact: true,
     });
-    expect(result.renderer.version).toBe("1.22.0");
+    expect(result.renderer.version).toBe("1.23.0");
     expect(result.options.allow_headerless_tables).toBe(true);
     expect(result.markdown).toContain("<tr><td>North</td><td>1200</td><td>1450</td></tr>");
     expect(result.markdown).not.toContain("<th>");
@@ -457,6 +467,61 @@ describe("layout Markdown renderer", () => {
     expect(result.table_proposal_regions).toHaveLength(1);
     expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
   });
+
+  it.each([false, true])("retains tightly spaced complete cells with caption=%s", async caption => {
+    const values = [["Label", "First", "Second"], ["North", "1200", "1450"],
+      ["South", "980", "1020"], ["West", "1500", "1380"]];
+    // The PDF paints each row right to left. Each body text box starts within
+    // the preceding cell's old top-only tolerance but fits one whole cell.
+    const items = values.flatMap((row, rowIndex) => row.toReversed().map((value, index) => textItem(value, {
+      top: 110.7 + rowIndex * 10, left: 82 + (2 - index) * 150,
+      fontSize: 8, eol: index === 2,
+    })));
+    if (caption) items.unshift(textItem("Table 1:", { top: 90, left: 82, fontSize: 8, eol: false }),
+      textItem("Quarterly values", { top: 90, left: 260, fontSize: 8 }));
+    const rects = values.flatMap((row, rowIndex) => row.map((_, column) => ({
+      x: 72 + column * 150, y: 112 + rowIndex * 10, width: 150, height: 10, verb: "stroke",
+    })));
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), rects);
+    const baseline = renderPdfLayoutToMarkdown(layout);
+    const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true, emitTableProposals: true });
+    expect(baseline.markdown).not.toContain("<table>");
+    expect(result.markdown.match(/<table>/gu)).toHaveLength(1);
+    expect(result.markdown).toContain("<tr><td>Label</td><td>First</td><td>Second</td></tr>");
+    expect(result.markdown).toContain("<tr><td>North</td><td>1200</td><td>1450</td></tr>");
+    expect(result.markdown).toContain("<tr><td>West</td><td>1500</td><td>1380</td></tr>");
+    if (caption) {
+      expect(result.markdown.split("Table 1:")).toHaveLength(2);
+      expect(result.markdown.indexOf("Table 1:")).toBeLessThan(result.markdown.indexOf("<table>"));
+      expect(result.table_proposal_regions[0].text_items.some(item => item.text.includes("Table 1:"))).toBe(false);
+    }
+    expect(result.conversion_status).toBe("partial");
+    expect(result.markdown).not.toContain("<th>");
+    expect(renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: false })).toEqual(baseline);
+    expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+  });
+
+  it.each(["overlapping_caption", "ordinary_prose", "cross_row_text"])(
+    "does not force a tight grid through %s", async attack => {
+      const items = ruledGridItems({ headerSize: 12 });
+      if (attack === "cross_row_text") {
+        const north = items.find(item => item.str === "North");
+        north.height = 65;
+        north.transform[3] = 65;
+      } else {
+        items.unshift(textItem(attack === "ordinary_prose" ? "Section:" : "Table 1:", {
+          top: attack === "overlapping_caption" ? 106 : 90, left: 82, fontSize: 8, eol: false,
+        }), textItem("Quarterly values", {
+          top: attack === "overlapping_caption" ? 106 : 90, left: 260, fontSize: 8,
+        }));
+      }
+      const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), headerlessGridRects());
+      const result = renderPdfLayoutToMarkdown(layout, { allowHeaderlessTables: true });
+      expect(result.markdown).not.toContain("<table>");
+      expect(result.markdown).toContain("North");
+      expect(result.markdown).toContain("West");
+    },
+  );
 
   it("escapes source markup without interpreting pipe characters or creating HTML attributes", async () => {
     const items = ruledGridItems({ headerSize: 12 }).map(item => item.str === "North"

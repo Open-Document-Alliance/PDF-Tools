@@ -240,7 +240,8 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // renderer-profile/output-schema contract. Default conversion bytes unchanged.
 // 2026-10-20: prepare_lumin_request is stateful/non-idempotent; fetch is
 // neutrally described and no longer exposes arbitrary credential headers.
-const TOOL_CONTRACT_SHA256 = "fccd8d1a5387816d4407868b8bebe26865b7e81318b5f20fb6ebb6209fc56386";
+// 2026-10-20: version the optional tight-grid/caption repair as renderer 1.23.0.
+const TOOL_CONTRACT_SHA256 = "d5e40605f3f8d0fa656a798ed38400b3f12981250d8fcc9b05ff094a861dc17f";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
