@@ -1,4 +1,5 @@
 import http from "node:http";
+import vm from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPrivatePdfCredentials } from "../server/private-pdf-credentials.js";
 
@@ -43,6 +44,26 @@ async function post(url, route = "/unlock", values = { password: SECRET }, optio
     body: JSON.stringify({ token: url.hash.slice(1), ...values }), ...options,
   });
   return { status: response.status, body: await response.json() };
+}
+
+async function pageHarness(url, intercept = () => undefined) {
+  const html = await (await fetch(url.origin)).text();
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const elements = new Map();
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, { textContent: "", value: "", disabled: false, events: {},
+      addEventListener(name, callback) { this.events[name] = callback; } });
+    return elements.get(id);
+  };
+  vm.runInNewContext(script, {
+    location: { hash: url.hash, pathname: "/" }, history: { replaceState() {} },
+    document: { getElementById: element }, addEventListener() {},
+    fetch: async (route, options) => intercept(route, options) ?? fetch(`${url.origin}${route}`, {
+      ...options, headers: { ...options.headers, Origin: url.origin },
+    }),
+  });
+  await vi.waitFor(() => expect(element("message").textContent).not.toBe(""));
+  return { element, click: id => element(id).events.click() };
 }
 
 afterEach(async () => {
@@ -187,10 +208,42 @@ describe("private PDF password entry", () => {
     await post(url);
     item.advance(5 * 60_000);
     expect(item.service.passwordForSource(source())).toBe(SECRET);
-    expect((await post(url, "/session", {})).status).toBe(403);
+    expect((await post(url, "/session", {})).status).toBe(200);
     item.advance(5 * 60_000);
     expect(item.service.passwordForSource(source())).toBeUndefined();
     expect(await item.service.status("/synthetic/one.pdf")).toEqual({ status: "expired" });
+  });
+
+  it.each(["lock", "cancel"])("keeps the visible %s action valid until credential expiry", async action => {
+    const item = fixture();
+    const url = await item.open();
+    await post(url);
+    item.advance(9 * 60_000);
+    const page = await pageHarness(url);
+    expect(item.service.passwordForSource(source())).toBe(SECRET);
+    await page.click(action);
+    expect(page.element("message").textContent).toBe("Document locked. You can close this window.");
+    expect(item.service.passwordForSource(source())).toBeUndefined();
+    expect(await item.service.status("/synthetic/one.pdf")).toEqual({ status: "locked" });
+  });
+
+  it.each(["rejected", "unavailable"])("does not falsely confirm a lock when the request is %s", async failure => {
+    const item = fixture();
+    const url = await item.open();
+    await post(url);
+    let fail = true;
+    const page = await pageHarness(url, route => {
+      if (route !== "/lock" || !fail) return undefined;
+      if (failure === "unavailable") throw new Error("connection unavailable");
+      return Promise.resolve({ ok: false, json: async () => ({ error: "Private PDF request rejected." }) });
+    });
+    await page.click("lock");
+    expect(page.element("message").textContent).toContain("Could not confirm");
+    expect(item.service.passwordForSource(source())).toBe(SECRET);
+    fail = false;
+    await page.click("lock");
+    expect(page.element("message").textContent).toBe("Document locked. You can close this window.");
+    expect(item.service.passwordForSource(source())).toBeUndefined();
   });
 
   it("never uses one source's password for a second source, even with equal bytes", async () => {
