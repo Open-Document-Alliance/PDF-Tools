@@ -238,7 +238,9 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // export is explicitly new-file-only. Optional OCR remains absent by default.
 // 2026-10-13: default-off header-neutral HTML table option and its coupled
 // renderer-profile/output-schema contract. Default conversion bytes unchanged.
-const TOOL_CONTRACT_SHA256 = "225dccb33c6168690d56ab0e40ef3fb364f10d4f0af8fdfa4577938f3566a235";
+// 2026-10-20: prepare_lumin_request is stateful/non-idempotent; fetch is
+// neutrally described and no longer exposes arbitrary credential headers.
+const TOOL_CONTRACT_SHA256 = "fccd8d1a5387816d4407868b8bebe26865b7e81318b5f20fb6ebb6209fc56386";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -286,7 +288,7 @@ const OPEN_IDEMPOTENT_SESSION_ACTION = Object.freeze({
 const TOOL_EFFECT_ANNOTATIONS = {
   start_lumin_authorization: OPEN_SESSION_ACTION,
   finish_lumin_authorization: OPEN_SESSION_ACTION,
-  prepare_lumin_request: CLOSED_READ,
+  prepare_lumin_request: CLOSED_SESSION_ACTION,
   send_lumin_request: OPEN_NON_IDEMPOTENT_OVERWRITE,
   check_lumin_status: OPEN_IDEMPOTENT_SESSION_ACTION,
   download_lumin_artifact: OPEN_SESSION_ACTION,
@@ -610,6 +612,33 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
     expect(result.content).toEqual([{ type: "text", text: expect.stringContaining("No PDF has been opened") }]);
     expect(await client.callTool({ name: "get_active_document", arguments: {} })).toEqual(before);
     expect((await client.callTool({ name: "open_pdf_workspace", arguments: { pdf_path: EXAMPLE_PDF } })).isError).toBe(true);
+  });
+
+  it("describes PDF downloads without steering or credential-bearing inputs", () => {
+    const tool = tools.find(tool => tool.name === "fetch_pdf_from_url");
+    expect(tool.description).not.toMatch(/preferred|always use|do not use|first move|succeeds where/i);
+    expect(tool.description).toContain("Does not provide browser sign-in");
+    expect(tool.inputSchema.properties).not.toHaveProperty("headers");
+    expect(tool.inputSchema.additionalProperties).toBe(false);
+  });
+
+  it.each([
+    { headers: { Authorization: "Bearer synthetic-do-not-reflect" } },
+    { headers: { Cookie: "synthetic-do-not-reflect" } },
+    { headers: {} },
+    { headers: null },
+    { access_token: "synthetic-do-not-reflect" },
+    { "synthetic-do-not-reflect": true },
+  ])("rejects unadvertised download arguments before URL handling: %j", async extra => {
+    const before = await fs.readdir(stateRoot);
+    const result = await client.callTool({
+      name: "fetch_pdf_from_url",
+      arguments: { url: "not-a-url", destination_dir: stateRoot, ...extra },
+    });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("Unsupported download argument");
+    expect(JSON.stringify(result)).not.toContain("synthetic-do-not-reflect");
+    expect(await fs.readdir(stateRoot)).toEqual(before);
   });
 
   it("exposes the same uniquely named, fully annotated tool contract", () => {

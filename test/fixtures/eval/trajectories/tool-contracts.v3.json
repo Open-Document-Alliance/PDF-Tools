@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "09cb0675a8be40e01e9249a6a6f39a5e2fdf7503fab12722e9db564b96424db8",
+  "tools_sha256": "179dc9340e4554d8c6bbae009ce3fb202e8693ac96fefedc065adb1ab0ea233d",
   "tools": [
     {
       "name": "add_signature_field",
@@ -879,13 +879,6 @@
             "type": "number",
             "description": "Maximum download size in MB (default: 100). Raise for larger PDFs."
           },
-          "headers": {
-            "type": "object",
-            "description": "Optional HTTP headers, e.g. { \"Authorization\": \"Bearer ...\" } for authenticated URLs.",
-            "additionalProperties": {
-              "type": "string"
-            }
-          },
           "allow_private_hosts": {
             "type": "boolean",
             "description": "Allow downloads from localhost / private IP ranges. Default false for safety. Only enable for trusted intranet PDFs."
@@ -893,7 +886,8 @@
         },
         "required": [
           "url"
-        ]
+        ],
+        "additionalProperties": false
       }
     },
     {

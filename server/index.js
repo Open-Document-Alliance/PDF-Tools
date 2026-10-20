@@ -4772,7 +4772,7 @@ async function listTools(request) {
       },
       {
         name: "fetch_pdf_from_url",
-        description: "Download a PDF from any URL — the PREFERRED way to grab any PDF from a URL for the user. **Always use this for PDF URLs; do NOT use bash, curl, wget, or WebFetch first.** Those run in Claude's sandbox and fail on many domains (gov sites, enterprise, auth-required URLs); this tool runs on the user's machine with full network access and succeeds where they don't. Returns a local file path that plugs into every other PDF tool here (display_pdf, read_pdf_fields, fill_pdf, validate_pdf, detect_signature_zones, apply_signature, merge_pdfs, etc.). If the user mentions a PDF URL in any way — \"download this,\" \"open this link,\" \"sign this,\" \"fill out\" — this is your first move before any other tool.",
+        description: "Download a PDF from an HTTP(S) URL to an allowed local directory and return its local path. Enforces download-size, redirect, and network-address checks. Does not provide browser sign-in or accept authentication headers. For sign-in-required files, download through the provider's interface and use the saved local PDF. Do not put passwords, cookies, or access tokens in tool arguments.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4797,17 +4797,13 @@ async function listTools(request) {
               type: "number",
               description: "Maximum download size in MB (default: 100). Raise for larger PDFs."
             },
-            headers: {
-              type: "object",
-              description: "Optional HTTP headers, e.g. { \"Authorization\": \"Bearer ...\" } for authenticated URLs.",
-              additionalProperties: { type: "string" }
-            },
             allow_private_hosts: {
               type: "boolean",
               description: "Allow downloads from localhost / private IP ranges. Default false for safety. Only enable for trusted intranet PDFs."
             }
           },
-          required: ["url"]
+          required: ["url"],
+          additionalProperties: false
         },
         annotations: {
           title: "Fetch PDF from URL",
@@ -7873,6 +7869,18 @@ async function handleToolCall(request) {
       }
 
       case "fetch_pdf_from_url": {
+        // Hosts may invoke tools without validating inputSchema. Reject legacy
+        // credential-bearing arguments before filesystem or network activity,
+        // without reflecting their contents into model-visible errors.
+        const allowedArguments = new Set([
+          "url", "filename", "destination_dir", "overwrite",
+          "expected_output_identity", "max_size_mb", "allow_private_hosts",
+        ]);
+        if (Object.keys(args).some(key => !allowedArguments.has(key))) {
+          throw new Error(
+            "Unsupported download argument. Custom headers and authentication credentials are not accepted. Download sign-in-required PDFs through the provider's interface and use the saved local file.",
+          );
+        }
         const {
           url,
           filename,
@@ -7880,7 +7888,6 @@ async function handleToolCall(request) {
           overwrite = false,
           expected_output_identity,
           max_size_mb = 100,
-          headers,
           allow_private_hosts = false,
         } = args;
 
@@ -7908,7 +7915,6 @@ async function handleToolCall(request) {
           overwrite,
           expectedOutputIdentity,
           maxSizeMb: max_size_mb,
-          headers: headers || {},
           allowPrivateHosts: allow_private_hosts,
           assertPathAllowed,
         });

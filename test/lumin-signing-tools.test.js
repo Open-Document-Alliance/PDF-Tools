@@ -220,6 +220,14 @@ describe("public Lumin signing workflow", () => {
         idempotentHint: false,
         openWorldHint: true,
       });
+    expect(LUMIN_SIGNING_TOOL_DEFINITIONS.find(tool => tool.name === "prepare_lumin_request")?.annotations)
+      .toEqual({
+        title: "Prepare Lumin Signing Request",
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      });
   });
 
   it("starts and completes PKCE without returning or persisting credentials", async () => {
