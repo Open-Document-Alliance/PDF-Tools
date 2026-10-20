@@ -3125,7 +3125,8 @@ function rectangleSubpaths(commands) {
   return rectangles;
 }
 
-function transformedRectangle(segments, transform) {
+function transformedRectangle(segments, transform, minSize = RULED_RECT_MIN_SIZE,
+  axisTolerance = RULED_RECT_AXIS_TOLERANCE) {
   const transformedSegments = segments.map(([start, end]) => [
     applyViewportPoint(transform, start[0], start[1]),
     applyViewportPoint(transform, end[0], end[1]),
@@ -3135,8 +3136,8 @@ function transformedRectangle(segments, transform) {
   const axisAligned = transformedSegments.every(([start, end]) => {
     const dx = Math.abs(end[0] - start[0]);
     const dy = Math.abs(end[1] - start[1]);
-    return (dy <= RULED_RECT_AXIS_TOLERANCE && dx > RULED_RECT_AXIS_TOLERANCE)
-      || (dx <= RULED_RECT_AXIS_TOLERANCE && dy > RULED_RECT_AXIS_TOLERANCE);
+    return (dy <= axisTolerance && dx > axisTolerance)
+      || (dx <= axisTolerance && dy > axisTolerance);
   });
   if (!axisAligned) return null;
   const xs = points.map(point => point[0]);
@@ -3145,10 +3146,10 @@ function transformedRectangle(segments, transform) {
   const y = Math.min(...ys);
   const width = Math.max(...xs) - x;
   const height = Math.max(...ys) - y;
-  if (width < RULED_RECT_MIN_SIZE || height < RULED_RECT_MIN_SIZE) return null;
+  if (width < minSize || height < minSize) return null;
   const uniqueCorners = [];
   for (const point of points) {
-    if (!uniqueCorners.some(existing => Math.hypot(existing[0] - point[0], existing[1] - point[1]) <= RULED_RECT_AXIS_TOLERANCE)) {
+    if (!uniqueCorners.some(existing => Math.hypot(existing[0] - point[0], existing[1] - point[1]) <= axisTolerance)) {
       uniqueCorners.push(point);
     }
   }
@@ -3382,8 +3383,23 @@ function deriveOperatorEvidence(pdfjsLib, operators, viewportTransform) {
         }
       }
       if (verb !== null && buffer !== null) {
-        for (const segments of rectangleSubpaths(commands)) {
-          const rect = transformedRectangle(segments, combinedTransform);
+        const rectangles = rectangleSubpaths(commands);
+        for (const segments of rectangles) {
+          let rect = transformedRectangle(segments, combinedTransform);
+          // Producers also paint rules as thin filled rectangles, not stroked
+          // paths or image masks. Retain their actual area, never a fabricated
+          // centerline or a cell boundary. A single closed subpath avoids
+          // promoting holes/compound fill geometry into independent bars.
+          if (!rect && rectangles.length === 1
+            && [5, 6].includes(commands.length)
+            && commands[0].opcode === DRAW_OPS.moveTo
+            && commands.at(-1).opcode === DRAW_OPS.closePath
+            && commands.slice(1, -1).every(command => command.opcode === DRAW_OPS.lineTo)
+            && (paintOp === pdfjsLib.OPS?.fill || paintOp === pdfjsLib.OPS?.eoFill)) {
+            const bar = transformedRectangle(segments, combinedTransform, 0.05, 0.001);
+            if (bar && Math.min(bar.width, bar.height) <= 2
+              && Math.max(bar.width, bar.height) >= RULED_RECT_MIN_SIZE) rect = bar;
+          }
           if (rect) candidates.push({ ...rect, verb, operator_index: operatorIndex });
         }
       }

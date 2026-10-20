@@ -239,7 +239,17 @@ Stable item, line, and nonsemantic flow-block references support conservative
 reading order without claiming paragraphs or document structure. Version 1.2
 also retains bounded, axis-aligned solid-mask rectangle evidence with exact
 source-operation and transform provenance. Those rectangles are neutral paint
-evidence, not inferred rules or cells. Raster-only, mixed, hidden, clipped,
+evidence, not inferred rules or cells.
+The separate `ruled_rects` path also retains a single closed axis-aligned
+rectangle painted with `fill` or `eoFill` when its transformed shorter side is
+0.05 through 2 points and its longer side is at least 5 points. These thin
+filled bars retain their actual area and fill verb, not a synthesized stroke
+centerline, table cell or visibility claim. Compound paths, clipped-only and
+unpainted paths, strokes, and non-axis-aligned slivers do not qualify through
+this additional capture path. Existing rectangle caps and source replay apply.
+The Markdown cell-grid path keeps its previous 5-point minimum on both sides;
+retaining a thin bar does not establish missing row or column boundaries.
+Raster-only, mixed, hidden, clipped,
 duplicate, and OCR-overlay gaps remain explicit. The tool does not render, OCR,
 infer tables, or claim arbitrary schema extraction,
 and every item, character, or output limit is fail-closed with truncation

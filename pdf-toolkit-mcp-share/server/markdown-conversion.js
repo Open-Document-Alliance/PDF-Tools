@@ -1865,7 +1865,9 @@ function preprocessRuledRects(page) {
   if (!evidence || evidence.status !== "available") return null;
   const sourceRects = evidence.items
     .map((rect, order) => ({ ...rect, order }))
-    .filter(rect => rect.width > 0 && rect.height > 0);
+    // Thin filled rules are neutral area evidence, not individual table cells.
+    // Keep the established cell-candidate size floor independently of capture.
+    .filter(rect => rect.width >= 5 && rect.height >= 5);
   if (sourceRects.length === 0) return [];
 
   const medianWidth = median(sourceRects.map(rect => rect.width));
