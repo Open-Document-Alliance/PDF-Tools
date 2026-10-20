@@ -241,7 +241,8 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-10-20: prepare_lumin_request is stateful/non-idempotent; fetch is
 // neutrally described and no longer exposes arbitrary credential headers.
 // 2026-10-20: version the optional tight-grid/caption repair as renderer 1.23.0.
-const TOOL_CONTRACT_SHA256 = "d5e40605f3f8d0fa656a798ed38400b3f12981250d8fcc9b05ff094a861dc17f";
+// 2026-10-20: private local password entry replaces public credential inputs.
+const TOOL_CONTRACT_SHA256 = "6e30b781fed82830da0c45e4d94724eebfeb5736c13d192e30bdbd94d3b46507";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

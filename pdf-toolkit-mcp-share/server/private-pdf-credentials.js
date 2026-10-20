@@ -51,9 +51,15 @@ const PAGE_SCRIPT = `
   });
   for (const action of ["lock", "cancel"]) document.getElementById(action).addEventListener("click", async () => {
     password.value = ""; unlock.disabled = true;
-    try { await send("/" + action); } catch {}
-    token = "";
-    message.textContent = "Document locked. You can close this window.";
+    try {
+      const result = await send("/" + action);
+      if (result.ok && result.data.status === "locked") {
+        token = "";
+        message.textContent = "Document locked. You can close this window.";
+        return;
+      }
+    } catch {}
+    message.textContent = "Could not confirm the document is locked. Try again, or use Lock PDF in PDF Tools.";
   });
   addEventListener("pagehide", () => { password.value = ""; token = ""; });
   refresh();
@@ -177,21 +183,32 @@ export function createPrivatePdfCredentials({ bindSource, validatePassword, open
     return new Promise((resolve, reject) => {
       let bytes = 0;
       const chunks = [];
-      const timer = setTimeout(() => { chunks.length = 0; reject(fixedError("PRIVATE_PDF_REQUEST_INVALID")); }, 5000);
+      let finished = false;
+      const fail = () => {
+        if (finished) return;
+        finished = true;
+        chunks.length = 0;
+        clearTimeout(timer);
+        reject(fixedError("PRIVATE_PDF_REQUEST_INVALID"));
+      };
+      const timer = setTimeout(fail, 5000);
       const cleanup = () => clearTimeout(timer);
       request.on("data", chunk => {
+        if (finished) return;
         bytes += chunk.length;
-        if (bytes > MAX_BODY_BYTES) { chunks.length = 0; cleanup(); reject(fixedError("PRIVATE_PDF_REQUEST_INVALID")); }
+        if (bytes > MAX_BODY_BYTES) fail();
         else chunks.push(chunk);
       });
       request.on("end", () => {
+        if (finished) return;
+        finished = true;
         cleanup();
         try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
         catch { reject(fixedError("PRIVATE_PDF_REQUEST_INVALID")); }
         finally { chunks.length = 0; }
       });
-      request.on("error", () => { cleanup(); chunks.length = 0; reject(fixedError("PRIVATE_PDF_REQUEST_INVALID")); });
-      request.on("aborted", () => { cleanup(); chunks.length = 0; reject(fixedError("PRIVATE_PDF_REQUEST_INVALID")); });
+      request.on("error", fail);
+      request.on("aborted", fail);
     });
   }
 
@@ -267,6 +284,9 @@ export function createPrivatePdfCredentials({ bindSource, validatePassword, open
       entry.password = password;
       entry.expiresAt = now() + CREDENTIAL_TTL_MS;
       entry.status = "unlocked";
+      // After entry, this capability also owns the visible Lock/Cancel action.
+      // Keep that action valid for the complete credential lifetime.
+      session.expiresAt = entry.expiresAt;
       return respond(response, 200, result(entry));
     } catch { return denied(); }
     finally {

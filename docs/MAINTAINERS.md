@@ -93,6 +93,24 @@ only copied field values or the value-free validation report return. The
 plaintext buffer is released in a `finally` block, including parsing failures.
 Viewer metadata and host imports do not gain a new decryption route.
 
+### Private encrypted-PDF access
+
+`unlock_pdf` opens a local browser window; `get_pdf_unlock_status` and `lock_pdf`
+observe or clear document-scoped access. Public MCP password fields are removed.
+Credentials enter through the bounded loopback service in
+`server/private-pdf-credentials.js`, are retained only in process memory for at
+most ten minutes, and bind the exact canonical source, inode/device, bytes and
+server session. The dispatch boundary resolves private credentials against the
+same source envelope used by isolated workers and before extraction-cache access.
+Permissions and encrypted-output preservation remain worker responsibilities.
+Unsupported encrypted geometry/comparison tools remain unsupported.
+
+Use the synthetic private-entry harness for integration tests, never a production
+environment override. The harness substitutes only the platform browser opener;
+password submission still crosses the actual authenticated local HTTP boundary.
+See `docs/ENCRYPTED_PDF_CREDENTIAL_PROPOSAL.md` for the user flow, limits and
+trusted-local-user qualification.
+
 Host imports have no source file before validation. Their bounded original
 bytes are temporarily written to a private local inspection directory, then
 checked using the same isolation service and original import validator. That

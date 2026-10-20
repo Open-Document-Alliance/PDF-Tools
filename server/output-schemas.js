@@ -516,6 +516,7 @@ const standardError = object({
       "internal_validation_error",
       "path_policy_denied",
       "tool_execution_failed",
+      "PRIVATE_PDF_PASSWORD_ARGUMENT_FORBIDDEN",
     ]),
   }),
 });
