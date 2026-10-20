@@ -22,10 +22,9 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createPrivatePdfUnlockHarness } from "./helpers/private-pdf-unlock.js";
 import {
   ENCRYPTED_READ_OPERATIONS,
-  PDF_DECRYPTABLE_PASSWORD_DESCRIPTION,
-  PDF_REPROTECTING_PASSWORD_DESCRIPTION,
   PDF_ENCRYPTED_MAX_FILE_BYTES,
   PdfDecryptionError,
   decryptPdfForRead,
@@ -478,13 +477,15 @@ describe("pre-parse bounds on the decrypted plaintext", () => {
 describe("read-only decryption through the MCP server", () => {
   let client;
   let transport;
+  let unlock;
 
   beforeAll(async () => {
+    unlock = await createPrivatePdfUnlockHarness(temporaryRoot);
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [path.join(REPO_ROOT, "server/index.js")],
       cwd: REPO_ROOT,
-      env: { ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter) },
+      env: { ...unlock.env, ALLOWED_DIRECTORIES: [REPO_ROOT, temporaryRoot].join(path.delimiter) },
       stderr: "ignore",
     });
     client = new Client({ name: "pdf-tools-qpdf-decrypt-test", version: "1.0.0" });
@@ -498,22 +499,16 @@ describe("read-only decryption through the MCP server", () => {
 
   const textOf = result => result.content.map(entry => entry.text ?? "").join("\n");
 
-  it("advertises the new password contract on exactly the tools that can decrypt", async () => {
+  it("advertises private entry without public password arguments", async () => {
     const { tools } = await client.listTools();
     const byName = new Map(tools.map(tool => [tool.name, tool]));
-    for (const name of ["read_pdf_fields", "validate_pdf"]) {
-      expect(byName.get(name).inputSchema.properties.password.description, name)
-        .toBe(PDF_DECRYPTABLE_PASSWORD_DESCRIPTION);
+    for (const tool of tools) {
+      for (const field of ["password", "before_password", "after_password"]) {
+        expect(tool.inputSchema.properties, tool.name).not.toHaveProperty(field);
+      }
     }
-    // extract_to_csv takes a list of documents and therefore has no password
-    // parameter; one password could not serve a list.
-    expect(byName.get("extract_to_csv").inputSchema.properties).not.toHaveProperty("password");
-    // The mutation tools decrypt too now, and say so with the contract that
-    // describes what they actually do: decrypt, change, and put the document's
-    // own protection back. No password-bearing tool claims it cannot decrypt.
-    for (const name of ["fill_pdf", "fill_with_profile", "bulk_fill_from_csv"]) {
-      expect(byName.get(name).inputSchema.properties.password.description, name)
-        .toBe(PDF_REPROTECTING_PASSWORD_DESCRIPTION);
+    for (const name of ["unlock_pdf", "get_pdf_unlock_status", "lock_pdf"]) {
+      expect(Object.keys(byName.get(name).inputSchema.properties), name).toEqual(["pdf_path"]);
     }
   }, 30_000);
 
@@ -526,9 +521,10 @@ describe("read-only decryption through the MCP server", () => {
     expect(baseline).toBeGreaterThan(0);
 
     for (const name of ["aes256", "aes128", "rc4128"]) {
+      await unlock.enter(client, fixturePaths[name], USER_PASSWORD);
       const result = await client.callTool({
         name: "read_pdf_fields",
-        arguments: { pdf_path: fixturePaths[name], password: USER_PASSWORD },
+        arguments: { pdf_path: fixturePaths[name] },
       });
       expect(result.isError, name).not.toBe(true);
       // The decrypted read has to agree with the same document read
@@ -540,21 +536,24 @@ describe("read-only decryption through the MCP server", () => {
   }, 120_000);
 
   it("validates an encrypted form and refuses one whose password is wrong", async () => {
+    await unlock.enter(client, fixturePaths.aes256, USER_PASSWORD);
     const ok = await client.callTool({
       name: "validate_pdf",
-      arguments: { pdf_path: fixturePaths.aes256, password: USER_PASSWORD },
+      arguments: { pdf_path: fixturePaths.aes256 },
     });
     expect(ok.isError).not.toBe(true);
     expect(ok.structuredContent.total_field_count).toBeGreaterThan(0);
 
+    await unlock.enter(client, fixturePaths.aes256, "wrong", { accepted: false });
     const wrong = await client.callTool({
       name: "validate_pdf",
-      arguments: { pdf_path: fixturePaths.aes256, password: "wrong" },
+      arguments: { pdf_path: fixturePaths.aes256 },
     });
     // The specific, actionable reason has to survive validate_pdf's own
     // catch-all, which would otherwise replace it with "verify the
     // path/password", advice the server already knows to be wrong.
-    expect(textOf(wrong)).toMatch(/password was not accepted/i);
+    expect(wrong.isError).toBe(true);
+    expect(textOf(wrong)).toContain("unlock_pdf");
     expect(textOf(wrong)).not.toMatch(/qpdf|in\.pdf|invalid password/i);
   }, 60_000);
 
@@ -603,13 +602,13 @@ describe("read-only decryption through the MCP server", () => {
 
   it("writes an encrypted document back still encrypted", async () => {
     const filled = path.join(temporaryRoot, "filled.pdf");
+    await unlock.enter(client, fixturePaths.aes256, USER_PASSWORD);
     const result = await client.callTool({
       name: "fill_pdf",
       arguments: {
         pdf_path: fixturePaths.aes256,
         output_path: filled,
         field_data: { anything: "value" },
-        password: USER_PASSWORD,
       },
     });
     // Decryption is no longer scoped to reads: a write path may open this file.
