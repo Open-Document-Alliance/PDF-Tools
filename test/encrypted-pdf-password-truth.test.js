@@ -24,6 +24,7 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -64,6 +65,31 @@ function probeQpdf() {
 const QPDF = probeQpdf();
 
 describe("encrypted PDF password truthfulness", () => {
+  it("captures private browser launches inside and outside the ESM package", async () => {
+    const roots = [];
+    try {
+      roots.push(await createTestTempDirectory(REPO_ROOT, "private-opener-esm"));
+      roots.push(await fs.mkdtemp(path.join(os.tmpdir(), "private-opener-outside-")));
+      for (const root of roots) {
+        const harness = await createPrivatePdfUnlockHarness(root);
+        const url = `http://127.0.0.1:12345/#${"a".repeat(64)}`;
+        for (const command of ["open", "xdg-open", "rundll32.exe"]) {
+          await fs.rm(harness.env.PDF_TOOLS_TEST_OPENER_CAPTURE, { force: true });
+          // Node runs the generated script here; the real stdio tests exercise
+          // its executable shebang through the production OS-opener command.
+          const result = spawnSync(process.execPath, [path.join(root, "private-unlock-test", "bin", command), url], {
+            env: { ...process.env, ...harness.env }, encoding: "utf8", timeout: 5_000,
+          });
+          expect(result.status, result.stderr).toBe(0);
+          expect(await fs.readFile(harness.env.PDF_TOOLS_TEST_OPENER_CAPTURE, "utf8")).toBe(url);
+          expect((await fs.stat(harness.env.PDF_TOOLS_TEST_OPENER_CAPTURE)).mode & 0o777).toBe(0o600);
+        }
+      }
+    } finally {
+      for (const root of roots) await removeTestTempDirectory(root);
+    }
+  });
+
   // Always runs, so the report states the guard's status instead of quietly
   // omitting it. A skipped encryption guard must be loud: a silent skip is how
   // a truthfulness regression reaches a release unnoticed.

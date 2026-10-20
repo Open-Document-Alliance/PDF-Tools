@@ -10,11 +10,17 @@ export async function createPrivatePdfUnlockHarness(directory) {
   const bin = path.join(root, "bin");
   const capture = path.join(root, "opened-url");
   await fs.mkdir(bin, { recursive: true, mode: 0o700 });
+  // Explicit type also lets Node execute the simulated Windows command name
+  // instead of rejecting its .exe extension inside an ESM parent package.
+  await fs.writeFile(path.join(bin, "package.json"), '{"type":"commonjs"}\n', { mode: 0o600 });
   const opener = `#!${process.execPath}\n`
-    + 'const fs = require("node:fs");\n'
+    // Dynamic import is valid in both CommonJS and ESM. Extensionless openers
+    // inherit a surrounding package's type when fixtures live under the repo.
+    + 'import("node:fs").then(({ default: fs }) => {\n'
     + 'const url = process.argv.find(value => /^http:\\/\\/127\\.0\\.0\\.1:\\d+\\/#/.test(value));\n'
     + 'if (!url) process.exit(2);\n'
-    + 'fs.writeFileSync(process.env.PDF_TOOLS_TEST_OPENER_CAPTURE, url, {mode: 0o600, flag: "wx"});\n';
+    + 'fs.writeFileSync(process.env.PDF_TOOLS_TEST_OPENER_CAPTURE, url, {mode: 0o600, flag: "wx"});\n'
+    + '}).catch(() => process.exit(3));\n';
   for (const name of ["open", "xdg-open", "rundll32.exe"]) {
     await fs.writeFile(path.join(bin, name), opener, { mode: 0o700 });
   }
