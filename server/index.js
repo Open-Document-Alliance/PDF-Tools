@@ -6092,7 +6092,9 @@ async function handleToolCall(request) {
             ...(pagesNeedingVision.length > 0
               ? [`Vision routing: use render_pdf_page for pages ${pagesNeedingVision.map(entry => entry.page).join(", ")}.`]
               : []),
-            "No OCR, external model, hidden link-target recovery, or table inference beyond complete source-bound text, ruled, or painted grids was performed.",
+            reviewCandidates.length > 0
+              ? "The optional table drafts use whitespace alignment and need review. No OCR, external model or hidden link-target recovery was performed."
+              : "No OCR, external model, hidden link-target recovery, or table inference beyond complete source-bound text, ruled, or painted grids was performed.",
             rendered.markdown,
             ...reviewCandidates.map(region => [
               `Page ${region.page}, ${region.region_id}: ${region.review_candidate.review_notice}`,

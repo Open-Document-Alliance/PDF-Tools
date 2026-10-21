@@ -525,8 +525,8 @@ describe("layout Markdown renderer", () => {
       expect(() => validateMarkdownConversionSemantics(changed)).toThrow();
       expect(() => validateMarkdownConversionSemantics(changed, { layout })).toThrow();
     }
-    // Swapping complete assignments and their source fragments can be internally
-    // consistent; only a reconstruction from the bound IR proves this algorithm's output.
+    // Even a content-consistent, freshly rehashed regrouping must fail the
+    // packet-only geometry replay as well as the complete bound-IR replay.
     const regrouped = structuredClone(result);
     const draft = regrouped.table_proposal_regions.find(value => value.review_candidate).review_candidate;
     [draft.cells[1].item_ids, draft.cells[2].item_ids] = [draft.cells[2].item_ids, draft.cells[1].item_ids];
@@ -534,7 +534,7 @@ describe("layout Markdown renderer", () => {
     draft.html = draft.html.replace("<td>A</td><td>B</td>", "<td>B</td><td>A</td>");
     const { candidate_sha256: _digest, ...body } = draft;
     draft.candidate_sha256 = createHash("sha256").update(canonicalCandidate(body)).digest("hex");
-    expect(() => validateMarkdownConversionSemantics(regrouped)).not.toThrow();
+    expect(() => validateMarkdownConversionSemantics(regrouped)).toThrow(/retained source geometry/);
     expect(() => validateMarkdownConversionSemantics(regrouped, { layout })).toThrow(/bound layout IR/);
   });
 

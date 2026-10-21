@@ -328,8 +328,9 @@ Rows, columns and header roles remain unverified; no header tags, spans, blank
 values or new source text are inferred. Candidate digests bind algorithm,
 PDF SHA, region, assignments, fragments, uncertainty and presentation. When
 layout is supplied, semantic validation reconstructs the entire packet from
-it. Standalone output validation checks content/digest consistency only and
-does not replace fresh source replay. Document maps carry no candidate cells.
+it. Standalone output validation reconstructs the draft from its retained text
+and geometry as well, but cannot authenticate that packet to the original PDF;
+it does not replace fresh source replay. Document maps carry no candidate cells.
 Ordinary Markdown, its gap list and strict `verify_table_proposal` acceptance
 remain unchanged. Review the draft beside the source PDF before using its
 grouping; a visible draft is not an accepted table or verified extraction.

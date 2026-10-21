@@ -2816,6 +2816,24 @@ function tableProposalHeaderHints(run) {
   };
 }
 
+function joinedThinFillBands(rectangles) {
+  const tolerance = 0.05;
+  const bars = rectangles.filter(rect => ["fill", "eoFill"].includes(rect.verb)
+    && rect.height >= 0.05 && rect.height <= 2 && rect.width >= 5)
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+  const bands = [];
+  for (const bar of bars) {
+    const prior = bands.at(-1);
+    if (prior && Math.abs(prior.y - bar.y) <= tolerance
+      && Math.abs(prior.height - bar.height) <= tolerance
+      && Math.abs(prior.x + prior.width - bar.x) <= tolerance) {
+      prior.width = bar.x + bar.width - prior.x;
+      prior.parts.push(bar);
+    } else bands.push({ x: bar.x, y: bar.y, width: bar.width, height: bar.height, parts: [bar] });
+  }
+  return bands;
+}
+
 function threeRuleProposalEnvelope(page, run) {
   // This refines an already abandoned proposal, never reconstructs a table.
   // Three full-width paint bands and a nearby caption can bound the source
@@ -2833,19 +2851,7 @@ function threeRuleProposalEnvelope(page, run) {
   const text = page.raw_items.filter(item => item.text_kind === "non_whitespace");
   if (text.some(item => !item.geometry_valid || !item.bbox)) return null;
   const tolerance = 0.05;
-  const bars = evidence.items.filter(rect => ["fill", "eoFill"].includes(rect.verb)
-    && rect.height >= 0.05 && rect.height <= 2 && rect.width >= 5)
-    .sort((a, b) => a.y - b.y || a.x - b.x);
-  const bands = [];
-  for (const bar of bars) {
-    const prior = bands.at(-1);
-    if (prior && Math.abs(prior.y - bar.y) <= tolerance
-      && Math.abs(prior.height - bar.height) <= tolerance
-      && Math.abs(prior.x + prior.width - bar.x) <= tolerance) {
-      prior.width = bar.x + bar.width - prior.x;
-      prior.parts.push(bar);
-    } else bands.push({ x: bar.x, y: bar.y, width: bar.width, height: bar.height, parts: [bar] });
-  }
+  const bands = joinedThinFillBands(evidence.items);
   const contains = (outer, inner) => inner.x >= outer.x && inner.y >= outer.y
     && inner.x + inner.width <= outer.x + outer.width
     && inner.y + inner.height <= outer.y + outer.height;
@@ -3838,6 +3844,17 @@ export function validateMarkdownConversionSemantics(result, { layout = null } = 
 }
 
 function validateTableReviewCandidate(region, candidate) {
+  const bands = joinedThinFillBands(region.ruled_rects);
+  assertion(bands.length === 3 && bands.every(band => Math.abs(band.x - region.bbox.x) <= 0.05
+    && Math.abs(band.width - region.bbox.width) <= 0.05)
+    && Math.abs(bands[0].y - region.bbox.y) <= 0.05
+    && Math.abs(bands[2].y + bands[2].height - region.bbox.y - region.bbox.height) <= 0.05,
+  "table review candidate rule envelope mismatch");
+  const replay = threeRuleReviewCandidate(region, { middle: bands[1] }, candidate.source_sha256);
+  assertion(replay !== null, "table review candidate geometry is unsupported");
+  const { candidate_sha256: _digest, ...replayed } = replay;
+  assertion(canonicalReviewCandidate(candidate) === canonicalReviewCandidate(replayed),
+    "table review candidate does not match its retained source geometry");
   assertion(candidate.algorithm?.name === "pdf-tools.three-rule-review-candidate"
     && candidate.algorithm.version === "0.1.0" && candidate.status === "needs_review"
     && candidate.topology_verified === false && candidate.header_roles_verified === false
