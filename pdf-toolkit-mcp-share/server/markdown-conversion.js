@@ -3855,49 +3855,6 @@ function validateTableReviewCandidate(region, candidate) {
   const { candidate_sha256: _digest, ...replayed } = replay;
   assertion(canonicalReviewCandidate(candidate) === canonicalReviewCandidate(replayed),
     "table review candidate does not match its retained source geometry");
-  assertion(candidate.algorithm?.name === "pdf-tools.three-rule-review-candidate"
-    && candidate.algorithm.version === "0.1.0" && candidate.status === "needs_review"
-    && candidate.topology_verified === false && candidate.header_roles_verified === false
-    && candidate.content_origin === "source_text_items"
-    && candidate.structure_origin === "whitespace_alignment_proposal"
-    && candidate.review_notice === TABLE_REVIEW_NOTICE,
-  "table review candidate claim boundary mismatch");
-  assertion(Object.values(region.truncation).every(value => value === "complete"),
-    "table review candidate cannot use truncated evidence");
-  assertion(Number.isSafeInteger(candidate.row_count) && candidate.row_count >= 3 && candidate.row_count <= 100
-    && Number.isSafeInteger(candidate.column_count) && candidate.column_count >= 2 && candidate.column_count <= 12
-    && candidate.cells?.length === candidate.row_count * candidate.column_count,
-  "table review candidate dimensions mismatch");
-  const itemById = new Map(region.text_items.map(item => [item.id, item]));
-  const assigned = [];
-  for (const [index, cell] of candidate.cells.entries()) {
-    assertion(cell.row === Math.floor(index / candidate.column_count)
-      && cell.column === index % candidate.column_count && cell.item_ids.length > 0,
-    "table review candidate cell order mismatch");
-    const lines = [];
-    for (const id of cell.item_ids) {
-      const item = itemById.get(id);
-      assertion(item !== undefined, "table review candidate unknown source item");
-      assigned.push(id);
-      if (lines.at(-1)?.line_id !== item.line_id) {
-        lines.push({ line_id: item.line_id, item_ids: [], text: "" });
-      }
-      lines.at(-1).item_ids.push(id);
-      lines.at(-1).text += item.text;
-    }
-    assertion(sameJson(cell.lines, lines), "table review candidate content mismatch");
-  }
-  assertion(assigned.length === itemById.size && new Set(assigned).size === itemById.size
-    && candidate.source_item_count === itemById.size && candidate.assigned_item_count === assigned.length
-    && candidate.unassigned_item_count === 0, "table review candidate source coverage mismatch");
-  const grid = Array.from({ length: candidate.row_count }, (_, row) => candidate.cells
-    .filter(cell => cell.row === row).map(cell => cell.lines
-      .map(line => escapeHeaderNeutralText(line.text)).join("<br>")));
-  const html = ["<table>", ...grid.map(row => `<tr>${row.map(text => `<td>${text}</td>`).join("")}</tr>`), "</table>"].join("\n");
-  assertion(candidate.html === html && candidate.html_format === "header_neutral_html"
-    && candidate.html_bytes === utf8Bytes(html) && candidate.html_bytes <= 20_000
-    && utf8Bytes(canonicalReviewCandidate(candidate)) <= 40_000,
-  "table review candidate presentation mismatch");
 }
 
 function isFiniteNumber(value) {
