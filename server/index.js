@@ -3852,7 +3852,7 @@ async function listTools(request) {
             include_page_boundaries: { type: "boolean", description: "Include deterministic HTML comments marking page boundaries. Default: true." },
             compact: { type: "boolean", description: "Opt into counted dot-leader, isolated page-number, and Unicode-letter spaced-hyphen normalizations. Default: false." },
             remove_page_furniture: { type: "boolean", description: "Remove only source-evidenced extreme-margin page furniture and report every removed line by typed gap and counts. Set false to preserve all source lines. Default: true." },
-            emit_table_proposals: { type: "boolean", description: "Opt into emitting one bounded, deterministic table_proposals packet per abandoned table region (TABLE_TOPOLOGY_UNKNOWN or TABLE_RULING_UNSUPPORTED), carrying the region's text items, ruled and painted evidence, header hints, page, bbox, coordinate_space, and a source-and-IR-bound proposal_token so a host model can propose a structure for later read-only verification. Additive: the abstention gap is unchanged and default output stays byte-identical. Default: false." },
+            emit_table_proposals: { type: "boolean", description: "Opt into emitting one bounded, deterministic table_proposals packet per abandoned table region (TABLE_TOPOLOGY_UNKNOWN or TABLE_RULING_UNSUPPORTED), carrying the region's text items, ruled and painted evidence, header hints, page, bbox, coordinate_space, and a source-and-IR-bound proposal_token so a host model can propose a structure for later read-only verification. A narrowly qualifying captioned three-rule table may also include a draft arrangement and header-neutral HTML preview marked needs_review; its row/column grouping and header roles are unverified. Additive: the abstention gap is unchanged and default output stays byte-identical. Default: false." },
             allow_headerless_tables: { type: "boolean", description: "Opt into header-neutral HTML data cells for a complete source-covered ruled-rectangle cell grid without header evidence. No header roles, spans or blank data values are inferred; incomplete, ambiguous and cross-cell geometry remains text with typed gaps. Uses renderer profile 1.23.0; default false keeps profile 1.21.0 and unchanged output. No OCR or model." },
             output_path: { type: "string", description: "Optional absolute .md path, or ~/ path. The file is written only after complete bytes are staged and verified." },
             overwrite: { type: "boolean", description: "Replace an existing output_path only when its exact expected_output_identity is also supplied. Default: false." },
@@ -6082,6 +6082,7 @@ async function handleToolCall(request) {
             saved_output: savedOutput,
             ...(tableProposals !== undefined ? { table_proposals: tableProposals } : {}),
           };
+          const reviewCandidates = tableProposals?.filter(region => region.review_candidate) ?? [];
           const summary = [
             `Converted pages ${layout.page_range.start_page}-${layout.page_range.end_page} of ${fileName} to deterministic Markdown.`,
             `Status: ${rendered.conversion_status}. UTF-8 bytes: ${rendered.markdown_bytes}.`,
@@ -6091,8 +6092,14 @@ async function handleToolCall(request) {
             ...(pagesNeedingVision.length > 0
               ? [`Vision routing: use render_pdf_page for pages ${pagesNeedingVision.map(entry => entry.page).join(", ")}.`]
               : []),
-            "No OCR, external model, hidden link-target recovery, or table inference beyond complete source-bound text, ruled, or painted grids was performed.",
+            reviewCandidates.length > 0
+              ? "The optional table drafts use whitespace alignment and need review. No OCR, external model or hidden link-target recovery was performed."
+              : "No OCR, external model, hidden link-target recovery, or table inference beyond complete source-bound text, ruled, or painted grids was performed.",
             rendered.markdown,
+            ...reviewCandidates.map(region => [
+              `Page ${region.page}, ${region.region_id}: ${region.review_candidate.review_notice}`,
+              region.review_candidate.html,
+            ].join("\n\n")),
           ].join("\n\n");
           return {
             content: [{ type: "text", text: summary }],

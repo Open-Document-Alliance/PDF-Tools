@@ -60,6 +60,7 @@ export const MAX_TABLE_PROPOSAL_TEXT_ITEMS = 400;
 const MAX_TABLE_PROPOSAL_RULED_RECTS = 400;
 const MAX_TABLE_PROPOSAL_RULING_SEGMENTS = 400;
 const MAX_TABLE_PROPOSAL_PAINTED_RECTS = 400;
+export const TABLE_REVIEW_NOTICE = "Proposed arrangement, needs review. Check the row and column grouping against the PDF before using it; headers and cell structure are unverified.";
 
 const MAX_MARKDOWN_BYTES_LIMIT = 200_000;
 const GAP_CODES = new Set([
@@ -2815,6 +2816,24 @@ function tableProposalHeaderHints(run) {
   };
 }
 
+function joinedThinFillBands(rectangles) {
+  const tolerance = 0.05;
+  const bars = rectangles.filter(rect => ["fill", "eoFill"].includes(rect.verb)
+    && rect.height >= 0.05 && rect.height <= 2 && rect.width >= 5)
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+  const bands = [];
+  for (const bar of bars) {
+    const prior = bands.at(-1);
+    if (prior && Math.abs(prior.y - bar.y) <= tolerance
+      && Math.abs(prior.height - bar.height) <= tolerance
+      && Math.abs(prior.x + prior.width - bar.x) <= tolerance) {
+      prior.width = bar.x + bar.width - prior.x;
+      prior.parts.push(bar);
+    } else bands.push({ x: bar.x, y: bar.y, width: bar.width, height: bar.height, parts: [bar] });
+  }
+  return bands;
+}
+
 function threeRuleProposalEnvelope(page, run) {
   // This refines an already abandoned proposal, never reconstructs a table.
   // Three full-width paint bands and a nearby caption can bound the source
@@ -2832,19 +2851,7 @@ function threeRuleProposalEnvelope(page, run) {
   const text = page.raw_items.filter(item => item.text_kind === "non_whitespace");
   if (text.some(item => !item.geometry_valid || !item.bbox)) return null;
   const tolerance = 0.05;
-  const bars = evidence.items.filter(rect => ["fill", "eoFill"].includes(rect.verb)
-    && rect.height >= 0.05 && rect.height <= 2 && rect.width >= 5)
-    .sort((a, b) => a.y - b.y || a.x - b.x);
-  const bands = [];
-  for (const bar of bars) {
-    const prior = bands.at(-1);
-    if (prior && Math.abs(prior.y - bar.y) <= tolerance
-      && Math.abs(prior.height - bar.height) <= tolerance
-      && Math.abs(prior.x + prior.width - bar.x) <= tolerance) {
-      prior.width = bar.x + bar.width - prior.x;
-      prior.parts.push(bar);
-    } else bands.push({ x: bar.x, y: bar.y, width: bar.width, height: bar.height, parts: [bar] });
-  }
+  const bands = joinedThinFillBands(evidence.items);
   const contains = (outer, inner) => inner.x >= outer.x && inner.y >= outer.y
     && inner.x + inner.width <= outer.x + outer.width
     && inner.y + inner.height <= outer.y + outer.height;
@@ -2888,9 +2895,101 @@ function threeRuleProposalEnvelope(page, run) {
       || !lines.some(line => line.y + line.height <= middle.y)
       || !lines.some(line => line.y >= middle.y + middle.height)) continue;
     const itemById = new Map(page.raw_items.map(item => [item.id, item]));
-    candidates.push({ bbox, run: lines.map(line => ({ line, cells: lineCells(line, itemById) })) });
+    candidates.push({ bbox, middle, run: lines.map(line => ({ line, cells: lineCells(line, itemById) })) });
   }
   return candidates.length === 1 ? candidates[0] : null;
+}
+
+function canonicalReviewCandidate(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalReviewCandidate).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort()
+    .map(key => `${JSON.stringify(key)}:${canonicalReviewCandidate(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+function threeRuleReviewCandidate(region, envelope, sourceSha256) {
+  if (!/^[a-f0-9]{64}$/.test(sourceSha256 ?? "")
+    || Object.values(region.truncation).some(value => value !== "complete")) return null;
+  const items = region.text_items;
+  if (items.length === 0 || new Set(items.map(item => item.id)).size !== items.length) return null;
+  const { middle } = envelope;
+  const upper = items.filter(item => item.bbox.y + item.bbox.height <= middle.y);
+  const lower = items.filter(item => item.bbox.y >= middle.y + middle.height);
+  if (upper.length === 0 || upper.length + lower.length !== items.length) return null;
+  const byLine = new Map();
+  for (const item of lower) {
+    if (!byLine.has(item.line_id)) byLine.set(item.line_id, []);
+    byLine.get(item.line_id).push(item);
+  }
+  const rows = [...byLine.values()].map(row => ({
+    items: row.sort((a, b) => a.bbox.x - b.bbox.x || a.reading_order_index - b.reading_order_index),
+    top: Math.min(...row.map(item => item.bbox.y)),
+    bottom: Math.max(...row.map(item => item.bbox.y + item.bbox.height)),
+  })).sort((a, b) => a.top - b.top);
+  if (rows.length < 2 || rows.length > 99 || rows.some((row, index) => (
+    index > 0 && row.top <= rows[index - 1].bottom
+  ))) return null;
+  // A maximal set of whitespace corridors shared by every body line supplies
+  // one deterministic proposed partition. Whitespace does not prove topology.
+  const minGap = Math.max(5, ...lower.map(item => item.bbox.height));
+  let corridors = null;
+  let gapCount = null;
+  for (const row of rows) {
+    const gaps = [];
+    let right = row.items[0].bbox.x + row.items[0].bbox.width;
+    for (const item of row.items.slice(1)) {
+      if (item.bbox.x - right >= minGap) gaps.push([right, item.bbox.x]);
+      right = Math.max(right, item.bbox.x + item.bbox.width);
+    }
+    if (gapCount !== null && gaps.length !== gapCount) return null;
+    gapCount = gaps.length;
+    corridors = corridors === null ? gaps : corridors.flatMap(([left, end]) => gaps
+      .map(([start, rightEdge]) => [Math.max(left, start), Math.min(end, rightEdge)])
+      .filter(([start, rightEdge]) => rightEdge - start >= minGap));
+  }
+  if (corridors.length < 1 || corridors.length > 11 || corridors.length !== gapCount) return null;
+  const cuts = corridors.map(([left, right]) => (left + right) / 2);
+  const sourceRows = [upper, ...rows.map(row => row.items)];
+  const cells = [];
+  for (const [row, sourceItems] of sourceRows.entries()) {
+    const columns = Array.from({ length: cuts.length + 1 }, () => []);
+    for (const item of sourceItems) {
+      const column = cuts.filter(cut => item.bbox.x >= cut).length;
+      if (column < cuts.length && item.bbox.x + item.bbox.width > cuts[column]) return null;
+      columns[column].push(item);
+    }
+    if (columns.some(column => column.length === 0)) return null;
+    for (const [column, assigned] of columns.entries()) {
+      assigned.sort((a, b) => a.reading_order_index - b.reading_order_index);
+      const lines = [];
+      for (const item of assigned) {
+        if (lines.at(-1)?.line_id !== item.line_id) {
+          if (lines.some(line => line.line_id === item.line_id)) return null;
+          lines.push({ line_id: item.line_id, item_ids: [], text: "" });
+        }
+        lines.at(-1).item_ids.push(item.id);
+        lines.at(-1).text += item.text;
+      }
+      cells.push({ row, column, item_ids: assigned.map(item => item.id), lines });
+    }
+  }
+  const assigned = cells.flatMap(cell => cell.item_ids);
+  if (new Set(assigned).size !== items.length || assigned.length !== items.length) return null;
+  const grid = sourceRows.map((_, row) => cells.filter(cell => cell.row === row)
+    .map(cell => cell.lines.map(line => escapeHeaderNeutralText(line.text)).join("<br>")));
+  const html = ["<table>", ...grid.map(row => `<tr>${row.map(text => `<td>${text}</td>`).join("")}</tr>`), "</table>"].join("\n");
+  const candidate = {
+    algorithm: { name: "pdf-tools.three-rule-review-candidate", version: "0.1.0" },
+    status: "needs_review", topology_verified: false, header_roles_verified: false,
+    source_sha256: sourceSha256, region_id: region.region_id, page: region.page,
+    content_origin: "source_text_items", structure_origin: "whitespace_alignment_proposal",
+    row_count: sourceRows.length, column_count: cuts.length + 1,
+    source_item_count: items.length, assigned_item_count: assigned.length, unassigned_item_count: 0,
+    cells, html, html_format: "header_neutral_html", html_bytes: utf8Bytes(html),
+    review_notice: TABLE_REVIEW_NOTICE,
+  };
+  if (candidate.html_bytes > 20_000 || utf8Bytes(canonicalReviewCandidate(candidate)) > 40_000) return null;
+  return { ...candidate, candidate_sha256: sha256(canonicalReviewCandidate(candidate)) };
 }
 
 /**
@@ -2898,7 +2997,7 @@ function threeRuleProposalEnvelope(page, run) {
  * three-rule envelope can refine source membership but supplies no topology
  * or header authority. Pure over source-validated IR; no token, time or I/O.
  */
-export function buildTableProposalRegion(page, run, reason, ordinal) {
+export function buildTableProposalRegion(page, run, reason, ordinal, { sourceSha256 = null } = {}) {
   const envelope = threeRuleProposalEnvelope(page, run);
   if (envelope) run = envelope.run;
   const itemById = new Map(page.raw_items.map(item => [item.id, item]));
@@ -2962,7 +3061,7 @@ export function buildTableProposalRegion(page, run, reason, ordinal) {
     bbox: painted.bbox,
   }));
 
-  return {
+  const proposal = {
     region_id: `p${page.page}-t${ordinal}`,
     page: page.page,
     reason: regionGapCode(reason),
@@ -2983,6 +3082,11 @@ export function buildTableProposalRegion(page, run, reason, ordinal) {
       painted_rectangles: paintedTruncated ? "truncated" : "complete",
     },
   };
+  if (envelope) {
+    const candidate = threeRuleReviewCandidate(proposal, envelope, sourceSha256);
+    if (candidate) proposal.review_candidate = candidate;
+  }
+  return proposal;
 }
 
 // escapePlainMarkdown already escapes "|" (and backslashes before it), so a
@@ -3007,15 +3111,18 @@ function renderTable(grid) {
   return lines;
 }
 
-function renderHeaderlessTable(grid) {
-  const escape = value => sanitizeUnsafeText(String(value)).replace(/&/gu, "&amp;")
+function escapeHeaderNeutralText(value) {
+  return sanitizeUnsafeText(String(value)).replace(/&/gu, "&amp;")
     .replace(/</gu, "&lt;").replace(/>/gu, "&gt;")
     .replace(/"/gu, "&quot;").replace(/'/gu, "&#39;")
     .replace(/https?:/giu, match => `${match.slice(0, -1)}&#58;`)
     .replace(/\b(?:[\p{L}\p{N}-]+\.)+[\p{L}]{2,}\b/giu, domain => domain.replace(".", "&#46;"))
     .replace(/@(?=[\p{L}\p{N}.-]+&#46;[\p{L}]{2,})/giu, "&#64;");
+}
+
+function renderHeaderlessTable(grid) {
   return ["<table>", ...grid.map(row => (
-    `<tr>${row.map(value => `<td>${escape(value)}</td>`).join("")}</tr>`
+    `<tr>${row.map(value => `<td>${escapeHeaderNeutralText(value)}</td>`).join("")}</tr>`
   )), "</table>"];
 }
 
@@ -3370,6 +3477,7 @@ function renderPage(page, {
   pageBoundaryBefore = false,
   pageBoundaryAfter = false,
   collectTableProposals = false,
+  sourceSha256 = null,
   allowHeaderlessTables = false,
   pageFurniture = [],
 } = {}) {
@@ -3488,7 +3596,7 @@ function renderPage(page, {
     // markdown, gaps, or byte counts. It is only present when the opt-in flag
     // is set, so the default page shape is byte-identical.
     rendered.tableProposalRegions = analysis.regions.map(
-      (region, index) => buildTableProposalRegion(page, region.run, region.reason, index + 1),
+      (region, index) => buildTableProposalRegion(page, region.run, region.reason, index + 1, { sourceSha256 }),
     );
   }
   return rendered;
@@ -3706,11 +3814,47 @@ export function validateMarkdownConversionSemantics(result, { layout = null } = 
   if (proposals !== undefined) {
     validateTableProposals(proposals, { requireToken: payloadProposals !== undefined });
     validateTableProposalDocumentTruncation(result.table_proposals_truncation, proposals);
+    if (layout !== null) {
+      const expected = boundTableProposalRegions(layout.pages.flatMap(page => (
+        segmentPageLines(page, allowHeaderlessTables).regions.map((region, index) => (
+          buildTableProposalRegion(page, region.run, region.reason, index + 1,
+            { sourceSha256: layout.source.sha256 })
+        ))
+      )));
+      const actual = proposals.map(({ proposal_token: _token, ...proposal }) => proposal);
+      assertion(sameJson(actual, expected.regions), "table proposals do not match the bound layout IR");
+      assertion(sameJson(result.table_proposals_truncation, expected.truncation),
+        "table proposal truncation does not match the bound layout IR");
+    }
+    for (const proposal of proposals) {
+      if (proposal.review_candidate) {
+        const { candidate_sha256: digest, ...candidate } = proposal.review_candidate;
+        assertion(candidate.source_sha256 === result.provenance.source.sha256
+          && candidate.region_id === proposal.region_id && candidate.page === proposal.page,
+        "table review candidate source binding mismatch");
+        assertion(digest === sha256(canonicalReviewCandidate(candidate)), "table review candidate digest mismatch");
+        validateTableReviewCandidate(proposal, candidate);
+      }
+    }
   } else {
     assertion(result.table_proposals_truncation === undefined,
       "table proposal truncation cannot exist without proposals");
   }
   return result;
+}
+
+function validateTableReviewCandidate(region, candidate) {
+  const bands = joinedThinFillBands(region.ruled_rects);
+  assertion(bands.length === 3 && bands.every(band => Math.abs(band.x - region.bbox.x) <= 0.05
+    && Math.abs(band.width - region.bbox.width) <= 0.05)
+    && Math.abs(bands[0].y - region.bbox.y) <= 0.05
+    && Math.abs(bands[2].y + bands[2].height - region.bbox.y - region.bbox.height) <= 0.05,
+  "table review candidate rule envelope mismatch");
+  const replay = threeRuleReviewCandidate(region, { middle: bands[1] }, candidate.source_sha256);
+  assertion(replay !== null, "table review candidate geometry is unsupported");
+  const { candidate_sha256: _digest, ...replayed } = replay;
+  assertion(canonicalReviewCandidate(candidate) === canonicalReviewCandidate(replayed),
+    "table review candidate does not match its retained source geometry");
 }
 
 function isFiniteNumber(value) {
@@ -3985,6 +4129,7 @@ export function renderPdfLayoutToMarkdown(layout, {
     // number from a single-page selection.
     pageBoundaryAfter: true,
     collectTableProposals: emitTableProposals,
+    sourceSha256: layout.source.sha256,
     allowHeaderlessTables,
     pageFurniture: furniturePlans.get(page.page),
   }));

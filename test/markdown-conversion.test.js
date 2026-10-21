@@ -15,6 +15,13 @@ import {
   validateMarkdownConversionSemantics,
 } from "../server/markdown-conversion.js";
 
+function canonicalCandidate(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalCandidate).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort()
+    .map(key => `${JSON.stringify(key)}:${canonicalCandidate(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
 function multiply(left, right) {
   return [
     left[0] * right[0] + left[2] * right[1],
@@ -471,12 +478,12 @@ describe("layout Markdown renderer", () => {
       textItem("Table 1. Example", { top: 88, left: 50, fontSize: 10 }),
       textItem("Concentration", { top: 113, left: 60, fontSize: 9 }),
       textItem("level", { top: 124, left: 60, fontSize: 9 }),
-      textItem("A", { top: 120, left: 140, fontSize: 9, eol: false }),
-      textItem("B", { top: 120, left: 220, fontSize: 9 }),
+      textItem("A", { top: 120, left: 150, fontSize: 9, eol: false }),
+      textItem("B", { top: 120, left: 230, fontSize: 9 }),
       ...["Control", "Low", "High"].flatMap((label, index) => [
         textItem(label, { top: 145 + 15 * index, left: 60, fontSize: 9, eol: false }),
-        textItem(String(index), { top: 145 + 15 * index, left: 140, fontSize: 9, eol: false }),
-        textItem(String(index + 1), { top: 145 + 15 * index, left: 220, fontSize: 9 }),
+        textItem(String(index), { top: 145 + 15 * index, left: 150, fontSize: 9, eol: false }),
+        textItem(String(index + 1), { top: 145 + 15 * index, left: 230, fontSize: 9 }),
       ]),
       textItem("3. Results", { top: 205, left: 50, fontSize: 10 }),
     ];
@@ -496,10 +503,39 @@ describe("layout Markdown renderer", () => {
       "Concentration", "level", "A", "B", "Control", "0", "1", "Low", "1", "2", "High", "2", "3",
     ]);
     expect(region.header_hints.status).toBe("unavailable");
+    expect(region.review_candidate).toMatchObject({ status: "needs_review", row_count: 4, column_count: 3 });
     const mapped = analyzeValidatedPdfPagesForDocumentMap(layout.pages);
-    expect(mapped[0].table_regions).toEqual(result.table_proposal_regions);
+    expect(mapped[0].table_regions).toEqual(result.table_proposal_regions.map(({ review_candidate: _candidate, ...item }) => item));
     expect(analyzeValidatedPdfPagesForDocumentMap(layout.pages)).toEqual(mapped);
     expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+    for (const mutate of [
+      candidate => { candidate.topology_verified = true; },
+      candidate => { candidate.cells[0].lines[0].text = "invented"; },
+      candidate => { candidate.cells[0].item_ids.pop(); },
+      candidate => { candidate.cells[0].item_ids.push(candidate.cells[1].item_ids[0]); },
+      candidate => { candidate.html += "<script>alert(1)</script>"; },
+      candidate => { candidate.source_sha256 = "f".repeat(64); },
+      candidate => { candidate.cells[0].column = 1; },
+    ]) {
+      const changed = structuredClone(result);
+      const candidate = changed.table_proposal_regions.find(value => value.review_candidate).review_candidate;
+      mutate(candidate);
+      const { candidate_sha256: _digest, ...body } = candidate;
+      candidate.candidate_sha256 = createHash("sha256").update(canonicalCandidate(body)).digest("hex");
+      expect(() => validateMarkdownConversionSemantics(changed)).toThrow();
+      expect(() => validateMarkdownConversionSemantics(changed, { layout })).toThrow();
+    }
+    // Even a content-consistent, freshly rehashed regrouping must fail the
+    // packet-only geometry replay as well as the complete bound-IR replay.
+    const regrouped = structuredClone(result);
+    const draft = regrouped.table_proposal_regions.find(value => value.review_candidate).review_candidate;
+    [draft.cells[1].item_ids, draft.cells[2].item_ids] = [draft.cells[2].item_ids, draft.cells[1].item_ids];
+    [draft.cells[1].lines, draft.cells[2].lines] = [draft.cells[2].lines, draft.cells[1].lines];
+    draft.html = draft.html.replace("<td>A</td><td>B</td>", "<td>B</td><td>A</td>");
+    const { candidate_sha256: _digest, ...body } = draft;
+    draft.candidate_sha256 = createHash("sha256").update(canonicalCandidate(body)).digest("hex");
+    expect(() => validateMarkdownConversionSemantics(regrouped)).toThrow(/retained source geometry/);
+    expect(() => validateMarkdownConversionSemantics(regrouped, { layout })).toThrow(/bound layout IR/);
   });
 
   it("emits only inert data cells for an opted-in complete source-covered headerless grid", async () => {

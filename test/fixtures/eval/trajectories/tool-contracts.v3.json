@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "93202e8e6e04b8914f81003624692177e9dbe02c6fc93aa877ebf7e82b2556a7",
+  "tools_sha256": "cbd4f2614576b123130ad430542f58cf07ca3730026c59545e7fe4b447dce4bf",
   "tools": [
     {
       "name": "add_signature_field",
@@ -554,7 +554,7 @@
           },
           "emit_table_proposals": {
             "type": "boolean",
-            "description": "Opt into emitting one bounded, deterministic table_proposals packet per abandoned table region (TABLE_TOPOLOGY_UNKNOWN or TABLE_RULING_UNSUPPORTED), carrying the region's text items, ruled and painted evidence, header hints, page, bbox, coordinate_space, and a source-and-IR-bound proposal_token so a host model can propose a structure for later read-only verification. Additive: the abstention gap is unchanged and default output stays byte-identical. Default: false."
+            "description": "Opt into emitting one bounded, deterministic table_proposals packet per abandoned table region (TABLE_TOPOLOGY_UNKNOWN or TABLE_RULING_UNSUPPORTED), carrying the region's text items, ruled and painted evidence, header hints, page, bbox, coordinate_space, and a source-and-IR-bound proposal_token so a host model can propose a structure for later read-only verification. A narrowly qualifying captioned three-rule table may also include a draft arrangement and header-neutral HTML preview marked needs_review; its row/column grouping and header roles are unverified. Additive: the abstention gap is unchanged and default output stays byte-identical. Default: false."
           },
           "allow_headerless_tables": {
             "type": "boolean",
