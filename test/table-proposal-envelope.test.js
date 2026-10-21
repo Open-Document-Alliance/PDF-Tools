@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTableProposalRegion } from "../server/markdown-conversion.js";
+import { verifyTableProposalAgainstRegion } from "../server/table-proposal-verification.js";
 
 function fixture() {
   const rows = [
@@ -60,6 +61,28 @@ describe("abandoned three-rule table source envelope", () => {
     expect(result).not.toHaveProperty("cells");
     expect(packet(input)).toEqual(result);
     expect(input).toEqual(before);
+  });
+
+  it("rejects old item assignments against freshly rebuilt region membership", () => {
+    const input = fixture();
+    const region = packet(input);
+    const old = oldPacket(input);
+    const result = verifyTableProposalAgainstRegion({
+      source: { file_name: "synthetic.pdf", sha256: "b".repeat(64), size_bytes: 123 },
+      layout: { name: "pdf-tools.extraction-ir", version: "1.6.0",
+        parser_name: "pdfjs-dist", parser_version: "5.4.624" },
+      regionId: region.region_id, page: 1, region,
+      // Tokens bind source/IR/region, not membership. A matching old token
+      // must not make missing header items or outside-prose assignments valid.
+      proposalToken: "a".repeat(64), expectedProposalToken: "a".repeat(64),
+      cells: old.text_items.map((item, index) => ({ row: index, column: 0,
+        rowspan: 1, colspan: 1, item_ids: [item.id] })),
+    });
+    expect(result.status).toBe("rejected");
+    expect(result.reason_codes).toContain("TABLE_PROPOSAL_ITEM_UNKNOWN");
+    expect(result.reason_codes).toContain("TABLE_PROPOSAL_ITEM_MISSING");
+    expect(result.reason_codes).toContain("TABLE_PROPOSAL_HEADER_UNSUPPORTED");
+    expect(result.table).toBeNull();
   });
 
   const attacks = {
