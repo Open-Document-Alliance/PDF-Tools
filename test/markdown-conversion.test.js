@@ -15,6 +15,13 @@ import {
   validateMarkdownConversionSemantics,
 } from "../server/markdown-conversion.js";
 
+function canonicalCandidate(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalCandidate).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort()
+    .map(key => `${JSON.stringify(key)}:${canonicalCandidate(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
 function multiply(left, right) {
   return [
     left[0] * right[0] + left[2] * right[1],
@@ -511,9 +518,24 @@ describe("layout Markdown renderer", () => {
       candidate => { candidate.cells[0].column = 1; },
     ]) {
       const changed = structuredClone(result);
-      mutate(changed.table_proposal_regions.find(value => value.review_candidate).review_candidate);
+      const candidate = changed.table_proposal_regions.find(value => value.review_candidate).review_candidate;
+      mutate(candidate);
+      const { candidate_sha256: _digest, ...body } = candidate;
+      candidate.candidate_sha256 = createHash("sha256").update(canonicalCandidate(body)).digest("hex");
+      expect(() => validateMarkdownConversionSemantics(changed)).toThrow();
       expect(() => validateMarkdownConversionSemantics(changed, { layout })).toThrow();
     }
+    // Swapping complete assignments and their source fragments can be internally
+    // consistent; only a reconstruction from the bound IR proves this algorithm's output.
+    const regrouped = structuredClone(result);
+    const draft = regrouped.table_proposal_regions.find(value => value.review_candidate).review_candidate;
+    [draft.cells[1].item_ids, draft.cells[2].item_ids] = [draft.cells[2].item_ids, draft.cells[1].item_ids];
+    [draft.cells[1].lines, draft.cells[2].lines] = [draft.cells[2].lines, draft.cells[1].lines];
+    draft.html = draft.html.replace("<td>A</td><td>B</td>", "<td>B</td><td>A</td>");
+    const { candidate_sha256: _digest, ...body } = draft;
+    draft.candidate_sha256 = createHash("sha256").update(canonicalCandidate(body)).digest("hex");
+    expect(() => validateMarkdownConversionSemantics(regrouped)).not.toThrow();
+    expect(() => validateMarkdownConversionSemantics(regrouped, { layout })).toThrow(/bound layout IR/);
   });
 
   it("emits only inert data cells for an opted-in complete source-covered headerless grid", async () => {

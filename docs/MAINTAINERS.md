@@ -313,6 +313,27 @@ regions suppress header hints. The same source region is used by document maps
 and fresh proposal verification. Ordinary Markdown and conversion gaps do not
 change, and matching source/region tokens do not excuse obsolete assignments.
 
+With `emit_table_proposals: true`, qualifying three-rule regions can also carry
+`review_candidate`: a proposed arrangement with `status: needs_review`, exact
+source-item assignments and line fragments, and inert HTML data cells. The
+same preview and review notice appear in the text response. It groups the top
+band provisionally and derives columns from whitespace corridors recurring
+across every nonoverlapping body line. All region items must be assigned once,
+every cell must contain source text, and the complete maximal partition must
+recur on every body line. Ragged, wrapped, straddling or over-budget layouts
+retain the evidence packet without a draft. Drafts are capped at 100 rows,
+12 columns, 400 source items, 20,000 HTML bytes and 40,000 canonical JSON bytes.
+
+Rows, columns and header roles remain unverified; no header tags, spans, blank
+values or new source text are inferred. Candidate digests bind algorithm,
+PDF SHA, region, assignments, fragments, uncertainty and presentation. When
+layout is supplied, semantic validation reconstructs the entire packet from
+it. Standalone output validation checks content/digest consistency only and
+does not replace fresh source replay. Document maps carry no candidate cells.
+Ordinary Markdown, its gap list and strict `verify_table_proposal` acceptance
+remain unchanged. Review the draft beside the source PDF before using its
+grouping; a visible draft is not an accepted table or verified extraction.
+
 Filesystem operations and rasterization happen locally, and PDF Tools does not
 upload files to a separate PDF service. Text, images, and metadata returned
 through MCP may still be processed under the selected host or model provider's
