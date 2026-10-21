@@ -2927,6 +2927,7 @@ function threeRuleReviewCandidate(region, envelope, sourceSha256) {
   // one deterministic proposed partition. Whitespace does not prove topology.
   const minGap = Math.max(5, ...lower.map(item => item.bbox.height));
   let corridors = null;
+  let gapCount = null;
   for (const row of rows) {
     const gaps = [];
     let right = row.items[0].bbox.x + row.items[0].bbox.width;
@@ -2934,11 +2935,13 @@ function threeRuleReviewCandidate(region, envelope, sourceSha256) {
       if (item.bbox.x - right >= minGap) gaps.push([right, item.bbox.x]);
       right = Math.max(right, item.bbox.x + item.bbox.width);
     }
+    if (gapCount !== null && gaps.length !== gapCount) return null;
+    gapCount = gaps.length;
     corridors = corridors === null ? gaps : corridors.flatMap(([left, end]) => gaps
       .map(([start, rightEdge]) => [Math.max(left, start), Math.min(end, rightEdge)])
       .filter(([start, rightEdge]) => rightEdge - start >= minGap));
   }
-  if (corridors.length < 1 || corridors.length > 11) return null;
+  if (corridors.length < 1 || corridors.length > 11 || corridors.length !== gapCount) return null;
   const cuts = corridors.map(([left, right]) => (left + right) / 2);
   const sourceRows = [upper, ...rows.map(row => row.items)];
   const cells = [];

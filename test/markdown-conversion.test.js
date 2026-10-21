@@ -471,12 +471,12 @@ describe("layout Markdown renderer", () => {
       textItem("Table 1. Example", { top: 88, left: 50, fontSize: 10 }),
       textItem("Concentration", { top: 113, left: 60, fontSize: 9 }),
       textItem("level", { top: 124, left: 60, fontSize: 9 }),
-      textItem("A", { top: 120, left: 140, fontSize: 9, eol: false }),
-      textItem("B", { top: 120, left: 220, fontSize: 9 }),
+      textItem("A", { top: 120, left: 150, fontSize: 9, eol: false }),
+      textItem("B", { top: 120, left: 230, fontSize: 9 }),
       ...["Control", "Low", "High"].flatMap((label, index) => [
         textItem(label, { top: 145 + 15 * index, left: 60, fontSize: 9, eol: false }),
-        textItem(String(index), { top: 145 + 15 * index, left: 140, fontSize: 9, eol: false }),
-        textItem(String(index + 1), { top: 145 + 15 * index, left: 220, fontSize: 9 }),
+        textItem(String(index), { top: 145 + 15 * index, left: 150, fontSize: 9, eol: false }),
+        textItem(String(index + 1), { top: 145 + 15 * index, left: 230, fontSize: 9 }),
       ]),
       textItem("3. Results", { top: 205, left: 50, fontSize: 10 }),
     ];

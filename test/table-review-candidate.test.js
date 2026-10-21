@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -119,10 +118,10 @@ describe("actual MCP table draft presentation", () => {
     const draw = (text, x, top) => page.drawText(text, { x, y: 792 - top - 9, size: 9, font });
     draw("Table 1. Synthetic measurements", 50, 88);
     draw("Concentration", 60, 114); draw("level", 70, 126);
-    draw("A", 140, 120); draw("B", 220, 120);
+    draw("A", 150, 120); draw("B", 230, 120);
     for (const [index, label] of ["Control", "Low", "High"].entries()) {
-      draw(label, 60, 148 + index * 15); draw(String(index), 140, 148 + index * 15);
-      draw(String(index + 1), 220, 148 + index * 15);
+      draw(label, 60, 148 + index * 15); draw(String(index), 150, 148 + index * 15);
+      draw(String(index + 1), 230, 148 + index * 15);
     }
     draw("3. Results", 50, 210);
     for (const y of [110, 140, 195]) page.drawRectangle({ x: 50, y: 792 - y - 1, width: 220, height: 1 });
