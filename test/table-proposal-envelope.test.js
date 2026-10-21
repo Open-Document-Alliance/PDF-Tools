@@ -26,8 +26,8 @@ function fixture() {
   ]);
   const page = { page: 1, raw_items, lines, truncation: { truncated: false },
     ruled_rects: { status: "available", observed_count: 6, returned_count: 6, items },
-    ruling_segments: { status: "available", truncated: false, items: [] },
-    painted_rectangles: { items: [] } };
+    ruling_segments: { status: "available", truncated: false, observed_count: 0, returned_count: 0, items: [] },
+    painted_rectangles: { status: "available", truncated: false, observed_count: 0, returned_count: 0, items: [] } };
   const run = lines.slice(3).map(line => ({ line,
     cells: raw_items.filter(item => item.line_id === line.id) }));
   return { page, run };
@@ -72,6 +72,16 @@ describe("abandoned three-rule table source envelope", () => {
     missing_band: input => { input.page.ruled_rects.items.splice(2, 2); },
     fourth_band: input => { input.page.ruled_rects.items.push({ x: 50, y: 155, width: 220, height: 1, verb: "fill" }); },
     interior_fraction_bar: input => { input.page.ruled_rects.items.push({ x: 65, y: 155, width: 20, height: 1, verb: "fill" }); },
+    thick_foreign_fill: input => { input.page.ruled_rects.items.push({ x: 50, y: 155, width: 220, height: 3, verb: "fill" }); },
+    short_foreign_fill: input => { input.page.ruled_rects.items.push({ x: 65, y: 155, width: 4, height: 1, verb: "fill" }); },
+    foreign_stroke: input => {
+      input.page.ruling_segments.items.push({ orientation: "horizontal", x1: 50, x2: 270, y1: 155, y2: 155 });
+    },
+    foreign_paint: input => { input.page.painted_rectangles.items.push({ bbox: { x: 50, y: 155, width: 220, height: 3 } }); },
+    unavailable_strokes: input => { input.page.ruling_segments.status = "unavailable"; },
+    truncated_strokes: input => { input.page.ruling_segments.truncated = true; },
+    unavailable_paint: input => { input.page.painted_rectangles.status = "unavailable"; },
+    truncated_paint: input => { input.page.painted_rectangles.truncated = true; },
     clip_only: input => { input.page.ruled_rects.items.forEach(item => { item.verb = "clip"; }); },
     truncated_geometry: input => { input.page.ruled_rects.status = "truncated"; },
     truncated_text: input => { input.page.truncation.truncated = true; },
@@ -88,6 +98,9 @@ describe("abandoned three-rule table source envelope", () => {
     attacks[name](input);
     input.page.ruled_rects.observed_count = input.page.ruled_rects.items.length;
     input.page.ruled_rects.returned_count = input.page.ruled_rects.items.length;
+    for (const channel of [input.page.ruling_segments, input.page.painted_rectangles]) {
+      channel.observed_count = channel.returned_count = channel.items.length;
+    }
     const actual = packet(input);
     const old = oldPacket(input);
     expect(actual.bbox).toEqual(old.bbox);

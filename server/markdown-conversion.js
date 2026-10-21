@@ -2824,6 +2824,11 @@ function threeRuleProposalEnvelope(page, run) {
     || evidence.items.length > MAX_TABLE_PROPOSAL_RULED_RECTS
     || evidence.observed_count !== evidence.items.length
     || evidence.returned_count !== evidence.items.length) return null;
+  if ([page.ruling_segments, page.painted_rectangles].some(channel => (
+    channel?.status !== "available" || channel.truncated
+    || channel.observed_count !== channel.items.length
+    || channel.returned_count !== channel.items.length
+  ))) return null;
   const text = page.raw_items.filter(item => item.text_kind === "non_whitespace");
   if (text.some(item => !item.geometry_valid || !item.bbox)) return null;
   const tolerance = 0.05;
@@ -2837,7 +2842,8 @@ function threeRuleProposalEnvelope(page, run) {
       && Math.abs(prior.height - bar.height) <= tolerance
       && Math.abs(prior.x + prior.width - bar.x) <= tolerance) {
       prior.width = bar.x + bar.width - prior.x;
-    } else bands.push({ x: bar.x, y: bar.y, width: bar.width, height: bar.height });
+      prior.parts.push(bar);
+    } else bands.push({ x: bar.x, y: bar.y, width: bar.width, height: bar.height, parts: [bar] });
   }
   const contains = (outer, inner) => inner.x >= outer.x && inner.y >= outer.y
     && inner.x + inner.width <= outer.x + outer.width
@@ -2858,7 +2864,11 @@ function threeRuleProposalEnvelope(page, run) {
       height: bottom.y - top.y - top.height };
     // Reject partial/competing paint inside this envelope, not just extra
     // full-width rules. Clip boxes are retained as evidence, not paint bands.
-    if (bands.some(band => !aligned.includes(band) && rectsOverlap(band, bbox))) continue;
+    const constituents = new Set(aligned.flatMap(band => band.parts));
+    if (evidence.items.some(rect => !["clip", "eoClip"].includes(rect.verb)
+      && !constituents.has(rect) && rectsOverlap(rect, bbox))
+      || page.ruling_segments.items.some(segment => rulingSegmentOverlapsRegion(segment, bbox))
+      || page.painted_rectangles.items.some(rect => rectsOverlap(rect.bbox, bbox))) continue;
     const captions = page.lines.filter(line => /^Table\s+\d+\b/iu.test(line.text.trim())
       && line.x >= bbox.x && line.x + line.width <= bbox.x + bbox.width
       && line.y + line.height <= top.y
