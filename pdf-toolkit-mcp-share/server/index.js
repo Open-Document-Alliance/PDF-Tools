@@ -6082,6 +6082,7 @@ async function handleToolCall(request) {
             saved_output: savedOutput,
             ...(tableProposals !== undefined ? { table_proposals: tableProposals } : {}),
           };
+          const reviewCandidates = tableProposals?.filter(region => region.review_candidate) ?? [];
           const summary = [
             `Converted pages ${layout.page_range.start_page}-${layout.page_range.end_page} of ${fileName} to deterministic Markdown.`,
             `Status: ${rendered.conversion_status}. UTF-8 bytes: ${rendered.markdown_bytes}.`,
@@ -6093,6 +6094,10 @@ async function handleToolCall(request) {
               : []),
             "No OCR, external model, hidden link-target recovery, or table inference beyond complete source-bound text, ruled, or painted grids was performed.",
             rendered.markdown,
+            ...reviewCandidates.map(region => [
+              `Page ${region.page}, ${region.region_id}: ${region.review_candidate.review_notice}`,
+              region.review_candidate.html,
+            ].join("\n\n")),
           ].join("\n\n");
           return {
             content: [{ type: "text", text: summary }],

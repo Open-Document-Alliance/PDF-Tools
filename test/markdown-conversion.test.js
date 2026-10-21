@@ -496,10 +496,24 @@ describe("layout Markdown renderer", () => {
       "Concentration", "level", "A", "B", "Control", "0", "1", "Low", "1", "2", "High", "2", "3",
     ]);
     expect(region.header_hints.status).toBe("unavailable");
+    expect(region.review_candidate).toMatchObject({ status: "needs_review", row_count: 4, column_count: 3 });
     const mapped = analyzeValidatedPdfPagesForDocumentMap(layout.pages);
-    expect(mapped[0].table_regions).toEqual(result.table_proposal_regions);
+    expect(mapped[0].table_regions).toEqual(result.table_proposal_regions.map(({ review_candidate: _candidate, ...item }) => item));
     expect(analyzeValidatedPdfPagesForDocumentMap(layout.pages)).toEqual(mapped);
     expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
+    for (const mutate of [
+      candidate => { candidate.topology_verified = true; },
+      candidate => { candidate.cells[0].lines[0].text = "invented"; },
+      candidate => { candidate.cells[0].item_ids.pop(); },
+      candidate => { candidate.cells[0].item_ids.push(candidate.cells[1].item_ids[0]); },
+      candidate => { candidate.html += "<script>alert(1)</script>"; },
+      candidate => { candidate.source_sha256 = "f".repeat(64); },
+      candidate => { candidate.cells[0].column = 1; },
+    ]) {
+      const changed = structuredClone(result);
+      mutate(changed.table_proposal_regions.find(value => value.review_candidate).review_candidate);
+      expect(() => validateMarkdownConversionSemantics(changed, { layout })).toThrow();
+    }
   });
 
   it("emits only inert data cells for an opted-in complete source-covered headerless grid", async () => {

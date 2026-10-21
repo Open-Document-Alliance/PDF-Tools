@@ -1,6 +1,6 @@
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { validatePdfLayoutSemantics } from "./layout-extraction.js";
-import { validateMarkdownConversionSemantics } from "./markdown-conversion.js";
+import { TABLE_REVIEW_NOTICE, validateMarkdownConversionSemantics } from "./markdown-conversion.js";
 import {
   validatePdfObservationSemantics,
   validateRenderObservationSemantics,
@@ -1171,6 +1171,27 @@ const tableProposal = object({
   header_hints: tableProposalHeaderHints,
   truncation: tableProposalTruncation,
   proposal_token: sha256Digest,
+});
+// Additive only on opt-in proposal packets. Strict table acceptance is separate.
+tableProposal.properties.review_candidate = object({
+  algorithm: object({ name: { const: "pdf-tools.three-rule-review-candidate" }, version: { const: "0.1.0" } }),
+  status: { const: "needs_review" }, topology_verified: { const: false }, header_roles_verified: { const: false },
+  source_sha256: sha256Digest, region_id: string, page: { type: "integer", minimum: 1 },
+  content_origin: { const: "source_text_items" }, structure_origin: { const: "whitespace_alignment_proposal" },
+  row_count: { type: "integer", minimum: 3, maximum: 100 },
+  column_count: { type: "integer", minimum: 2, maximum: 12 },
+  source_item_count: { type: "integer", minimum: 1, maximum: 400 },
+  assigned_item_count: { type: "integer", minimum: 1, maximum: 400 }, unassigned_item_count: { const: 0 },
+  cells: { type: "array", minItems: 6, maxItems: 400, items: object({
+    row: { type: "integer", minimum: 0, maximum: 99 }, column: { type: "integer", minimum: 0, maximum: 11 },
+    item_ids: { type: "array", minItems: 1, maxItems: 400, items: string },
+    lines: { type: "array", minItems: 1, maxItems: 400, items: object({
+      line_id: string, item_ids: { type: "array", minItems: 1, maxItems: 400, items: string }, text: string,
+    }) },
+  }) },
+  html: string, html_format: { const: "header_neutral_html" },
+  html_bytes: { type: "integer", minimum: 1, maximum: 20000 },
+  review_notice: { const: TABLE_REVIEW_NOTICE }, candidate_sha256: sha256Digest,
 });
 const tableProposalCheckStatus = enumString(["passed", "failed", "not_run"]);
 const verifiedTableCell = object({
