@@ -10,6 +10,7 @@ import {
   validatePdfLayoutSourceEvidence,
 } from "../server/layout-extraction.js";
 import {
+  analyzeValidatedPdfPagesForDocumentMap,
   renderPdfLayoutToMarkdown,
   validateMarkdownConversionSemantics,
 } from "../server/markdown-conversion.js";
@@ -463,6 +464,42 @@ describe("layout Markdown renderer", () => {
     withBars.pages[0].ruled_rects.observed_count += 2;
     withBars.pages[0].ruled_rects.returned_count += 2;
     expect(renderPdfLayoutToMarkdown(withBars, { allowHeaderlessTables })).toEqual(baseline);
+  });
+
+  it("refines three-rule proposal sources without changing Markdown or promoting header roles", async () => {
+    const items = [
+      textItem("Table 1. Example", { top: 88, left: 50, fontSize: 10 }),
+      textItem("Concentration", { top: 113, left: 60, fontSize: 9 }),
+      textItem("level", { top: 124, left: 60, fontSize: 9 }),
+      textItem("A", { top: 120, left: 140, fontSize: 9, eol: false }),
+      textItem("B", { top: 120, left: 220, fontSize: 9 }),
+      ...["Control", "Low", "High"].flatMap((label, index) => [
+        textItem(label, { top: 145 + 15 * index, left: 60, fontSize: 9, eol: false }),
+        textItem(String(index), { top: 145 + 15 * index, left: 140, fontSize: 9, eol: false }),
+        textItem(String(index + 1), { top: 145 + 15 * index, left: 220, fontSize: 9 }),
+      ]),
+      textItem("3. Results", { top: 205, left: 50, fontSize: 10 }),
+    ];
+    const bars = [110, 140, 190].flatMap(y => [
+      { x: 50, y, width: 120, height: 1, verb: "fill" },
+      { x: 170, y, width: 100, height: 1, verb: "fill" },
+    ]);
+    const layout = attachRuledRects(await validatedSyntheticLayout([{ items }]), bars);
+    const baseline = renderPdfLayoutToMarkdown(layout);
+    const result = renderPdfLayoutToMarkdown(layout, { emitTableProposals: true });
+    expect(result.markdown).toBe(baseline.markdown);
+    expect(result.pages).toEqual(baseline.pages);
+    expect(result.gaps).toEqual(baseline.gaps);
+    const region = result.table_proposal_regions.find(value => value.bbox.y === 110);
+    expect(region).toBeDefined();
+    expect(region.text_items.map(item => item.text)).toEqual([
+      "Concentration", "level", "A", "B", "Control", "0", "1", "Low", "1", "2", "High", "2", "3",
+    ]);
+    expect(region.header_hints.status).toBe("unavailable");
+    const mapped = analyzeValidatedPdfPagesForDocumentMap(layout.pages);
+    expect(mapped[0].table_regions).toEqual(result.table_proposal_regions);
+    expect(analyzeValidatedPdfPagesForDocumentMap(layout.pages)).toEqual(mapped);
+    expect(() => validateMarkdownConversionSemantics(result, { layout })).not.toThrow();
   });
 
   it("emits only inert data cells for an opted-in complete source-covered headerless grid", async () => {

@@ -303,6 +303,16 @@ structured spans are authoritative. Never describe an accepted result as proof
 of the one uniquely correct or semantically correct topology. Rejections and
 ordinary conversions remain fail-closed and emit no inferred table.
 
+Proposal regions may use one uniquely captioned three-horizontal-fill-band
+envelope to recover complete source membership, including multiline heading
+text, while excluding nearby prose. This is region selection only: it does not
+infer columns, cell boundaries or header roles. All intersecting text must be
+accounted for; competing paint, incomplete geometry, ambiguous captions and
+boundary-straddling items preserve the original unrefined proposal. Refined
+regions suppress header hints. The same source region is used by document maps
+and fresh proposal verification. Ordinary Markdown and conversion gaps do not
+change, and matching source/region tokens do not excuse obsolete assignments.
+
 Filesystem operations and rasterization happen locally, and PDF Tools does not
 upload files to a separate PDF service. Text, images, and metadata returned
 through MCP may still be processed under the selected host or model provider's

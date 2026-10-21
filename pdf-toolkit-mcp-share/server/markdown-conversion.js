@@ -2815,15 +2815,92 @@ function tableProposalHeaderHints(run) {
   };
 }
 
+function threeRuleProposalEnvelope(page, run) {
+  // This refines an already abandoned proposal, never reconstructs a table.
+  // Three full-width paint bands and a nearby caption can bound the source
+  // region without establishing columns, cell cuts, or header semantics.
+  const evidence = page.ruled_rects;
+  if (evidence?.status !== "available" || page.truncation?.truncated
+    || evidence.items.length > MAX_TABLE_PROPOSAL_RULED_RECTS
+    || evidence.observed_count !== evidence.items.length
+    || evidence.returned_count !== evidence.items.length) return null;
+  if ([page.ruling_segments, page.painted_rectangles].some(channel => (
+    channel?.status !== "available" || channel.truncated
+    || channel.observed_count !== channel.items.length
+    || channel.returned_count !== channel.items.length
+  ))) return null;
+  const text = page.raw_items.filter(item => item.text_kind === "non_whitespace");
+  if (text.some(item => !item.geometry_valid || !item.bbox)) return null;
+  const tolerance = 0.05;
+  const bars = evidence.items.filter(rect => ["fill", "eoFill"].includes(rect.verb)
+    && rect.height >= 0.05 && rect.height <= 2 && rect.width >= 5)
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+  const bands = [];
+  for (const bar of bars) {
+    const prior = bands.at(-1);
+    if (prior && Math.abs(prior.y - bar.y) <= tolerance
+      && Math.abs(prior.height - bar.height) <= tolerance
+      && Math.abs(prior.x + prior.width - bar.x) <= tolerance) {
+      prior.width = bar.x + bar.width - prior.x;
+      prior.parts.push(bar);
+    } else bands.push({ x: bar.x, y: bar.y, width: bar.width, height: bar.height, parts: [bar] });
+  }
+  const contains = (outer, inner) => inner.x >= outer.x && inner.y >= outer.y
+    && inner.x + inner.width <= outer.x + outer.width
+    && inner.y + inner.height <= outer.y + outer.height;
+  const runIds = new Set(run.map(row => row.line.id));
+  const candidates = [];
+  for (const top of bands) {
+    if (top.width < 80) continue;
+    const aligned = bands.filter(band => Math.abs(band.x - top.x) <= tolerance
+      && Math.abs(band.width - top.width) <= tolerance);
+    if (aligned.length !== 3 || aligned[0] !== top) continue;
+    const [, middle, bottom] = aligned;
+    if (middle.y - top.y - top.height < 5 || bottom.y - middle.y - middle.height < 5
+      || bottom.y + bottom.height - top.y > 300) continue;
+    const bbox = { x: top.x, y: top.y, width: top.width,
+      height: bottom.y + bottom.height - top.y };
+    const interior = { x: bbox.x, y: top.y + top.height, width: bbox.width,
+      height: bottom.y - top.y - top.height };
+    // Reject partial/competing paint inside this envelope, not just extra
+    // full-width rules. Clip boxes are retained as evidence, not paint bands.
+    const constituents = new Set(aligned.flatMap(band => band.parts));
+    if (evidence.items.some(rect => !["clip", "eoClip"].includes(rect.verb)
+      && !constituents.has(rect) && rectsOverlap(rect, bbox))
+      || page.ruling_segments.items.some(segment => rulingSegmentOverlapsRegion(segment, bbox))
+      || page.painted_rectangles.items.some(rect => rectsOverlap(rect.bbox, bbox))) continue;
+    const captions = page.lines.filter(line => /^Table\s+\d+\b/iu.test(line.text.trim())
+      && line.x >= bbox.x && line.x + line.width <= bbox.x + bbox.width
+      && line.y + line.height <= top.y
+      && top.y - line.y - line.height <= Math.min(48, 3 * line.height));
+    if (captions.length !== 1) continue;
+    const intersecting = text.filter(item => rectsOverlap(item.bbox, bbox));
+    if (intersecting.length === 0 || intersecting.some(item => !contains(interior, item.bbox)
+      || rectsOverlap(item.bbox, middle))) continue;
+    const lines = page.lines.filter(line => rectsOverlap(line, interior));
+    if (lines.some(line => !contains(interior, line))) continue;
+    // Reopen every retained source item, including lines missed by the old
+    // adjacent-run heuristic. Never silently drop an unassigned source item.
+    const itemIds = lines.flatMap(line => line.item_ids)
+      .filter(id => intersecting.some(item => item.id === id));
+    if (new Set(itemIds).size !== itemIds.length || itemIds.length !== intersecting.length) continue;
+    if (lines.filter(line => runIds.has(line.id)).length < 2
+      || !lines.some(line => line.y + line.height <= middle.y)
+      || !lines.some(line => line.y >= middle.y + middle.height)) continue;
+    const itemById = new Map(page.raw_items.map(item => [item.id, item]));
+    candidates.push({ bbox, run: lines.map(line => ({ line, cells: lineCells(line, itemById) })) });
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 /**
- * Build one deterministic, bounded proposal-region descriptor for a table run
- * the renderer abandoned. Pure over the page IR and the run; no token, no I/O,
- * no time/RNG. The proposal_token that binds it to (source sha, IR version,
- * region_id) is added by the handler, which owns the source identity. Exported
- * for the bounded-truncation regression, which needs to force an over-cap
- * region without synthesizing a full validated IR.
+ * Build a bounded proposal from an abandoned run. A uniquely captioned
+ * three-rule envelope can refine source membership but supplies no topology
+ * or header authority. Pure over source-validated IR; no token, time or I/O.
  */
 export function buildTableProposalRegion(page, run, reason, ordinal) {
+  const envelope = threeRuleProposalEnvelope(page, run);
+  if (envelope) run = envelope.run;
   const itemById = new Map(page.raw_items.map(item => [item.id, item]));
   let minX = Infinity;
   let minY = Infinity;
@@ -2835,7 +2912,7 @@ export function buildTableProposalRegion(page, run, reason, ordinal) {
     maxX = Math.max(maxX, line.x + line.width);
     maxY = Math.max(maxY, line.y + line.height);
   }
-  const bbox = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  const bbox = envelope?.bbox ?? { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 
   const allItems = [];
   for (const { line } of run) {
@@ -2895,7 +2972,10 @@ export function buildTableProposalRegion(page, run, reason, ordinal) {
     ruled_rects: ruledRects,
     ruling_segments: rulingSegments,
     painted_rectangles: paintedRectangles,
-    header_hints: tableProposalHeaderHints(run),
+    header_hints: envelope ? {
+      status: "unavailable", first_row_height: null, body_median_height: null,
+      first_row_band: "unavailable",
+    } : tableProposalHeaderHints(run),
     truncation: {
       text_items: itemsTruncated ? "truncated" : "complete",
       ruled_rects: ruledTruncated ? "truncated" : "complete",
