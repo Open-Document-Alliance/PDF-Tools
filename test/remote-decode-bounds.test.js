@@ -278,8 +278,8 @@ describe("bounded PDF.js worker", () => {
   const require = createRequire(import.meta.url);
   const source = readFileSync(require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"), "utf8");
 
-  it("adds the guard to both decode growth paths of the pinned build", () => {
-    expect((boundedWorkerSource(source).match(/__pdfToolsGuardDecodeGrowth/g) ?? []).length).toBe(2);
+  it("adds the guard to every decode growth path of the pinned build", () => {
+    expect((boundedWorkerSource(source).match(/__pdfToolsGuardDecodeGrowth/g) ?? []).length).toBe(4);
   });
 
   it("fails closed when the pinned source does not match exactly", () => {
@@ -311,4 +311,33 @@ describe("bounded PDF.js worker", () => {
     const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.concat(parts).toString("base64"), start_page: 1, end_page: 1 });
     expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
   }, 120_000);
+
+  it("bounds JPEG decoding by the codestream's own frame size, not only the declared size", async () => {
+    // Declared 1x1, so the declared-size check passes; the frame header claims 20000x20000.
+    const jpeg = Buffer.from([
+      0xff, 0xd8,
+      0xff, 0xc0, 0x00, 0x0b, 0x08, 0x4e, 0x20, 0x4e, 0x20, 0x01, 0x01, 0x11, 0x00,
+      0xff, 0xd9,
+    ]);
+    const content = deflateSync(Buffer.from("q 100 0 0 100 0 0 cm /Im0 Do Q", "latin1"));
+    const parts = [];
+    const offsets = [];
+    let position = 0;
+    const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+    push("%PDF-1.7\n");
+    offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>\nendobj\n");
+    offsets[4] = position; push(`4 0 obj\n<< /Filter /FlateDecode /Length ${content.length} >>\nstream\n`); push(content); push("\nendstream\nendobj\n");
+    offsets[5] = position; push(`5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`); push(jpeg); push("\nendstream\nendobj\n");
+    const xref = position;
+    let table = "xref\n0 6\n0000000000 65535 f \n";
+    for (let index = 1; index <= 5; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+    push(`${table}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    const before = process.memoryUsage().arrayBuffers;
+    const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.concat(parts).toString("base64"), start_page: 1, end_page: 1 });
+    // 20000x20000 needs about 800 MB of block buffers; the guard must refuse before allocating.
+    expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(MAX_DECODED_STREAM_BYTES);
+  }, 60_000);
 });

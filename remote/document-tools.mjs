@@ -43,9 +43,8 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
   async function layout(args) {
     const { bytes, document, source } = await input(args);
     const [start, end] = range(args, document.getPageCount());
-    const pdfjs = await loadBoundedPdfjs();
-    // Prevent parser warnings from placing document-derived values in logs.
-    const pdfjsLib = { ...pdfjs, getDocument: options => pdfjs.getDocument({ ...options, verbosity: 0 }) };
+    // Bounded decoders, maxImageSize and verbosity 0 (no document-derived parser warnings in logs).
+    const pdfjsLib = await loadBoundedPdfjs();
     const extracted = await extractPdfLayoutForMarkdown({
       pdfjsLib, pdfBytes: bytes, sourcePath: "request.pdf", sourceFileName: "request.pdf",
       sourceSha256: source.sha256, requestedStartPage: start, requestedEndPage: end,

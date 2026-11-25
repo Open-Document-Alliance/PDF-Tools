@@ -53,7 +53,38 @@ const HOOKS = [
     ].join("\n"),
     add: "        globalThis.__pdfToolsGuardDecodeGrowth(totalLength, totalLength - chunk.byteLength);\n",
   },
+  {
+    // JPEG: per-component block buffers sized from the codestream's own frame header.
+    after: [
+      "    const blocksBufferSize = 64 * blocksPerColumnForMcu * (blocksPerLineForMcu + 1);",
+      "",
+    ].join("\n"),
+    add: "    globalThis.__pdfToolsGuardDecodeGrowth(blocksBufferSize * 2, 0);\n",
+  },
+  {
+    // JBIG2: the page bitmap sized from the page information segment.
+    after: [
+      "  onPageInformation(info) {",
+      "    this.currentPageInfo = info;",
+      "    const rowSize = info.width + 7 >> 3;",
+      "",
+    ].join("\n"),
+    add: "    globalThis.__pdfToolsGuardDecodeGrowth(rowSize * info.height, 0);\n",
+  },
 ];
+
+/**
+ * Images larger than this many pixels (by their declared size) are skipped by
+ * PDF.js rather than decoded. Text extraction does not need image pixels.
+ * JPX decodes inside WebAssembly, so beyond this check it is bounded only by
+ * the process-memory backstop.
+ */
+export const MAX_IMAGE_PIXELS = 16 * 1024 * 1024;
+
+/** getDocument options every hosted PDF.js call uses. */
+export function boundedDocumentOptions(options) {
+  return { ...options, verbosity: 0, maxImageSize: MAX_IMAGE_PIXELS };
+}
 
 export class BoundedPdfjsUnavailable extends Error {}
 
@@ -86,7 +117,9 @@ export function loadBoundedPdfjs() {
       if (!globalThis.pdfjsWorker?.WorkerMessageHandler) throw new BoundedPdfjsUnavailable("bounded PDF.js worker did not register");
       Object.defineProperty(globalThis.pdfjsWorker, "__pdfToolsBounded", { value: true });
     }
-    return import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    // Every hosted getDocument call gets the bounded options.
+    return { ...pdfjs, getDocument: options => pdfjs.getDocument(boundedDocumentOptions(options)) };
   })();
   return loading;
 }
