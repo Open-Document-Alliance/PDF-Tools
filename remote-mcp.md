@@ -26,6 +26,7 @@ filesystem, such as a hosted assistant working from a link or an attachment.
 - URL: `https://mcp.opendocuments.ai/mcp`
 - Authentication: none on this public endpoint
 - Protocol revisions: as published by the server's `initialize` response
+- Skill: on 2026-07-28 connections the server also offers `skill://pdf-tools-hosted/SKILL.md`, a short guide to using these tools well
 
 ## Tools
 
