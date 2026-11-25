@@ -61,6 +61,12 @@ import {
   withBoundedPdfFileSafely,
 } from "./bounded-pdf-file.js";
 import { startPdfLibRssMonitor } from "./pdf-lib-rss-monitor.js";
+import {
+  publicOutlineReport,
+  readSourceOutline,
+  writeCarriedOutline,
+} from "./outline-carry.js";
+import { carryPageLabels, carryReorderedPageLabels, readSourcePageLabels } from "./page-label-carry.js";
 
 const PROTOCOL_VERSION = 1;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
@@ -181,8 +187,8 @@ const OPTION_KEYS = new Map([
   ["merge_pdfs", []],
   ["split_pdf", ["page_ranges"]],
   ["rotate_pdf_pages", ["degrees", "pages"]],
-  ["reorder_pdf_pages", ["page_order", "rotations"]],
-  ["apply_page_plan", ["page_order", "rotations"]],
+  ["reorder_pdf_pages", ["page_labels", "page_order", "rotations"]],
+  ["apply_page_plan", ["page_labels", "page_order", "rotations"]],
   ["add_signature_field", ["allow_resign", "placement"]],
   ["apply_signature", [
     "allow_resign", "audit_line", "audit_text", "draw_audit_line",
@@ -313,6 +319,10 @@ function validateRequest(request) {
   if (request.operation === "bulk_fill_from_csv") {
     boundedArray(options.records, "records");
     options.records.forEach((record, index) => objectValue(record, `records[${index}]`));
+  }
+  if (["reorder_pdf_pages", "apply_page_plan"].includes(request.operation)
+      && !["positional", "follow_pages"].includes(options.page_labels)) {
+    throw new TypeError("page_labels must be positional or follow_pages.");
   }
   if (request.operation === "split_pdf"
       && (typeof options.page_ranges !== "string" || options.page_ranges.length < 1 || options.page_ranges.length > 16_384)) {
@@ -2427,8 +2437,12 @@ async function execute(request, protection) {
     const metadata = [];
     let pages = 0;
     const expectedPageRotations = [];
+    const outlineParts = [];
+    const labelParts = [];
+    let firstSource = null;
     for (const [sourceIndex, bytes] of sourceBytes.entries()) {
       const source = await loadMutationSource(protection, bytes);
+      firstSource = firstSource ?? source;
       if (sourceBytes.length > 1) metadata.push(captureMergeDescriptiveMetadata(source));
       else {
         copyPdfDocumentMetadataForRebuiltOutput(
@@ -2439,12 +2453,20 @@ async function execute(request, protection) {
       }
       const indices = source.getPageIndices();
       expectedPageRotations.push(...normalizedPageRotations(source));
-      await copyPdfPagesForRebuiltOutput(target, source, indices, {
+      const copied = await copyPdfPagesForRebuiltOutput(target, source, indices, {
         sourceAuthorityLabel: parsedSourceAuthority(protection, bytes, request.sources[sourceIndex]),
       });
+      outlineParts.push({
+        outline: readSourceOutline(source),
+        targetPageFor: sourcePage => copied[sourcePage]?.ref ?? null,
+        sourcePageOffset: pages,
+      });
+      labelParts.push({ labels: readSourcePageLabels(source), sourcePages: indices });
       pages += indices.length;
     }
     if (pages < 1) throw new Error("merge_pdfs has no effective output pages.");
+    const outline = writeCarriedOutline(target, outlineParts, { pageModeFrom: firstSource });
+    const pageLabels = carryPageLabels(target, labelParts);
     const consensus = sourceBytes.length > 1
       ? applyMergeDescriptiveMetadataConsensus(target, metadata)
       : { preservedFields: [], omittedFields: [] };
@@ -2452,10 +2474,20 @@ async function execute(request, protection) {
       expectedPageCount: pages,
       expectedPageRotations,
     })];
-    result = { total_pages: pages, omitted_fields: consensus.omittedFields, form_info: formInfo(target) };
+    result = {
+      total_pages: pages,
+      omitted_fields: consensus.omittedFields,
+      outline: publicOutlineReport(outline),
+      page_labels: pageLabels,
+      form_info: formInfo(target),
+    };
   } else if (request.operation === "split_pdf") {
     const source = await loadMutationSource(protection, sourceBytes[0]);
     const ranges = parsePageRanges(options.page_ranges, source.getPageCount());
+    const sourceOutline = readSourceOutline(source);
+    const sourceLabels = readSourcePageLabels(source);
+    const outlines = [];
+    let pageLabels = "absent";
     for (const [start, end] of ranges) {
       const target = await PDFDocument.create();
       copyPdfDocumentMetadataForRebuiltOutput(
@@ -2463,7 +2495,7 @@ async function execute(request, protection) {
         source,
         parsedSourceAuthority(protection, sourceBytes[0], request.sources[0]),
       );
-      await copyPdfPagesForRebuiltOutput(
+      const copied = await copyPdfPagesForRebuiltOutput(
         target,
         source,
         Array.from({ length: end - start + 1 }, (_, index) => start - 1 + index),
@@ -2472,13 +2504,23 @@ async function execute(request, protection) {
         },
       );
       if (target.getPageCount() < 1) throw new Error("split_pdf produced an empty effective page range.");
+      const inPart = sourcePage => sourcePage >= start - 1 && sourcePage <= end - 1;
+      outlines.push(publicOutlineReport(writeCarriedOutline(target, [{
+        outline: sourceOutline,
+        targetPageFor: sourcePage => (inPart(sourcePage) ? copied[sourcePage - (start - 1)].ref : null),
+        anchorKept: inPart,
+      }], { pageModeFrom: source })));
+      pageLabels = carryPageLabels(target, [{
+        labels: sourceLabels,
+        sourcePages: Array.from({ length: end - start + 1 }, (_, index) => start - 1 + index),
+      }]);
       outputs.push(await savePdfDocumentSafely(target, {
         expectedPageCount: end - start + 1,
         expectedPageRotations: normalizedPageRotations(source)
           .slice(start - 1, end),
       }));
     }
-    result = { ranges };
+    result = { ranges, outlines, outline: splitOutlineLoss(sourceOutline, ranges), page_labels: pageLabels };
   } else if (request.operation === "rotate_pdf_pages") {
     const document = await loadMutationSource(protection, sourceBytes[0]);
     const all = document.getPages();
@@ -2529,13 +2571,26 @@ async function execute(request, protection) {
       source,
       parsedSourceAuthority(protection, sourceBytes[0], request.sources[0]),
     );
-    await copyPdfPagesForRebuiltOutput(target, source, order.map(page => page - 1), {
+    const copied = await copyPdfPagesForRebuiltOutput(target, source, order.map(page => page - 1), {
       sourceAuthorityLabel: parsedSourceAuthority(protection, sourceBytes[0], request.sources[0]),
       mutatePage(page, index) {
         const rotation = options.rotations?.[String(order[index])];
         if (rotation) page.setRotation(degrees((page.getRotation().angle + rotation) % 360));
       },
     });
+    const outputPosition = new Map(order.map((page, index) => [page - 1, index]));
+    const outline = writeCarriedOutline(target, [{
+      outline: readSourceOutline(source),
+      targetPageFor: sourcePage => (
+        outputPosition.has(sourcePage) ? copied[outputPosition.get(sourcePage)].ref : null
+      ),
+    }], { pageModeFrom: source });
+    const labelCarry = carryReorderedPageLabels(
+      target,
+      readSourcePageLabels(source),
+      order.map(page => page - 1),
+      options.page_labels === "follow_pages" ? "follow" : "positional",
+    );
     outputs = [await savePdfDocumentSafely(target, {
       expectedPageCount: order.length,
       expectedPageRotations,
@@ -2544,6 +2599,10 @@ async function execute(request, protection) {
       total_pages: total,
       deleted_pages: total - order.length,
       rotated_pages: Object.keys(options.rotations ?? {}).filter(key => seen.has(Number(key))).length,
+      outline: publicOutlineReport(outline),
+      page_labels: labelCarry.status,
+      page_labels_changed: labelCarry.changed,
+      page_label_example: labelCarry.example,
       form_info: formInfo(target),
     };
   } else {
@@ -2637,6 +2696,23 @@ async function execute(request, protection) {
     throw new TypeError("Mutation operations must stage at least one output.");
   }
   return { outputs, result };
+}
+
+/**
+ * Bookmarks that land in none of the split parts. A part legitimately holds
+ * only its own pages' bookmarks, so per-part drops are expected; a bookmark
+ * whose page is in no part at all is the loss the reply must name.
+ */
+function splitOutlineLoss(sourceOutline, ranges) {
+  const covered = page => ranges.some(([start, end]) => page >= start - 1 && page <= end - 1);
+  const anchorKept = page => covered(page);
+  anchorKept.inNoPart = page => !covered(page);
+  const loss = writeCarriedOutline(
+    { context: null, catalog: null },
+    [{ outline: sourceOutline, targetPageFor: page => (covered(page) ? true : null), anchorKept }],
+    { dryRun: true },
+  );
+  return publicOutlineReport(loss);
 }
 
 async function stageOutputs(stageDirectory, outputBytes) {

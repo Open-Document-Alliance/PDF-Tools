@@ -78,6 +78,8 @@ export const SHARE_FILES = [
   "server/output-schemas.js",
   "server/pdf-comparison.js",
   "server/pdf-observations.js",
+  "server/outline-carry.js",
+  "server/page-label-carry.js",
   "server/pdf-lib-rss-monitor.js",
   "server/pdf-lib-subprocess.js",
   "server/pdf-lib-worker.js",

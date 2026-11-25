@@ -86,8 +86,8 @@ const OPTION_KEYS = new Map([
   ["merge_pdfs", []],
   ["split_pdf", ["page_ranges"]],
   ["rotate_pdf_pages", ["degrees", "pages"]],
-  ["reorder_pdf_pages", ["page_order", "rotations"]],
-  ["apply_page_plan", ["page_order", "rotations"]],
+  ["reorder_pdf_pages", ["page_labels", "page_order", "rotations"]],
+  ["apply_page_plan", ["page_labels", "page_order", "rotations"]],
   ["add_signature_field", ["allow_resign", "placement"]],
   ["apply_signature", [
     "allow_resign", "audit_line", "audit_text", "draw_audit_line",

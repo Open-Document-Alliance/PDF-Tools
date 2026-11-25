@@ -243,7 +243,15 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-10-20: version the optional tight-grid/caption repair as renderer 1.23.0.
 // 2026-10-20: private local password entry replaces public credential inputs.
 // 2026-10-21: optional table packets describe draft arrangements that require review.
-const TOOL_CONTRACT_SHA256 = "2239a74dcdb71387f855c49bb26bc01e52ca9a14e773be13a32d19d3af9ec2d4";
+// 2026-11-25: rebuilt outputs report what they did with the source bookmarks.
+// merge_pdfs, reorder_pdf_pages and apply_page_plan gain an `outline` report in
+// their output schemas, and split_pdf gains one per file plus one for the
+// whole split, and all four gain a `page_labels` status. Input schemas,
+// annotations, descriptions and the count of 64 are unchanged. Replaces 2239a74dcdb71387f855c49bb26bc01e52ca9a14e773be13a32d19d3af9ec2d4.
+// 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
+// page_labels ("positional" by default, or "follow_pages") and report
+// page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+const TOOL_CONTRACT_SHA256 = "cb76b2154dfb650c47f2026be644f83c032203ff8d06676390e5e2e3dd14c0cf";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -519,6 +527,8 @@ describe("MCPB static declarations", () => {
       "helpers.js",
       "host-pdf-import.js",
       "output-schemas.js",
+      "outline-carry.js",
+      "page-label-carry.js",
       "layout-extraction.js",
       "type3-cm-reference.js",
       "type3-cm-pk-reference.js",
@@ -554,7 +564,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(39);
+    expect(mirrored).toHaveLength(41);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",

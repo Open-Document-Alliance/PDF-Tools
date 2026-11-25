@@ -604,6 +604,41 @@ import {
   PDF_LIB_ENCRYPTED_MESSAGE,
   PDF_LIB_GEOMETRY_PASSWORD_DESCRIPTION,
 } from "./helpers.js";
+import { describeOutlineReport } from "./outline-carry.js";
+
+// One reply line about bookmarks, so a rebuilt output never loses one silently.
+function outlineNotice(report) {
+  const line = describeOutlineReport(report);
+  return line ? `\n${line}` : "";
+}
+
+// Page labels are only worth a line when they could not be carried, or when
+// keeping the numbering by position changed what a moved page is labelled.
+function pageLabelNotice(status, changed = 0, example = null) {
+  if (status === "not_carried") {
+    return "\nPage labels: NOT carried. The source's page-label tree could not be read safely, so the output uses plain page numbers.";
+  }
+  if (status === "carried" && changed > 0 && example) {
+    return `\nPage labels keep their positions, so the numbering stays sequential: ${changed} page(s) now show a different label `
+      + `than in the source (source page ${example.source_page}, labelled "${example.before}", now shows "${example.after}"). `
+      + "Pass page_labels \"follow_pages\" to keep each page's own label instead.";
+  }
+  return "";
+}
+
+const PAGE_LABELS_INPUT_SCHEMA = Object.freeze({
+  type: "string",
+  enum: ["positional", "follow_pages"],
+  description: "How page labels (the i, ii, 1, 2 numbering a viewer shows) are carried. positional (default) keeps the document's numbering scheme by position, so it stays sequential; follow_pages keeps each page's own label wherever it moves, for labels that name pages (such as \"Cover\").",
+});
+
+function normalizePageLabelsOption(value) {
+  if (value === undefined || value === null) return "positional";
+  if (value !== "positional" && value !== "follow_pages") {
+    throw new Error("page_labels must be \"positional\" or \"follow_pages\".");
+  }
+  return value;
+}
 
 // Helper: validate profile name to prevent path traversal
 function validateProfileName(name) {
@@ -4359,6 +4394,7 @@ async function listTools(request) {
               type: "string",
               description: PDF_REPROTECTING_PASSWORD_DESCRIPTION,
             },
+            page_labels: PAGE_LABELS_INPUT_SCHEMA,
             expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
           },
           required: ["input_path", "output_path", "page_order"]
@@ -4503,6 +4539,7 @@ async function listTools(request) {
               type: "boolean",
               description: "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
             },
+            page_labels: PAGE_LABELS_INPUT_SCHEMA,
             expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
           },
           required: ["input_path", "output_path", "plan"]
@@ -6818,10 +6855,12 @@ async function handleToolCall(request) {
           ...workerResult.form_info,
           total_pages: workerResult.total_pages,
           metadata_fields_omitted: workerResult.omitted_fields,
+          outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
         });
-        const metadataNotice = workerResult.omitted_fields.length > 0
+        const metadataNotice = (workerResult.omitted_fields.length > 0
           ? `\nOmitted unverified metadata: ${workerResult.omitted_fields.join(", ")}`
-          : "";
+          : "") + outlineNotice(workerResult.outline) + pageLabelNotice(workerResult.page_labels);
 
         return {
           content: [{
@@ -6885,21 +6924,36 @@ async function handleToolCall(request) {
               start_page: entry.start,
               end_page: entry.end,
               page_count: entry.end - entry.start + 1,
+              outline: result.outlines[index],
             })),
+            outline: result.outline,
+            page_labels: result.page_labels,
           };
         });
-        const results = split.files.map(file => `${file.filename} (${file.page_count} pages)`);
+        const results = split.files.map(file => {
+          const bookmarks = file.outline.status === "absent" ? "" : `, ${file.outline.carried_entries} bookmark(s)`;
+          return `${file.filename} (${file.page_count} pages${bookmarks})`;
+        });
+        // Per part, a bookmark for another part's page is expected to be
+        // absent. Only a bookmark no part keeps is a loss worth naming.
+        const splitOutlineNotice = (split.outline.status === "absent"
+          ? ""
+          : split.outline.status === "carried"
+            ? `\nBookmarks: each part keeps the bookmarks for its own pages (${split.outline.source_entries} in the source, none lost).`
+            : outlineNotice(split.outline)) + pageLabelNotice(split.page_labels);
 
         return {
           content: [{
             type: "text",
-            text: `Split ${path.basename(resolvedInputPath)} into ${results.length} files:\n${results.join("\n")}\nSaved to: ${output_directory}`
+            text: `Split ${path.basename(resolvedInputPath)} into ${results.length} files:\n${results.join("\n")}\nSaved to: ${output_directory}${splitOutlineNotice}`
           }],
           structuredContent: {
             input_path: resolvedInputPath,
             output_directory: resolvedOutputDir,
             file_count: split.files.length,
             files: split.files,
+            outline: split.outline,
+            page_labels: split.page_labels,
           },
         };
       }
@@ -6971,7 +7025,9 @@ async function handleToolCall(request) {
           page_order,
           password,
           expected_output_identity,
+          page_labels,
         } = args;
+        const pageLabelsMode = normalizePageLabelsOption(page_labels);
         if (!page_order || page_order.length === 0) {
           throw new Error("page_order must be a non-empty array of page numbers.");
         }
@@ -6989,7 +7045,7 @@ async function handleToolCall(request) {
           operation: "reorder_pdf_pages",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
-          options: { page_order, rotations: {} },
+          options: { page_order, rotations: {}, page_labels: pageLabelsMode },
         }, async ({ result, outputs, atomicTransition }) => {
           const committedOutput = await writePdfOutputAtomic(resolvedOutputPath, null, {
             produceBytes: outputs[0].readBytes,
@@ -7007,12 +7063,15 @@ async function handleToolCall(request) {
         const payload = await buildNewOutputDocumentPayload(committedOutputPath, "reorder_pdf_pages", 1, {
           ...workerResult.form_info,
           page_order,
+          outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
+          page_labels_changed: workerResult.page_labels_changed,
         });
 
         return {
           content: [{
             type: "text",
-            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB`
+            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB${outlineNotice(workerResult.outline)}${pageLabelNotice(workerResult.page_labels, workerResult.page_labels_changed, workerResult.page_label_example)}`
           }],
           structuredContent: payload,
           _meta: {
@@ -7192,7 +7251,9 @@ async function handleToolCall(request) {
           password,
           force_xfa = false,
           expected_output_identity,
+          page_labels,
         } = args;
+        const pageLabelsMode = normalizePageLabelsOption(page_labels);
         const { page_order, rotations = {} } = plan;
 
         if (!page_order || page_order.length === 0) {
@@ -7231,7 +7292,7 @@ async function handleToolCall(request) {
             sources: [bindRecoveredMutationSource(recoveredInput)],
             password,
             force_xfa: force_xfa === true,
-            options: { page_order, rotations },
+            options: { page_order, rotations, page_labels: pageLabelsMode },
           }, async ({ result, outputs, atomicTransition }) => {
             const committedOutput = await writePdfOutputAtomic(resolvedOutputPath, null, {
               produceBytes: outputs[0].readBytes,
@@ -7258,8 +7319,13 @@ async function handleToolCall(request) {
         let summary = `Saved ${page_order.length}-page PDF to: ${output_path}\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB`;
         if (deletedCount > 0) summary += `\n${deletedCount} page(s) removed`;
         if (rotatedCount > 0) summary += `\n${rotatedCount} page(s) rotated`;
+        summary += outlineNotice(workerResult.outline)
+          + pageLabelNotice(workerResult.page_labels, workerResult.page_labels_changed, workerResult.page_label_example);
         const payload = await buildNewOutputDocumentPayload(committedOutputPath, "apply_page_plan", 1, {
           ...workerResult.form_info,
+          outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
+          page_labels_changed: workerResult.page_labels_changed,
           deleted_pages: deletedCount,
           rotated_pages: rotatedCount,
           page_order,
