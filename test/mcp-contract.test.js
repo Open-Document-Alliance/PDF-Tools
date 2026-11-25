@@ -262,7 +262,10 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-11-25: apply_text leaves Keywords alone unless the new
 // record_audit_in_keywords is true, is appended incrementally, and reports
 // save_mode and audit_in_keywords. Replaces 29d807da213b35fdc32bf15a2ce08fcfd3335aa88db5ecde75d419ca9141a127.
-const TOOL_CONTRACT_SHA256 = "4b1e23a3ced66c22d1ebdfc5b1e6febfdb8aacac3192f04d6dc2fcff4fca87b6";
+// 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
+// page_labels ("positional" by default, or "follow_pages") and report
+// page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+const TOOL_CONTRACT_SHA256 = "bc056a750057bae630f7afe6538ba693246366264766402afb2470aef5a68aff";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
