@@ -2123,6 +2123,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     width: number,
     height: number,
     text: string,
+    save_mode: enumString(["incremental", "rewrite"]),
+    audit_in_keywords: boolean,
   }),
   detect_signature_zones: object({
     detection_status: enumString(["complete", "partial"]),

@@ -259,15 +259,18 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-11-25: add_signature_field creates a real /Sig form field: new
 // optional field_name input, field_name and save_mode outputs, and a
 // description that says so. Replaces c69e7964bf355c3aa40b2e9b5ac5153560bf99944768cdea8db62e564e871f4e.
+// 2026-11-25: apply_text leaves Keywords alone unless the new
+// record_audit_in_keywords is true, is appended incrementally, and reports
+// save_mode and audit_in_keywords. Replaces 29d807da213b35fdc32bf15a2ce08fcfd3335aa88db5ecde75d419ca9141a127.
 // 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
 // page_labels ("positional" by default, or "follow_pages") and report
 // page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
 // 2026-11-25: the fill descriptions say a signed form's signed bytes are not
 // changed, rather than claiming the signatures verify, which nothing checks.
-// Inputs, outputs and annotations unchanged. Replaces 3c326a02949f5d46f7146e972d8083058a77bfc60d719ec1c15977c753822a7c.
+// Inputs, outputs and annotations unchanged. Replaces bc056a750057bae630f7afe6538ba693246366264766402afb2470aef5a68aff.
 // 2026-11-25: set_pdf_metadata is not idempotent (each call appends a
-// revision), so idempotentHint is false. Replaces c5605cd80cf3707a1e09f4495535e865391c38cfd7c1f062302ce68656d37f15.
-const TOOL_CONTRACT_SHA256 = "ae1bb02a53f2cea5b62b76dee187b03c87ec925087a29f53d3ae319221d52dfa";
+// revision), so idempotentHint is false. Replaces 6d6259aabe43bf7760c8ef1fe5a156dfcaab7aa2032b00f4e4b9b2d9043c1bf7.
+const TOOL_CONTRACT_SHA256 = "ecdc9b1be2eee776e2aaf40f8802674f1721593d5f3eae393abaf1218845c06a";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

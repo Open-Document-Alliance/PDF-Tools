@@ -99,7 +99,8 @@ const OPTION_KEYS = new Map([
     "allow_resign", "field_values", "require_provider_ready", "signature_locations",
   ]],
   ["apply_text", [
-    "allow_resign", "audit_line", "font_style", "modification_at", "placement", "text",
+    "allow_resign", "audit_line", "font_style", "modification_at", "placement",
+    "record_audit_in_keywords", "text",
   ]],
 ]);
 

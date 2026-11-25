@@ -196,7 +196,7 @@ const OPERATIONS = new Set([
   "split_pdf",
 ]);
 const METADATA_EDIT_FIELDS = Object.freeze(["title", "author", "subject", "keywords"]);
-const APPENDABLE_OPERATIONS = new Set(["add_signature_field"]);
+const APPENDABLE_OPERATIONS = new Set(["add_signature_field", "apply_text"]);
 const MAX_METADATA_VALUE_LENGTH = 32_768;
 const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
@@ -223,7 +223,8 @@ const OPTION_KEYS = new Map([
     "allow_resign", "field_values", "require_provider_ready", "signature_locations",
   ]],
   ["apply_text", [
-    "allow_resign", "audit_line", "font_style", "modification_at", "placement", "text",
+    "allow_resign", "audit_line", "font_style", "modification_at", "placement",
+    "record_audit_in_keywords", "text",
   ]],
 ]);
 
@@ -505,6 +506,9 @@ function validateRequest(request) {
     )
   ) {
     throw new TypeError("audit_text is invalid.");
+  }
+  if (Object.hasOwn(options, "record_audit_in_keywords") && typeof options.record_audit_in_keywords !== "boolean") {
+    throw new TypeError("record_audit_in_keywords must be boolean.");
   }
   if (Object.hasOwn(options, "draw_audit_line") && typeof options.draw_audit_line !== "boolean") {
     throw new TypeError("draw_audit_line must be boolean.");
@@ -2526,8 +2530,12 @@ function fieldObjectOwners(document) {
   return owners;
 }
 
-/** Best-effort: keep the XMP dates in step with Info's ModDate. */
-function refreshCatalogXmpDates(document, modifiedAt) {
+/**
+ * Best-effort: keep the XMP dates in step with Info's ModDate, and with any
+ * Info fields named in edits. If those fields cannot be edited, the dates
+ * still are.
+ */
+function refreshCatalogXmpDates(document, modifiedAt, edits = {}) {
   let xmp;
   try {
     xmp = readCatalogXmp(document);
@@ -2535,15 +2543,22 @@ function refreshCatalogXmpDates(document, modifiedAt) {
     return;
   }
   if (!xmp) return;
+  const attempt = fields => {
+    try {
+      return editXmpDocumentFields(xmp.text, fields, { modifiedAt: modifiedAt.toISOString() });
+    } catch {
+      return null;
+    }
+  };
   try {
-    const edited = editXmpDocumentFields(xmp.text, {}, { modifiedAt: modifiedAt.toISOString() });
-    if (edited === xmp.text) return;
+    const edited = attempt(edits) ?? (Object.keys(edits).length > 0 ? attempt({}) : null);
+    if (edited === null || edited === xmp.text) return;
     document.context.assign(xmp.ref, document.context.stream(new TextEncoder().encode(edited), {
       Type: "Metadata",
       Subtype: "XML",
     }));
   } catch {
-    // Dates only: an XMP packet that cannot be edited is left as it was.
+    // An XMP packet that cannot be rewritten is left as it was.
   }
 }
 
@@ -3001,10 +3016,23 @@ async function execute(request, protection) {
       };
     } else if (request.operation === "apply_text") {
       await stampTextOnPage(document, { ...options.placement, text: options.text, fontStyle: options.font_style });
-      const keywords = document.getKeywords() || "";
-      document.setKeywords([keywords ? `${keywords}\n${options.audit_line}` : options.audit_line]);
-      document.setModificationDate(new Date(options.modification_at));
-      result = { form_info: formInfo(document) };
+      // Keywords are the document's own search terms. Writing an audit trail
+      // into them changed descriptive metadata the user never asked to
+      // change, so it happens only on request.
+      if (options.record_audit_in_keywords) {
+        const keywords = document.getKeywords() || "";
+        document.setKeywords([keywords ? `${keywords}\n${options.audit_line}` : options.audit_line]);
+      }
+      const modifiedAt = new Date(options.modification_at);
+      document.setModificationDate(modifiedAt);
+      // Info's ModDate moved, so the XMP dates move with it; otherwise the
+      // two records disagree about when the document last changed.
+      refreshCatalogXmpDates(
+        document,
+        modifiedAt,
+        options.record_audit_in_keywords ? { keywords: document.getKeywords() } : {},
+      );
+      result = { audit_in_keywords: options.record_audit_in_keywords === true, form_info: formInfo(document) };
     }
     let saveMode = "rewrite";
     if (appendable) {

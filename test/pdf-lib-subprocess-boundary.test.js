@@ -128,6 +128,7 @@ const OPTIONS = {
     font_style: "normal",
     modification_at: "2026-07-29T00:00:00.000Z",
     placement: { page: 1, x: 0, y: 0, width: 10, height: 10 },
+    record_audit_in_keywords: false,
     text: "text",
   },
 };
