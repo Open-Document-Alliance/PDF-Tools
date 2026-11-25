@@ -38,7 +38,6 @@
     "test:node-native": "node scripts/run-node-test-suites.mjs",
     "test:concurrent": "node scripts/test-concurrent-suites.mjs",
     "build:plugin": "node scripts/build-agent-plugin.mjs",
-    "build:claude-plugin": "node scripts/build-claude-plugin.mjs",
     "publish:plugin": "node scripts/publish-agent-plugin.mjs",
     "check:plugin-freshness": "node scripts/check-plugin-freshness.mjs",
     "eval:olmocr": "node scripts/eval-olmocr-bench.mjs",
