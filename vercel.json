@@ -15,6 +15,10 @@
     },
     "api/connect-key.js": {
       "maxDuration": 10
+    },
+    "api/sign.js": {
+      "maxDuration": 60,
+      "includeFiles": "{package.json,remote/**,server/**,node_modules/{@napi-rs/canvas*,pdfjs-dist}/**}"
     }
   },
   "rewrites": [
@@ -29,6 +33,22 @@
     {
       "source": "/connect",
       "destination": "/connect.html"
+    },
+    {
+      "source": "/mcp/sign",
+      "destination": "/api/sign?x-pdf-tools-path=/mcp/sign"
+    },
+    {
+      "source": "/oauth/:path*",
+      "destination": "/api/sign?x-pdf-tools-path=/oauth/:path*"
+    },
+    {
+      "source": "/.well-known/oauth-protected-resource/mcp/sign",
+      "destination": "/api/sign?x-pdf-tools-path=/.well-known/oauth-protected-resource/mcp/sign"
+    },
+    {
+      "source": "/.well-known/oauth-authorization-server",
+      "destination": "/api/sign?x-pdf-tools-path=/.well-known/oauth-authorization-server"
     }
   ]
 }
