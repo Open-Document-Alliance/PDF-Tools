@@ -7,6 +7,7 @@
 import { createMcpHandler } from "@modelcontextprotocol/server";
 
 import { callToolIsolated } from "./isolated-tool.mjs";
+import { trackRequest } from "./inflight.mjs";
 import { MAX_HANDLER_BODY_BYTES } from "./http.mjs";
 import { createRemoteServer } from "./server.mjs";
 import {
@@ -35,7 +36,11 @@ async function handleSignedMcp(request, config, now) {
   return handler.fetch(request);
 }
 
-export async function handleSignFetch(request, { env = process.env, now = Math.floor(Date.now() / 1000), fetchFn } = {}) {
+export function handleSignFetch(request, options = {}) {
+  return trackRequest(() => routeSignFetch(request, options));
+}
+
+async function routeSignFetch(request, { env = process.env, now = Math.floor(Date.now() / 1000), fetchFn } = {}) {
   const config = signingConfig(env);
   const { pathname } = new URL(request.url);
   const method = request.method;

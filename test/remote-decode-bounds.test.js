@@ -1,0 +1,405 @@
+import { EventEmitter } from "node:events";
+import { deflateSync } from "node:zlib";
+import { PDFDocument } from "pdf-lib";
+import { describe, expect, it } from "vitest";
+
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+
+import { MAX_DECODED_STREAM_BYTES } from "../remote/decode-budget.mjs";
+import { BoundedPdfjsUnavailable, boundedWorkerSource } from "../remote/pdfjs-bounded.mjs";
+import { createIsolatedDispatcher } from "../remote/isolated-tool.mjs";
+import { callTool } from "../remote/server.mjs";
+
+/** A minimal synthetic PDF with one compressed object stream of the given decoded size. */
+function pdfWithObjectStream(decodedBytes) {
+  const header = "9 0 ";
+  const body = Buffer.alloc(decodedBytes, 0x20);
+  body.write(header, 0, "latin1");
+  body.write("<< >>", decodedBytes - 6, "latin1");
+  const compressed = deflateSync(body, { level: 9 });
+  const parts = [];
+  const offsets = [];
+  let position = 0;
+  const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+  push("%PDF-1.7\n");
+  offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+  offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+  offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n");
+  offsets[4] = position; push(`4 0 obj\n<< /Type /ObjStm /N 1 /First ${header.length} /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`);
+  push(compressed); push("\nendstream\nendobj\n");
+  const xref = position;
+  let table = "xref\n0 5\n0000000000 65535 f \n";
+  for (let index = 1; index <= 4; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  push(`${table}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
+describe("decoded data bounds", () => {
+  it("processes an ordinary compressed object stream", async () => {
+    const result = await callTool("get_pdf_info", { pdf_base64: pdfWithObjectStream(1024 * 1024).toString("base64") });
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent.source.page_count).toBe(1);
+  });
+
+  it("refuses a stream whose decoded size exceeds the per-stream limit, with a typed answer", async () => {
+    const pdf = pdfWithObjectStream(MAX_DECODED_STREAM_BYTES + 16 * 1024 * 1024);
+    expect(pdf.length).toBeLessThan(1024 * 1024);
+    const before = process.memoryUsage().arrayBuffers;
+    const result = await callTool("get_pdf_info", { pdf_base64: pdf.toString("base64") });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(MAX_DECODED_STREAM_BYTES * 2);
+  }, 60_000);
+
+  it("resets the budget for the next call", async () => {
+    await callTool("get_pdf_info", { pdf_base64: pdfWithObjectStream(MAX_DECODED_STREAM_BYTES + 1024 * 1024).toString("base64") });
+    const result = await callTool("get_pdf_info", { pdf_base64: pdfWithObjectStream(1024 * 1024).toString("base64") });
+    expect(result.isError).toBeFalsy();
+  }, 60_000);
+
+  it("still reads ordinary documents unchanged", async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage().drawText("Synthetic bounded read");
+    const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.from(await doc.save()).toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.stringify(result.structuredContent)).toContain("Synthetic bounded read");
+  });
+});
+
+/** One page whose content stream decodes to the given size. */
+function pdfWithPageContent(decodedBytes) {
+  const body = Buffer.alloc(decodedBytes, 0x20);
+  body.write("BT ET", decodedBytes - 6, "latin1");
+  const compressed = deflateSync(body, { level: 9 });
+  const parts = [];
+  const offsets = [];
+  let position = 0;
+  const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+  push("%PDF-1.7\n");
+  offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+  offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+  offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n");
+  offsets[4] = position; push(`4 0 obj\n<< /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`);
+  push(compressed); push("\nendstream\nendobj\n");
+  const xref = position;
+  let table = "xref\n0 5\n0000000000 65535 f \n";
+  for (let index = 1; index <= 4; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  push(`${table}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
+
+/** One page plus extra stream objects (dict text, decoded size or raw bytes), unreferenced or referenced by the page. */
+function pdfWithStreams({ contents = null, extra = [], pageExtra = "" }) {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]${contents ? " /Contents 4 0 R" : ""} ${pageExtra} >>`,
+  ];
+  const streams = [];
+  if (contents) streams.push(contents);
+  streams.push(...extra);
+  const parts = [];
+  const offsets = [];
+  let position = 0;
+  const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+  push("%PDF-1.7\n");
+  objects.forEach((text, index) => { offsets[index + 1] = position; push(`${index + 1} 0 obj\n${text}\nendobj\n`); });
+  streams.forEach((stream, index) => {
+    const number = objects.length + index + 1;
+    const data = stream.raw ?? deflateSync(Buffer.alloc(stream.decoded, 0x20), { level: 9 });
+    offsets[number] = position;
+    push(`${number} 0 obj\n<< ${stream.dict ?? ""} /Filter /FlateDecode /Length ${data.length} >>\nstream\n`);
+    push(data); push("\nendstream\nendobj\n");
+  });
+  const total = objects.length + streams.length;
+  const xref = position;
+  let table = `xref\n0 ${total + 1}\n0000000000 65535 f \n`;
+  for (let index = 1; index <= total; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  push(`${table}trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
+describe("decoded data bounds for text extraction", () => {
+  it("checks page content under the cap before PDF.js reads it", async () => {
+    const pdf = pdfWithPageContent(MAX_DECODED_STREAM_BYTES + 8 * 1024 * 1024);
+    for (const name of ["read_pdf_pages", "search_pdf_text", "convert_pdf_to_markdown"]) {
+      const result = await callTool(name, { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1, ...(name === "search_pdf_text" ? { query: "x" } : {}) });
+      expect(result.content[0].text, name).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+    }
+    const zones = await callTool("detect_signature_zones", { pdf_base64: pdf.toString("base64") });
+    expect(zones.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+  }, 120_000);
+
+  it("refuses an oversized stream reached through page resources, not only page contents", async () => {
+    const pdf = pdfWithStreams({ contents: { raw: deflateSync(Buffer.from("q /Fm0 Do Q", "latin1")) }, pageExtra: "/Resources << /XObject << /Fm0 5 0 R >> >>", extra: [{ dict: "/Type /XObject /Subtype /Form /BBox [0 0 10 10]", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+  }, 60_000);
+
+  it("checks a stream by how it is used, not by its own label", async () => {
+    for (const label of ["/Subtype /Image", "/Type /Metadata /Subtype /XML", "/Type /EmbeddedFile"]) {
+      const pdf = pdfWithStreams({ contents: { dict: label, decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 } });
+      const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+      expect(result.content[0].text, label).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+    }
+  }, 120_000);
+
+  it("does not decode streams used only as images for text extraction", async () => {
+    const pdf = pdfWithStreams({ contents: { decoded: 64 }, pageExtra: "/Resources << /XObject << /Im0 5 0 R >> >>", extra: [{ dict: "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+  }, 60_000);
+
+  it("still reads a document with a damaged stream, as before", async () => {
+    const pdf = pdfWithStreams({ contents: { decoded: 64 }, extra: [{ dict: "", raw: Buffer.from([0x78, 0x9c, 0x01, 0x02, 0x03, 0xff, 0xfe]) }] });
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.content[0].text).not.toMatch(/^(INTERNAL_ERROR|DOCUMENT_TOO_LARGE_DECODED)/);
+  });
+
+  it("keeps budgets separate for overlapping calls", async () => {
+    const large = pdfWithObjectStream(MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024).toString("base64");
+    const small = pdfWithObjectStream(1024 * 1024).toString("base64");
+    const [refused, fine] = await Promise.all([callTool("get_pdf_info", { pdf_base64: large }), callTool("get_pdf_info", { pdf_base64: small })]);
+    expect(refused.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED/);
+    expect(fine.isError).toBeFalsy();
+  }, 60_000);
+});
+
+describe("process memory backstop", () => {
+  const silentWorker = () => Object.assign(new EventEmitter(), { terminate: async () => {}, stdout: null, stderr: null });
+  const replying = (delay = 30) => () => {
+    const worker = Object.assign(new EventEmitter(), { terminate: async () => {}, stdout: null, stderr: null });
+    setTimeout(() => worker.emit("message", { content: [{ type: "text", text: "done" }] }), delay);
+    return worker;
+  };
+  const limits = { memoryCeilingBytes: 10_000, memoryGrowthBytes: 1_000, sampleMs: 5, deadlineMs: 5_000 };
+
+  it("stops a call whose memory grows past the limit", async () => {
+    let rss = 100;
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss });
+    const pending = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await pending).content[0].text).toMatch(/^MEMORY_LIMIT: /);
+  });
+
+  it("does not lock out the next call when memory stays raised after a stop", async () => {
+    let rss = 100;
+    let calls = 0;
+    const factory = () => (calls++ === 0 ? silentWorker() : replying()());
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: factory, readRss: () => rss, recycle: () => {} });
+    const first = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await first).content[0].text).toMatch(/^MEMORY_LIMIT/);
+    // The stopped worker's memory is not returned to the OS: still raised,
+    // above the old growth limit but below the ceiling. The next call runs.
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
+  });
+
+  it("refuses new work above the ceiling before starting it, and says a send was not made", async () => {
+    let started = 0;
+    const factory = () => { started++; return silentWorker(); };
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: factory, readRss: () => 20_000 });
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toMatch(/^SERVICE_BUSY: .*No document work was started/);
+    expect((await dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } })).content[0].text).toMatch(/^SEND_NOT_STARTED: .*nothing was sent/);
+    expect(started).toBe(0);
+  });
+
+  it("stops ordinary calls before an outcome-sensitive one", async () => {
+    let rss = 100;
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 2, workerFactory: silentWorker, readRss: () => rss });
+    const send = dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } });
+    const read = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await read).content[0].text).toMatch(/^MEMORY_LIMIT/);
+    setTimeout(() => { rss = 200; }, 0);
+    const outcome = await Promise.race([send.then(result => result.content[0].text), new Promise(resolve => setTimeout(() => resolve("still running"), 150))]);
+    expect(outcome).toBe("still running");
+  });
+
+  it("measures later calls from after a stop, so a concurrent send and the next calls are unaffected", async () => {
+    let rss = 100;
+    let calls = 0;
+    const factory = () => (calls++ === 0 ? silentWorker() : replying(120)());
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 2, workerFactory: factory, readRss: () => rss, recycle: () => {} });
+    const hog = dispatch("read_pdf_pages", {});
+    const send = dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } });
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await hog).content[0].text).toMatch(/^MEMORY_LIMIT/);
+    // The stopped worker's memory stays mapped; rss does not fall back.
+    expect((await send).content[0].text).toBe("done");
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
+  });
+
+  it("refuses new work while growth is already over the limit", async () => {
+    let rss = 100;
+    let started = 0;
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 2, sampleMs: 1_000, workerFactory: () => { started++; return silentWorker(); }, readRss: () => rss });
+    const first = dispatch("read_pdf_pages", {});
+    rss = 1_500;
+    const second = await dispatch("read_pdf_pages", {});
+    expect(second.content[0].text).toMatch(/^SERVICE_BUSY/);
+    expect(started).toBe(1);
+    rss = 100;
+    void first;
+  });
+
+  it("does not replace the process while any request is in flight", async () => {
+    let rss = 100;
+    let recycled = 0;
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss, recycle: () => { recycled++; }, busy: () => true });
+    const pending = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 12_000; }, 20);
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 1_200));
+    expect(recycled).toBe(0);
+  });
+
+  it("asks the platform to replace an idle process left above the ceiling", async () => {
+    let rss = 100;
+    let recycled = 0;
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss, recycle: () => { recycled++; }, busy: () => false });
+    const pending = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 12_000; }, 20);
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 1_200));
+    expect(recycled).toBe(1);
+  });
+
+  it("leaves work alone below the limits and frees its slot afterwards", async () => {
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 1, workerFactory: replying(), readRss: () => 500 });
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
+  });
+});
+
+describe("bounded PDF.js worker", () => {
+  const require = createRequire(import.meta.url);
+  const source = readFileSync(require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"), "utf8");
+
+  it("adds the guard to every decode growth path of the pinned build", () => {
+    expect((boundedWorkerSource(source).match(/__pdfToolsGuard[A-Za-z]+\(/g) ?? []).length).toBe(7);
+  });
+
+  it("fails closed when the pinned source does not match exactly", () => {
+    expect(() => boundedWorkerSource(source.replace("    let size = this.minBufferLength;", "    let size = this.minBufferLength | 0;"))).toThrow(BoundedPdfjsUnavailable);
+    expect(() => boundedWorkerSource(source + source)).toThrow(BoundedPdfjsUnavailable);
+  });
+
+  it("bounds what PDF.js decodes even when pdf-lib resolves the document differently", async () => {
+    // Object 3 is defined twice. The cross-reference table points to the first
+    // definition, which uses the large stream as contents; pdf-lib keeps the
+    // later definition, which does not.
+    const big = deflateSync(Buffer.alloc(MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024, 0x20), { level: 9 });
+    const small = deflateSync(Buffer.from("BT ET", "latin1"));
+    const parts = [];
+    const offsets = [];
+    let position = 0;
+    const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+    push("%PDF-1.7\n");
+    offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n");
+    offsets[4] = position; push(`4 0 obj\n<< /Filter /FlateDecode /Length ${big.length} >>\nstream\n`); push(big); push("\nendstream\nendobj\n");
+    offsets[5] = position; push(`5 0 obj\n<< /Filter /FlateDecode /Length ${small.length} >>\nstream\n`); push(small); push("\nendstream\nendobj\n");
+    push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R >>\nendobj\n");
+    const xref = position;
+    let table = "xref\n0 6\n0000000000 65535 f \n";
+    for (let index = 1; index <= 5; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+    push(`${table}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.concat(parts).toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+  }, 120_000);
+
+  /** A one-page PDF drawing image object 5 (optionally with an /SMask object 6) over the page. */
+  function pdfWithImage(imageDict, imageData, smask = null) {
+    const content = deflateSync(Buffer.from("BT /F1 12 Tf 72 720 Td (Synthetic text) Tj ET q 100 0 0 100 0 0 cm /Im0 Do Q", "latin1"));
+    const parts = [];
+    const offsets = [];
+    let position = 0;
+    const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+    push("%PDF-1.7\n");
+    offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 7 0 R >> >> >>\nendobj\n");
+    offsets[4] = position; push(`4 0 obj\n<< /Filter /FlateDecode /Length ${content.length} >>\nstream\n`); push(content); push("\nendstream\nendobj\n");
+    offsets[5] = position; push(`5 0 obj\n<< /Type /XObject /Subtype /Image ${imageDict}${smask ? " /SMask 6 0 R" : ""} /Length ${imageData.length} >>\nstream\n`); push(imageData); push("\nendstream\nendobj\n");
+    offsets[6] = position;
+    if (smask) { push(`6 0 obj\n<< /Type /XObject /Subtype /Image ${smask.dict} /Length ${smask.data.length} >>\nstream\n`); push(smask.data); push("\nendstream\nendobj\n"); }
+    else push("6 0 obj\nnull\nendobj\n");
+    offsets[7] = position; push("7 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+    const xref = position;
+    let table = "xref\n0 8\n0000000000 65535 f \n";
+    for (let index = 1; index <= 7; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+    push(`${table}trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    return Buffer.concat(parts);
+  }
+
+  // A JPEG whose frame header claims 20000x20000 (and no image data).
+  const hugeFrameJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x4e, 0x20, 0x4e, 0x20, 0x01, 0x01, 0x11, 0x00, 0xff, 0xd9]);
+
+  it("skips a JPEG whose own frame size is over the limit, without a large allocation or failing the call", async () => {
+    const pdf = pdfWithImage(`/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode`, hugeFrameJpeg);
+    const before = process.memoryUsage().arrayBuffers;
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.stringify(result.structuredContent)).toContain("Synthetic text");
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(128 * 1024 * 1024);
+  }, 60_000);
+
+  it("bounds a soft mask by its own declared size", async () => {
+    const tiny = deflateSync(Buffer.alloc(64, 0x80));
+    const pdf = pdfWithImage(`/Width 8 /Height 8 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode`, tiny, {
+      dict: "/Width 16000 /Height 16000 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode",
+      data: hugeFrameJpeg,
+    });
+    const before = process.memoryUsage().arrayBuffers;
+    const result = await callTool("convert_pdf_to_markdown", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(128 * 1024 * 1024);
+  }, 60_000);
+
+  it("reads an ordinary ten-page 300 dpi scan", async () => {
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const canvas = createCanvas(2550, 3300);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#f4f4f4"; context.fillRect(0, 0, 2550, 3300);
+    context.fillStyle = "#222"; context.font = "48px sans-serif"; context.fillText("Synthetic scanned page", 200, 400);
+    const jpeg = canvas.toBuffer("image/jpeg", 80);
+    const doc = await PDFDocument.create();
+    const image = await doc.embedJpg(jpeg);
+    for (let index = 0; index < 10; index++) doc.addPage([612, 792]).drawImage(image, { x: 0, y: 0, width: 612, height: 792 });
+    const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.from(await doc.save()).toString("base64"), start_page: 1, end_page: 10 });
+    expect(result.content[0].text).not.toMatch(/^(DOCUMENT_TOO_LARGE_DECODED|MEMORY_LIMIT|INTERNAL_ERROR)/);
+  }, 120_000);
+
+  it("bounds an image mask by its declared size before allocating it", async () => {
+    // Declared 40000x40000 with almost no data and an inverted Decode, so PDF.js would fill a buffer from the declared size.
+    const pdf = pdfWithImage("/Width 40000 /Height 40000 /ImageMask true /BitsPerComponent 1 /Decode [1 0] /Filter /FlateDecode", deflateSync(Buffer.alloc(16, 0)));
+    const before = process.memoryUsage().arrayBuffers;
+    const result = await callTool("convert_pdf_to_markdown", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(64 * 1024 * 1024);
+  }, 60_000);
+});
+
+describe("bounded PDF.js stays tied to the pinned version", () => {
+  // The decoder hooks in remote/pdfjs-bounded.mjs are exact spans of this
+  // build. Changing the pin must fail here until the hooks are re-reviewed
+  // against the new build.
+  const PINNED_PDFJS_VERSION = "5.4.624";
+
+  it("pins pdfjs-dist exactly, and the installed build is that version", () => {
+    const require = createRequire(import.meta.url);
+    const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(manifest.dependencies["pdfjs-dist"] ?? manifest.devDependencies?.["pdfjs-dist"]).toBe(PINNED_PDFJS_VERSION);
+    expect(require("pdfjs-dist/package.json").version).toBe(PINNED_PDFJS_VERSION);
+  });
+
+  it("applies every decoder hook to the pinned build", () => {
+    const require = createRequire(import.meta.url);
+    const source = readFileSync(require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"), "utf8");
+    expect(() => boundedWorkerSource(source)).not.toThrow();
+  });
+});
