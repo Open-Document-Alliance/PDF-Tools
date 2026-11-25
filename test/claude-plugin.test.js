@@ -136,22 +136,29 @@ describe("Claude plugin launcher", () => {
     expect(result.stderr).toMatch(/payload file does not match its manifest: server\/index\.js/);
   });
 
-  it("replaces the old runtime when the payload changes", () => {
-    const first = stubPlugin();
+  it("installs a new runtime per payload and keeps only the previous one", () => {
     const data = tempDir("claude-plugin-data-");
-    expect(launch(first.root, data).status).toBe(0);
-    const next = stubPlugin();
-    writeFileSync(path.join(next.root, "server", "index.js"),
-      "process.stdin.once('data', () => { process.stdout.write('{\"v\":2}\\n'); process.exit(0); });\n");
-    const files = JSON.parse(readFileSync(path.join(next.root, "runtime", "payload.json"), "utf8")).files.map(entry => (
-      entry.path === "server/index.js"
-        ? { ...entry, sha256: createHash("sha256").update(readFileSync(path.join(next.root, "server", "index.js"))).digest("hex") }
-        : entry));
-    const digest = createHash("sha256").update(JSON.stringify(files)).digest("hex");
-    writeFileSync(path.join(next.root, "runtime", "payload.json"), JSON.stringify({ version: 1, plugin: "test2", digest, files }));
-    const result = launch(next.root, data);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe('{"v":2}');
-    expect(readdirSync(path.join(data, "runtime")).filter(name => !name.startsWith("."))).toEqual([digest.slice(0, 16)]);
+    const runtimes = () => readdirSync(path.join(data, "runtime")).filter(name => !name.startsWith(".")).sort();
+    const version = n => {
+      const plugin = stubPlugin();
+      writeFileSync(path.join(plugin.root, "server", "index.js"),
+        `process.stdin.once('data', () => { process.stdout.write('{"v":${n}}\\n'); process.exit(0); });\n`);
+      const files = JSON.parse(readFileSync(path.join(plugin.root, "runtime", "payload.json"), "utf8")).files.map(entry => (
+        entry.path === "server/index.js"
+          ? { ...entry, sha256: createHash("sha256").update(readFileSync(path.join(plugin.root, "server", "index.js"))).digest("hex") }
+          : entry));
+      const digest = createHash("sha256").update(JSON.stringify(files)).digest("hex");
+      writeFileSync(path.join(plugin.root, "runtime", "payload.json"), JSON.stringify({ version: 1, plugin: `v${n}`, digest, files }));
+      return { root: plugin.root, id: digest.slice(0, 16) };
+    };
+    const [v1, v2, v3] = [1, 2, 3].map(version);
+    for (const [plugin, n] of [[v1, 1], [v2, 2]]) {
+      const result = launch(plugin.root, data);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(`{"v":${n}}`);
+    }
+    expect(runtimes()).toEqual([v1.id, v2.id].sort());
+    expect(launch(v3.root, data).stdout.trim()).toBe('{"v":3}');
+    expect(runtimes()).toEqual([v2.id, v3.id].sort());
   });
 });

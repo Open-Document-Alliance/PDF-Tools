@@ -125,6 +125,22 @@ function verifyPayloadCopy(root, manifest) {
   }
 }
 
+// Keep the new runtime and the most recent previous one: another session that
+// started before the plugin updated may still be running from it. Anything
+// older goes. A runtime that cannot be removed (in use on Windows) stays for
+// the next install to try again; pruning never fails a start.
+function pruneRuntimes(runtimeRoot, keep) {
+  try {
+    const others = readdirSync(runtimeRoot)
+      .filter(name => name !== keep && !name.startsWith("."))
+      .map(name => ({ name, mtime: statSync(path.join(runtimeRoot, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const { name } of others.slice(1)) {
+      try { rmSync(path.join(runtimeRoot, name), { recursive: true, force: true }); } catch {}
+    }
+  } catch {}
+}
+
 function install(dataDir, manifest) {
   const runtimeRoot = path.join(dataDir, "runtime");
   const target = path.join(runtimeRoot, manifest.digest.slice(0, 16));
@@ -168,13 +184,8 @@ function install(dataDir, manifest) {
     rmSync(target, { recursive: true, force: true });
     renameSync(staging, target);
 
-    // Keep only the runtime this plugin version uses.
-    for (const name of readdirSync(runtimeRoot)) {
-      if (name !== path.basename(target) && !name.startsWith(".")) {
-        rmSync(path.join(runtimeRoot, name), { recursive: true, force: true });
-      }
-    }
     log("Dependencies installed.");
+    pruneRuntimes(runtimeRoot, path.basename(target));
     return target;
   } finally {
     rmSync(lockDir, { recursive: true, force: true });
@@ -184,6 +195,7 @@ function install(dataDir, manifest) {
 function startServer(runtimeDir, dataDir) {
   const child = spawn(process.execPath, [path.join(runtimeDir, "server", "index.js"), ...process.argv.slice(2)], {
     cwd: runtimeDir,
+    windowsHide: true,
     // The server keeps its folder config and private import workspace in
     // PLUGIN_DATA, the Agent Plugins name for the same directory.
     env: { ...process.env, PLUGIN_DATA: dataDir },
@@ -212,6 +224,7 @@ function main() {
       spawn(process.execPath, [fileURLToPath(import.meta.url), "--prepare-now"], {
         detached: true,
         stdio: "ignore",
+        windowsHide: true,
         env: process.env,
       }).unref();
     }
