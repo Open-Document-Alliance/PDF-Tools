@@ -12,11 +12,6 @@
  */
 
 import { handleMcpFetch } from "../remote/http.mjs";
-import { isolationMode } from "../remote/isolated-tool.mjs";
-
-// Start the per-instance isolation boot check when the function loads, so the
-// first request does not wait for it (it takes about 0.6 s on Vercel).
-void isolationMode();
 
 export const config = {
   runtime: "nodejs",
