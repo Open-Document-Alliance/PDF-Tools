@@ -40,12 +40,12 @@ const CMAP_ORACLE_PROVENANCE = JSON.parse(readFileSync(
   "utf8",
 ));
 const PROTECTED_DIRECT_DEPENDENCIES = {
-  "@modelcontextprotocol/server": "2.0.0",
+  "@modelcontextprotocol/server": "2.4.0",
   "@napi-rs/canvas": "0.1.99",
   "pdf-lib": "1.17.1",
   "pdfjs-dist": "5.4.624",
 };
-const PROTECTED_MCP_CORE_VERSION = "2.0.0";
+const PROTECTED_MCP_CORE_VERSION = "2.4.0";
 const EXPECTED_SHARE_EXECUTABLES = new Set([
   "configure-cursor.sh",
   "install-transactional.sh",
