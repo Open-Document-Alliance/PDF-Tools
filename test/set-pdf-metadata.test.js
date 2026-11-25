@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -161,8 +162,10 @@ describe("XMP document fields", () => {
     const flate = doc.context.flateStream(packetBytes, { Type: "Metadata", Subtype: "XML" });
     expect(new TextDecoder().decode(readXmpStreamBytes(plain))).toBe(STANDARD_XMP);
     expect(new TextDecoder().decode(readXmpStreamBytes(flate))).toBe(STANDARD_XMP);
-    // 64 MiB of spaces compresses to about 64 KB; reading stops at the cap.
-    const bomb = doc.context.flateStream(new Uint8Array(64 * 1024 * 1024).fill(0x20), { Type: "Metadata", Subtype: "XML" });
+    // 8 MiB of spaces, twice the cap, compresses to a few KB; reading stops at the cap.
+    const bomb = doc.context.stream(deflateSync(Buffer.alloc(2 * XMP_MAX_BYTES, 0x20)), {
+      Type: "Metadata", Subtype: "XML", Filter: "FlateDecode",
+    });
     expect(bomb.getContents().length).toBeLessThan(1024 * 1024);
     expect(reason(bomb)).toBe("xmp_too_large");
     expect(reason(doc.context.stream(packetBytes, { Subtype: "XML" }))).toBe("xmp_unreadable");
@@ -476,8 +479,8 @@ describe("set_pdf_metadata (stdio)", () => {
   it("refuses a metadata stream that would inflate past the cap, and leaves the file alone", async () => {
     const file = path.join(directory, "bomb.pdf");
     const doc = await PDFDocument.load(await buildDocument({ xmp: null }));
-    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(doc.context.flateStream(
-      new Uint8Array(XMP_MAX_BYTES * 4).fill(0x20), { Type: "Metadata", Subtype: "XML" },
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(doc.context.stream(
+      deflateSync(Buffer.alloc(2 * XMP_MAX_BYTES, 0x20)), { Type: "Metadata", Subtype: "XML", Filter: "FlateDecode" },
     )));
     const original = await doc.save();
     await fs.writeFile(file, original);
