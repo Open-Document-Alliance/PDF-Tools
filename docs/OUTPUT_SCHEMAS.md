@@ -205,9 +205,9 @@ before loading the target PDF, writing output, or changing active-document
 state.
 
 The executable source of truth is `server/output-schemas.js`. The MCP contract
-tests assert this complete matrix of 61 structured tools and seven text-only
+tests assert this complete matrix of 62 structured tools and seven text-only
 tools, including the configured-only OCR contracts. Default discovery still
-has 57 structured tools and seven text-only tools; enabling local OCR adds four
+has 58 structured tools and seven text-only tools; enabling local OCR adds four
 structured tools. Tests compile every schema through the pinned SDK validator, reject newer
 unsupported JSON Schema keywords, exercise live success and error branches, and
 require byte-identical source/share runtime files.
