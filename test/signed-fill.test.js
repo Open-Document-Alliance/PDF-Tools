@@ -1,7 +1,7 @@
 // Filling a signed form must not break the signature. fill_pdf used to
 // rewrite every file with pdf-lib, which moves every byte a signature covers,
-// so a filled copy of a signed form no longer verified (host-fidelity
-// benchmark v1, task F4). A signed document is now filled by appending an
+// so a filled copy of a signed form no longer verified. A signed document
+// is now filled by appending an
 // incremental update; what a signature forbids is refused before anything
 // changes.
 //
@@ -192,6 +192,59 @@ describe("filling signed and unsigned forms (stdio)", () => {
     });
     expect(certifiedOutcome.isError).toBe(true);
     expect(certifiedOutcome.text).toMatch(/DocMDP level 1/);
+  });
+
+  it("fills only the requested field: another field without an appearance is left alone", async () => {
+    // Exclude-lock everything but full_name, and strip company's appearance,
+    // which pdf-lib's form-wide update would otherwise regenerate.
+    const file = path.join(directory, "exclude-lock.pdf");
+    await fs.writeFile(file, await signedFixtureWith(doc => {
+      signatureField(doc).set(PDFName.of("Lock"), doc.context.obj({
+        Type: "SigFieldLock", Action: "Exclude", Fields: [PDFString.of("full_name")],
+      }));
+      const company = doc.getForm().getTextField("company");
+      for (const widget of company.acroField.getWidgets()) widget.dict.delete(PDFName.of("AP"));
+    }));
+    const output = path.join(directory, "exclude-lock-out.pdf");
+    const { structured } = await succeed("fill_pdf", {
+      pdf_path: file, output_path: output, field_data: { full_name: "Allowed" },
+    });
+    expect(structured.save_mode).toBe("incremental");
+    const before = await PDFDocument.load(await fs.readFile(file), { updateMetadata: false });
+    const after = await PDFDocument.load(await fs.readFile(output), { updateMetadata: false });
+    const companyBefore = before.getForm().getTextField("company").acroField.getWidgets()[0].dict;
+    const companyAfter = after.getForm().getTextField("company").acroField.getWidgets()[0].dict;
+    expect(companyAfter.has(PDFName.of("AP"))).toBe(companyBefore.has(PDFName.of("AP")));
+    if (hasOpenssl()) expect(await signatureVerifies(output, directory)).toBe(true);
+  });
+
+  it("enforces a FieldMDP lock declared only in the signature's references", async () => {
+    const file = path.join(directory, "reference-lock.pdf");
+    await fs.writeFile(file, await signedFixtureWith(doc => {
+      const signature = doc.context.lookup(signatureField(doc).get(PDFName.of("V")));
+      signature.set(PDFName.of("Reference"), doc.context.obj([doc.context.obj({
+        Type: "SigRef", TransformMethod: "FieldMDP",
+        TransformParams: doc.context.obj({ Type: "TransformParams", Action: "Include", Fields: [PDFString.of("company")] }),
+      })]));
+    }));
+    const outcome = await call("fill_pdf", {
+      pdf_path: file, output_path: path.join(directory, "reference-lock-out.pdf"), field_data: { company: "Changed" },
+    });
+    expect(outcome.isError).toBe(true);
+    expect(outcome.text).toMatch(/'company' is locked by an existing signature/);
+  });
+
+  it("refuses a signed XFA form rather than dropping or contradicting its XFA layer", async () => {
+    const file = path.join(directory, "signed-xfa.pdf");
+    await fs.writeFile(file, await signedFixtureWith(doc => {
+      const xfa = doc.context.register(doc.context.stream("<xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\"/>"));
+      doc.catalog.lookup(PDFName.of("AcroForm")).set(PDFName.of("XFA"), xfa);
+    }));
+    const outcome = await call("fill_pdf", {
+      pdf_path: file, output_path: path.join(directory, "signed-xfa-out.pdf"), field_data: { full_name: "Nope" },
+    });
+    expect(outcome.isError).toBe(true);
+    expect(outcome.text).toMatch(/carries an XFA form/);
   });
 
   it("fills each row of a signed template by appending", async () => {

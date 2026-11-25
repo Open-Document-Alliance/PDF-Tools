@@ -344,6 +344,7 @@ export function buildIncrementalUpdate(document, originalBytes, snapshot) {
   const output = concat([originalBytes, ...parts]);
   return {
     bytes: output,
+    changedRefs: changed.map(({ ref }) => ref.toString()),
     summary: {
       appended_objects: changed.length,
       original_bytes: originalBytes.length,

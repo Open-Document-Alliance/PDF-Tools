@@ -2174,7 +2174,7 @@ export async function savePdfDocumentIncrementally(document, originalBytes, snap
       "Incrementally updated PDF changed its pages",
     );
   }
-  return { bytes, summary: built.summary, verified };
+  return { bytes, summary: built.summary, changedRefs: built.changedRefs, verified };
 }
 
 export async function loadPdfForMutation(bytes, password, {
@@ -2421,6 +2421,15 @@ async function fillAndSave(protection, sourceBytes, fieldData) {
       "This PDF is certified with DocMDP level 1, which permits no changes at all after signing. Nothing was changed.",
     );
   }
+  if (detectXfaFormInDocument(document).present) {
+    // pdf-lib drops the XFA layer as soon as the form is opened, which on a
+    // signed document is a change to signed content nobody asked for; keeping
+    // it would leave XFA showing the old values. Neither is a fill.
+    throw new Error(
+      `This PDF is signed (${names}) and carries an XFA form. Filling it here would remove or contradict the XFA `
+      + "layer the signature covers. Nothing was changed.",
+    );
+  }
   const signatureFields = new Set([...state.signed.map(entry => entry.name), ...state.unsigned]);
   for (const fieldName of Object.keys(fieldData ?? {})) {
     if (signatureFields.has(fieldName)) {
@@ -2439,16 +2448,41 @@ async function fillAndSave(protection, sourceBytes, fieldData) {
   const snapshot = snapshotIndirectObjects(document, sourceBytes);
   const expectedPageCount = document.getPageCount();
   const expectedPageRotations = normalizedPageRotations(document);
+  const owners = fieldObjectOwners(document);
   const fill = fillFields(document, fieldData);
   if (fill.filledFields.length === 0) {
     throw new Error(`No requested field could be filled, so nothing was appended. ${fill.errors.join(" ")}`.trim());
   }
-  document.getForm().updateFieldAppearances();
-  document.setModificationDate(new Date());
+  // Regenerate appearances for the filled fields only. pdf-lib's form-wide
+  // update also rebuilds any other field whose widget lacks one, which on a
+  // signed document is a change to fields nobody asked to fill.
+  const form = document.getForm();
+  const font = form.getDefaultFont();
+  for (const fieldName of fill.filledFields) {
+    const field = form.getField(fieldName);
+    if (typeof field.defaultUpdateAppearances === "function") field.defaultUpdateAppearances(font);
+  }
+  const modifiedAt = new Date();
+  document.setModificationDate(modifiedAt);
+  refreshCatalogXmpDates(document, modifiedAt);
   const saved = await savePdfDocumentIncrementally(document, sourceBytes, snapshot, {
     expectedPageCount,
     expectedPageRotations,
   });
+  // Whatever pdf-lib touched, the update may change only the fields asked
+  // for. An object that belongs to any other field, or to a locked one, means
+  // the signed content would change beyond the fill, so nothing is written.
+  const requested = new Set(fill.filledFields);
+  for (const ref of saved.changedRefs) {
+    const owner = owners.get(ref);
+    if (owner === undefined) continue;
+    if (!requested.has(owner)) {
+      throw new Error(`Filling would also change the field '${owner}', which was not asked for. Nothing was changed.`);
+    }
+    if (isFieldLocked(state, owner)) {
+      throw new Error(`'${owner}' is locked by an existing signature (${names}). Nothing was changed.`);
+    }
+  }
   return {
     bytes: saved.bytes,
     fill,
@@ -2456,6 +2490,48 @@ async function fillAndSave(protection, sourceBytes, fieldData) {
     signaturesKept: state.signed.length,
     formInfo: formInfo(saved.verified),
   };
+}
+
+/**
+ * Map each object that belongs to a form field (the field dictionaries along
+ * its parent chain, and its widgets) to the field's qualified name. Built
+ * before a fill, so an object that changes can be traced to the field it
+ * belongs to.
+ */
+function fieldObjectOwners(document) {
+  const owners = new Map();
+  const context = document.context;
+  for (const field of document.getForm().getFields()) {
+    let name;
+    try { name = field.getName(); } catch { continue; }
+    owners.set(field.ref.toString(), name);
+    for (const widget of field.acroField.getWidgets()) {
+      const ref = context.getObjectRef(widget.dict);
+      if (ref) owners.set(ref.toString(), name);
+    }
+  }
+  return owners;
+}
+
+/** Best-effort: keep the XMP dates in step with Info's ModDate. */
+function refreshCatalogXmpDates(document, modifiedAt) {
+  let xmp;
+  try {
+    xmp = readCatalogXmp(document);
+  } catch {
+    return;
+  }
+  if (!xmp) return;
+  try {
+    const edited = editXmpDocumentFields(xmp.text, {}, { modifiedAt: modifiedAt.toISOString() });
+    if (edited === xmp.text) return;
+    document.context.assign(xmp.ref, document.context.stream(new TextEncoder().encode(edited), {
+      Type: "Metadata",
+      Subtype: "XML",
+    }));
+  } catch {
+    // Dates only: an XMP packet that cannot be edited is left as it was.
+  }
 }
 
 function fillFields(document, data, { objectErrors = false } = {}) {
