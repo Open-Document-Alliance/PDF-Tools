@@ -195,7 +195,6 @@ const OPERATIONS = new Set([
 ]);
 const METADATA_EDIT_FIELDS = Object.freeze(["title", "author", "subject", "keywords"]);
 const APPENDABLE_OPERATIONS = new Set(["add_signature_field"]);
-const APPEND_FALLBACK_REASONS = new Set(["no_startxref", "bad_startxref", "damaged_cross_reference", "too_large"]);
 const MAX_METADATA_VALUE_LENGTH = 32_768;
 const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
@@ -2917,13 +2916,17 @@ async function execute(request, protection) {
     result = edited.result;
   } else {
     // Additive edits are appended as an incremental update when the source is
-    // not encrypted: nothing is replaced, so the original bytes (and anything
-    // pdf-lib cannot rewrite faithfully, such as an XFA layer) stay as they
-    // were. Loading without pdf-lib's metadata rewrite keeps the update to
-    // the change that was asked for.
+    // neither encrypted nor signed: nothing is replaced, so the original bytes
+    // stay as they were. A signed source is never appended to here: these
+    // edits change page content, and an append would leave the old signature
+    // verifying over a revision the edit comes after, which reads as signed
+    // when it is not. With allow_resign such a source is rewritten, as it
+    // always was, and its signature visibly breaks. Loading without pdf-lib's
+    // metadata rewrite keeps the update to the change that was asked for.
     let appendable = APPENDABLE_OPERATIONS.has(request.operation);
     const document = await loadMutationSource(protection, sourceBytes[0], { updateMetadata: !appendable });
     if ((protection.sources.get(sourceBytes[0]) ?? null) !== null) appendable = false;
+    if (appendable && inspectSignatureState(document).signed.length > 0) appendable = false;
     const snapshot = appendable ? snapshotIndirectObjects(document, sourceBytes[0]) : null;
     const expectedPageCount = document.getPageCount();
     if (request.operation === "prepare_signing_packet" && expectedPageCount > MAX_SIGNING_PACKET_PAGES) {
@@ -3001,10 +3004,12 @@ async function execute(request, protection) {
           expectedPageRotations,
         })).bytes];
         saveMode = "incremental";
-      } catch (error) {
-        // A source whose cross-reference is damaged cannot take an update;
-        // rewriting it is what these tools always did, so do that instead.
-        if (!APPEND_FALLBACK_REASONS.has(error?.reason)) throw error;
+      } catch {
+        // The source is unsigned, so nothing depends on its bytes staying put.
+        // Anything that stops a faithful append (a damaged cross-reference,
+        // an unreachable broken object the append verifier will not accept)
+        // falls back to the rewrite these tools always did; save_mode says so.
+        saveMode = "rewrite";
       }
     }
     if (saveMode === "rewrite") {

@@ -124,6 +124,52 @@ describe("add_signature_field creates a real signature field (stdio)", () => {
     expect(widgets.map(widget => widget.name).sort()).toEqual(["Signature", "Signature2", "client_signature"]);
   });
 
+  it("does not reuse the full name of an existing parent field", async () => {
+    // A form whose "Signature" is a parent of "Signature.date": pdf-lib lists
+    // only the terminal field, but a new root "Signature" would share a name.
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    doc.getForm().createTextField("Signature.date").addToPage(page, { x: 72, y: 600, width: 120, height: 20 });
+    const source = path.join(directory, "parent-name.pdf");
+    await fs.writeFile(source, await doc.save());
+    const { result } = await call({ pdf_path: source, output_path: source, page: 1, x: 72, y: 72, width: 200, height: 30 });
+    expect(result.structuredContent.field_name).toBe("Signature2");
+    const taken = await call({
+      pdf_path: source, output_path: source, page: 1, x: 72, y: 200, width: 200, height: 30, field_name: "Signature",
+    });
+    expect(taken.result.isError).toBe(true);
+    expect(taken.text).toMatch(/already exists/);
+  });
+
+  it("falls back to a rewrite when a messy but readable file cannot take an append", async () => {
+    // An unreachable, broken object: pdf-lib's load prunes it, the original
+    // bytes keep it, and the append verifier refuses that difference.
+    const doc = await PDFDocument.load(await formDocument());
+    const bytes = Buffer.from(await doc.save({ useObjectStreams: false }));
+    const at = bytes.lastIndexOf("\nxref\n") + 1;
+    const orphan = Buffer.from("50 0 obj\n<< /A (unterminated >>\nendobj\n");
+    const tail = bytes.subarray(at).toString("latin1").replace(/startxref\s+\d+/, `startxref\n${at + orphan.length}`);
+    const broken = Buffer.concat([bytes.subarray(0, at), orphan, Buffer.from(tail, "latin1")]);
+    const source = path.join(directory, "messy.pdf");
+    await fs.writeFile(source, broken);
+    const { result, text } = await call({
+      pdf_path: source, output_path: path.join(directory, "messy-out.pdf"), page: 2, x: 140, y: 230, width: 250, height: 36,
+    });
+    expect(result.isError, text).toBeFalsy();
+    expect(result.structuredContent.save_mode).toBe("rewrite");
+  });
+
+  it("rewrites, never appends to, a signed source stamped with allow_resign", async () => {
+    const source = path.join(directory, "signed-stamp.pdf");
+    await fs.copyFile(path.join(REPO_ROOT, "test/fixtures/signing/signed-form.pdf"), source);
+    const { result, text } = await call({
+      pdf_path: source, output_path: path.join(directory, "signed-stamp-out.pdf"),
+      page: 1, x: 300, y: 100, width: 200, height: 30, allow_resign: true,
+    });
+    expect(result.isError, text).toBeFalsy();
+    expect(result.structuredContent.save_mode).toBe("rewrite");
+  });
+
   it("leaves the document editable: an empty signature field does not block stamping", async () => {
     const source = path.join(directory, "then-stamp.pdf");
     const signed = path.join(directory, "then-stamp-field.pdf");

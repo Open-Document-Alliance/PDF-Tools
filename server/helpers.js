@@ -12,6 +12,7 @@ import {
   PDFArray,
   PDFDict,
   PDFDocument,
+  PDFHexString,
   PDFName,
   PDFNumber,
   PDFObjectCopier,
@@ -996,6 +997,35 @@ export async function drawSignatureFieldOnPage(pdfDoc, {
 }
 
 /**
+ * The full names of every field node, parents included. pdf-lib's
+ * getFields() lists terminal fields only, so a new root field named like an
+ * existing parent ("Signature" over "Signature.date") would otherwise pass as
+ * free, and two fields would share one full name (ISO 32000 12.7.4).
+ */
+function allFieldNames(pdfDoc) {
+  const names = new Set();
+  const context = pdfDoc.context;
+  const acroForm = pdfDoc.catalog.lookupMaybe(PDFName.of("AcroForm"), PDFDict);
+  const roots = acroForm?.lookupMaybe(PDFName.of("Fields"), PDFArray);
+  if (!roots) return names;
+  const pending = roots.asArray().map(ref => ({ ref, prefix: "" }));
+  const seen = new Set();
+  while (pending.length > 0 && seen.size < 20_000) {
+    const { ref, prefix } = pending.pop();
+    const node = context.lookupMaybe(ref, PDFDict);
+    if (!node || seen.has(node)) continue;
+    seen.add(node);
+    const title = node.lookup(PDFName.of("T"));
+    const partial = title instanceof PDFString || title instanceof PDFHexString ? title : null;
+    const name = partial ? (prefix ? `${prefix}.${partial.decodeText()}` : partial.decodeText()) : prefix;
+    if (partial) names.add(name);
+    const kids = node.lookupMaybe(PDFName.of("Kids"), PDFArray);
+    if (kids) for (const kid of kids.asArray()) pending.push({ ref: kid, prefix: name });
+  }
+  return names;
+}
+
+/**
  * Create an unsigned signature form field (/FT /Sig) with its widget at the
  * same place as the drawn "Sign here" box, so a signing application finds a
  * field to sign instead of only a picture of one. The field and widget are
@@ -1008,10 +1038,7 @@ export function addSignatureFormField(pdfDoc, { page, x, y, width, height, field
   const boxGeometry = getPageBoxGeometry(pdfPage);
   const pdfY = boxGeometry.height - y - height;
   const { x: userX, y: userY } = toUserSpace(boxGeometry, x, pdfY);
-  const form = pdfDoc.getForm();
-  const existing = new Set(form.getFields().map(field => {
-    try { return field.getName(); } catch { return ""; }
-  }));
+  const existing = allFieldNames(pdfDoc);
   let name = fieldName;
   if (name !== null) {
     if (existing.has(name)) throw new Error(`A form field named '${name}' already exists. Choose another field_name.`);
