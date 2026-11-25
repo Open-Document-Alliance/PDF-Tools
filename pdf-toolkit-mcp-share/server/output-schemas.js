@@ -1940,10 +1940,16 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     rotated_pages: integer,
     degrees: { type: "number", enum: [90, 180, 270] },
   }),
-  reorder_pdf_pages: activeDocument({ page_order: integerArray, outline: outlineReport, page_labels: pageLabelStatus }),
+  reorder_pdf_pages: activeDocument({
+    page_order: integerArray,
+    outline: outlineReport,
+    page_labels: pageLabelStatus,
+    page_labels_changed: integer,
+  }),
   apply_page_plan: activeDocument({
     outline: outlineReport,
     page_labels: pageLabelStatus,
+    page_labels_changed: integer,
     deleted_pages: integer,
     rotated_pages: integer,
     page_order: integerArray,

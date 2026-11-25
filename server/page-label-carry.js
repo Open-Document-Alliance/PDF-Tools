@@ -3,13 +3,18 @@
 // so a report with roman front matter lost its numbering on any reorder,
 // delete, split or merge.
 //
-// Labels follow their pages. A page labelled "1" in the source is labelled
-// "1" in the output wherever it lands, because a label exists to match the
-// number printed on the page: after deleting the cover of an "i, ii, 1, 2"
-// document the output reads "ii, 1, 2", not "i, ii, 1". The output's ranges
-// are rebuilt from the label each output page carries, merging runs that
-// continue one another. Pages of a source without labels keep the plain
-// number a viewer showed for them in that source.
+// Two placements:
+// - positional (the default for reorder_pdf_pages and apply_page_plan): page
+//   labels are a numbering scheme, so the output keeps the source's scheme by
+//   position and its printed numbering stays sequential. After a reorder or a
+//   delete, a page can show a different label than it had; the caller counts
+//   those and the reply says so.
+// - follow (split_pdf, merge_pdfs, and page_labels "follow_pages"): each page
+//   keeps the label it had. A split part is an excerpt, so a part starting on
+//   source page 4, labelled "2", starts at "2"; a merged source keeps its own
+//   numbering, and a source without labels keeps the plain numbers it showed.
+// The output's ranges are rebuilt from the label each output page carries,
+// merging runs that continue one another.
 //
 // The number tree is read with bounds and cycle refusal, the output tree is
 // built from fresh literal values only, and a label tree that cannot be read
@@ -133,6 +138,63 @@ export function writePageLabels(targetDoc, pageLabels) {
   }
   targetDoc.catalog.set(PAGE_LABELS, context.register(context.obj({ Nums: context.obj(nums) })));
   return true;
+}
+
+function toRoman(value) {
+  const table = [[1000, "m"], [900, "cm"], [500, "d"], [400, "cd"], [100, "c"], [90, "xc"],
+    [50, "l"], [40, "xl"], [10, "x"], [9, "ix"], [5, "v"], [4, "iv"], [1, "i"]];
+  let rest = value;
+  let out = "";
+  for (const [amount, text] of table) {
+    while (rest >= amount && out.length < 64) {
+      out += text;
+      rest -= amount;
+    }
+  }
+  return out;
+}
+
+function toLetters(value) {
+  const letter = String.fromCharCode(97 + ((value - 1) % 26));
+  return letter.repeat(Math.min(64, Math.floor((value - 1) / 26) + 1));
+}
+
+/** The label text a viewer shows for a { style, prefix, value } label. */
+export function formatPageLabel(label) {
+  const prefix = label.prefix ? label.prefix.decodeText() : "";
+  const numbers = {
+    D: () => String(label.value),
+    r: () => toRoman(label.value),
+    R: () => toRoman(label.value).toUpperCase(),
+    a: () => toLetters(label.value),
+    A: () => toLetters(label.value).toUpperCase(),
+  };
+  return prefix + (label.style ? numbers[label.style]() : "");
+}
+
+/**
+ * Labels for a reorder or page plan. placement "positional" applies the
+ * source's scheme to output positions; "follow" keeps each page's label.
+ * Returns { status, changed, example } where changed counts output pages
+ * whose label differs from the one that page had in the source, and example
+ * is the first such page as { source_page, before, after }.
+ */
+export function carryReorderedPageLabels(targetDoc, labels, sourcePages, placement) {
+  if (labels.status === "unreadable") return { status: "not_carried", changed: 0, example: null };
+  if (labels.status !== "read") return { status: "absent", changed: 0, example: null };
+  const own = sourcePages.map(page => pageLabelOf(labels, page));
+  const chosen = placement === "follow" ? own : sourcePages.map((_, index) => pageLabelOf(labels, index));
+  let changed = 0;
+  let example = null;
+  for (const [index, label] of chosen.entries()) {
+    const before = formatPageLabel(own[index]);
+    const after = formatPageLabel(label);
+    if (before === after) continue;
+    changed += 1;
+    example = example ?? { source_page: sourcePages[index] + 1, before, after };
+  }
+  const status = writePageLabels(targetDoc, chosen) ? "carried" : "not_carried";
+  return { status, changed, example };
 }
 
 /**

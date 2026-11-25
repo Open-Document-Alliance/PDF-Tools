@@ -256,7 +256,10 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // signatures_kept, because a signed form is now filled by appending an
 // incremental update; their descriptions and bulk_fill_from_csv's say so.
 // Inputs and annotations unchanged. Replaces c97b8652634e316f85745d14c98e9e6a8cdbddc9ef6509ed9ce111b7dade66d9.
-const TOOL_CONTRACT_SHA256 = "c69e7964bf355c3aa40b2e9b5ac5153560bf99944768cdea8db62e564e871f4e";
+// 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
+// page_labels ("positional" by default, or "follow_pages") and report
+// page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+const TOOL_CONTRACT_SHA256 = "2e825d078f7d9a8e9bf63dbd2f3f3e4ef9ee5f2461fed7d3c757871de5b7833d";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
