@@ -64,7 +64,10 @@ const N = Object.freeze({
   UseOutlines: PDFName.of("UseOutlines"),
 });
 
-const VIEW_FITS = new Set(["XYZ", "Fit", "FitH", "FitV", "FitR", "FitB", "FitBH", "FitBV"]);
+// Each fit and the number of operands ISO 32000 gives it (12.3.2.2).
+const VIEW_FITS = new Map([
+  ["XYZ", 3], ["Fit", 0], ["FitH", 1], ["FitV", 1], ["FitR", 4], ["FitB", 0], ["FitBH", 1], ["FitBV", 1],
+]);
 
 class OutlineUnreadable extends Error {
   constructor(reason) {
@@ -100,10 +103,18 @@ function reportedTitle(title) {
   return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
 }
 
+/**
+ * A destination name as the spec compares it: by its bytes. Two strings that
+ * decode to the same text (a UTF-16 "a" and a PDFDocEncoding "a") are
+ * different names, and treating them as one could send a bookmark to the
+ * other's page.
+ */
 function nameKey(value) {
-  if (value instanceof PDFName) return { kind: "name", key: value.decodeText() };
+  if (value instanceof PDFName) {
+    return { kind: "name", name: value, key: Buffer.from(value.decodeText(), "latin1").toString("hex") };
+  }
   if (value instanceof PDFString || value instanceof PDFHexString) {
-    return { kind: "string", key: textOf(value) };
+    return { kind: "string", key: Buffer.from(value.asBytes()).toString("hex") };
   }
   return null;
 }
@@ -156,7 +167,7 @@ function namedDestinationResolver(sourceDoc) {
 
   return key => {
     if (key.kind === "name" && legacy) {
-      const hit = legacy.get(PDFName.of(key.key));
+      const hit = legacy.get(key.name);
       if (hit !== undefined) return hit;
     }
     return loadTree().get(key.key);
@@ -189,11 +200,12 @@ function destinationView(context, array) {
   const fitName = fit instanceof PDFName ? fit.decodeText() : null;
   if (!fitName || !VIEW_FITS.has(fitName)) return { fit: "Fit", operands: [] };
   const operands = [];
-  for (let index = 2; index < array.size() && index < 6; index += 1) {
-    const operand = lookup(context, array.get(index));
-    if (operand instanceof PDFNumber) operands.push(operand.asNumber());
-    else operands.push(null);
+  for (let index = 0; index < VIEW_FITS.get(fitName); index += 1) {
+    const operand = 2 + index < array.size() ? lookup(context, array.get(2 + index)) : undefined;
+    operands.push(operand instanceof PDFNumber && Number.isFinite(operand.asNumber()) ? operand.asNumber() : null);
   }
+  // FitR needs all four edges; without them it is not a rectangle.
+  if (fitName === "FitR" && operands.some(value => value === null)) return { fit: "Fit", operands: [] };
   return { fit: fitName, operands };
 }
 
@@ -201,9 +213,12 @@ function readTarget(sourceDoc, entry, pageIndexByRef, resolveName) {
   const context = sourceDoc.context;
   let destValue = entry.get(N.Dest);
   let action = null;
+  let chainDropped = false;
   if (destValue === undefined) {
     const actionDict = lookupDict(context, entry.get(N.A));
     if (actionDict) {
+      // A chained /Next action is never carried; say so rather than drop it.
+      const chained = actionDict.get(N.Next) !== undefined;
       const kind = lookup(context, actionDict.get(N.S));
       if (kind === N.GoTo) {
         destValue = actionDict.get(N.D);
@@ -220,11 +235,12 @@ function readTarget(sourceDoc, entry, pageIndexByRef, resolveName) {
       } else {
         action = { kind: "unsupported" };
       }
+      if (chained) chainDropped = true;
     }
   }
-  if (destValue === undefined) return { page: null, view: null, action };
+  if (destValue === undefined) return { page: null, view: null, action, chainDropped };
   const array = explicitDestination(context, destValue, resolveName);
-  if (!array || array.size() < 1) return { page: null, view: null, action: null, unresolved: true };
+  if (!array || array.size() < 1) return { page: null, view: null, action: null, unresolved: true, chainDropped };
   const pageValue = array.get(0);
   let page = null;
   if (pageValue instanceof PDFRef) {
@@ -238,8 +254,8 @@ function readTarget(sourceDoc, entry, pageIndexByRef, resolveName) {
       page = number.asNumber();
     }
   }
-  if (page === null) return { page: null, view: null, action: null, unresolved: true };
-  return { page, view: destinationView(context, array), action: null };
+  if (page === null) return { page: null, view: null, action: null, unresolved: true, chainDropped };
+  return { page, view: destinationView(context, array), action: null, chainDropped };
 }
 
 /**
@@ -259,6 +275,10 @@ export function readSourceOutline(sourceDoc) {
   const resolveName = namedDestinationResolver(sourceDoc);
   const seen = new Set();
   let total = 0;
+  // The page of the last entry with a page target, in reading order. An
+  // entry without one (a link, a broken destination) is anchored to it, so a
+  // split can place it next to the bookmark it followed.
+  let lastPage = 0;
 
   function readSiblings(parent, depth) {
     if (depth > OUTLINE_CARRY_LIMITS.maxDepth) throw new OutlineUnreadable("outline_too_deep");
@@ -266,6 +286,10 @@ export function readSourceOutline(sourceDoc) {
     let raw = parent.get(N.First);
     while (raw !== undefined) {
       const key = raw instanceof PDFRef ? raw.toString() : null;
+      // A reference to an object that does not exist is null (ISO 32000
+      // 7.3.10), which ends the chain rather than spoiling the outline.
+      if (raw instanceof PDFRef && context.lookup(raw) === undefined) break;
+      if (lookup(context, raw) === PDFNull) break;
       const entry = lookupDict(context, raw);
       if (!entry) throw new OutlineUnreadable("outline_entry_not_a_dictionary");
       if (key) {
@@ -286,6 +310,8 @@ export function readSourceOutline(sourceDoc) {
       const color = lookup(context, entry.get(N.C));
       const flags = lookup(context, entry.get(N.F));
       const target = readTarget(sourceDoc, entry, pageIndexByRef, resolveName);
+      if (target.page !== null) lastPage = target.page;
+      const anchorPage = target.page ?? lastPage;
       out.push({
         title,
         titleText: textOf(title),
@@ -299,6 +325,8 @@ export function readSourceOutline(sourceDoc) {
         view: target.view,
         action: target.action,
         unresolved: target.unresolved === true,
+        chainDropped: target.chainDropped === true,
+        anchorPage,
         hadTarget: target.page !== null || target.action !== null || target.unresolved === true,
         children: entry.get(N.First) !== undefined ? readSiblings(entry, depth + 1) : [],
       });
@@ -325,12 +353,20 @@ export function readSourceOutline(sourceDoc) {
  * take its place. An entry with no page target (a URI, a heading) stays,
  * unless it was only a heading and every child under it was dropped.
  */
-function filterEntries(entries, targetPageFor, report, sourceOffset) {
+function filterEntries(entries, targetPageFor, report, sourceOffset, anchorKept) {
   const kept = [];
   for (const entry of entries) {
-    const children = filterEntries(entry.children, targetPageFor, report, sourceOffset);
+    const children = filterEntries(entry.children, targetPageFor, report, sourceOffset, anchorKept);
     let targetRef = null;
     if (entry.page !== null) targetRef = targetPageFor(entry.page);
+    // An entry with no page and no children belongs where the bookmark it
+    // followed went. Elsewhere (another split part) it is not a loss.
+    if (entry.page === null && entry.children.length === 0 && anchorKept && !anchorKept(entry.anchorPage)) {
+      if (anchorKept.inNoPart?.(entry.anchorPage)) {
+        report.dropped.push({ title: reportedTitle(entry.titleText), source_page: null, reason: "page_not_in_output" });
+      }
+      continue;
+    }
     const pageRemoved = entry.page !== null && targetRef === null;
     const emptiedHeading = !entry.hadTarget && entry.children.length > 0 && children.length === 0;
     if (pageRemoved || emptiedHeading) {
@@ -343,7 +379,7 @@ function filterEntries(entries, targetPageFor, report, sourceOffset) {
       continue;
     }
     if (entry.unresolved) report.unresolved += 1;
-    if (entry.action?.kind === "unsupported") report.actions_not_carried += 1;
+    if (entry.action?.kind === "unsupported" || entry.chainDropped) report.actions_not_carried += 1;
     kept.push({ ...entry, targetRef, children });
   }
   return kept;
@@ -392,7 +428,9 @@ function writeSiblings(context, entries, parentRef) {
       dict.set(N.First, childRefs[0]);
       dict.set(N.Last, childRefs[childRefs.length - 1]);
       const descendants = visibleCount(entry.children);
-      dict.set(N.Count, PDFNumber.of(entry.open ? descendants : -entry.children.length));
+      // Open: how many descendants show. Closed: minus how many would show
+      // if it were opened, which counts open grandchildren too (12.3.3).
+      dict.set(N.Count, PDFNumber.of(entry.open ? descendants : -descendants));
     }
   }
   return refs;
@@ -430,7 +468,13 @@ export function writeCarriedOutline(targetDoc, parts, { pageModeFrom = null, dry
     if (part.outline.status !== "read") continue;
     anyRead = true;
     report.source_entries += part.outline.total;
-    kept.push(...filterEntries(part.outline.entries, part.targetPageFor, report, part.sourcePageOffset ?? 0));
+    kept.push(...filterEntries(
+      part.outline.entries,
+      part.targetPageFor,
+      report,
+      part.sourcePageOffset ?? 0,
+      part.anchorKept ?? null,
+    ));
   }
   report.carried_entries = countEntries(kept);
   if (kept.length > 0 && !dryRun) {

@@ -246,9 +246,9 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-11-25: rebuilt outputs report what they did with the source bookmarks.
 // merge_pdfs, reorder_pdf_pages and apply_page_plan gain an `outline` report in
 // their output schemas, and split_pdf gains one per file plus one for the
-// whole split. Input schemas, annotations, descriptions and the count of 64
-// are unchanged. Replaces 2239a74dcdb71387f855c49bb26bc01e52ca9a14e773be13a32d19d3af9ec2d4.
-const TOOL_CONTRACT_SHA256 = "632af94393d46e49bafec0a47e260ae8f30e006983825d6e02f016d7f6ba6a65";
+// whole split, and all four gain a `page_labels` status. Input schemas,
+// annotations, descriptions and the count of 64 are unchanged. Replaces 2239a74dcdb71387f855c49bb26bc01e52ca9a14e773be13a32d19d3af9ec2d4.
+const TOOL_CONTRACT_SHA256 = "b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

@@ -146,6 +146,7 @@ const outlineReport = object({
   actions_not_carried: integer,
   unreadable_reason: nullable(string),
 });
+const pageLabelStatus = enumString(["absent", "carried", "not_carried"]);
 const activeDocument = (extra = {}) => object({
   ...activeDocumentProperties,
   ...extra,
@@ -1900,6 +1901,7 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     total_pages: integer,
     metadata_fields_omitted: stringArray,
     outline: outlineReport,
+    page_labels: pageLabelStatus,
   }),
   split_pdf: object({
     input_path: string,
@@ -1914,14 +1916,16 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
       outline: outlineReport,
     })),
     outline: outlineReport,
+    page_labels: pageLabelStatus,
   }),
   rotate_pdf_pages: activeDocument({
     rotated_pages: integer,
     degrees: { type: "number", enum: [90, 180, 270] },
   }),
-  reorder_pdf_pages: activeDocument({ page_order: integerArray, outline: outlineReport }),
+  reorder_pdf_pages: activeDocument({ page_order: integerArray, outline: outlineReport, page_labels: pageLabelStatus }),
   apply_page_plan: activeDocument({
     outline: outlineReport,
+    page_labels: pageLabelStatus,
     deleted_pages: integer,
     rotated_pages: integer,
     page_order: integerArray,

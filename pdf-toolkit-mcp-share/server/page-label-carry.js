@@ -1,19 +1,19 @@
-// Carry a source document's page labels (the "i, ii, 1, 2" numbering a viewer
-// shows) into a rebuilt output. Before this, every rebuilt output fell back to
-// plain 1..n, so a report with roman front matter lost its numbering on any
-// reorder, delete or split.
+// Carry page labels (the "i, ii, 1, 2" numbering a viewer shows) into a
+// rebuilt output. Before this, every rebuilt output fell back to plain 1..n,
+// so a report with roman front matter lost its numbering on any reorder,
+// delete, split or merge.
 //
-// Two placements, because the operations mean different things:
-// - "scheme" (reorder_pdf_pages, apply_page_plan): the output is the same
-//   document with its pages rearranged, so it keeps the document's numbering
-//   scheme position by position, clipped to the new page count. That is what
-//   a viewer does when pages are moved within one file.
-// - "follow" (split_pdf): each part is an excerpt, so its pages keep the
-//   labels they had in the source. A part that starts on source page 4,
-//   labelled "2", starts at "2".
+// Labels follow their pages. A page labelled "1" in the source is labelled
+// "1" in the output wherever it lands, because a label exists to match the
+// number printed on the page: after deleting the cover of an "i, ii, 1, 2"
+// document the output reads "ii, 1, 2", not "i, ii, 1". The output's ranges
+// are rebuilt from the label each output page carries, merging runs that
+// continue one another. Pages of a source without labels keep the plain
+// number a viewer showed for them in that source.
 //
-// The number tree is read with bounds and cycle refusal, and the output tree
-// is built from fresh literal values only.
+// The number tree is read with bounds and cycle refusal, the output tree is
+// built from fresh literal values only, and a label tree that cannot be read
+// is reported rather than silently replaced with plain numbers.
 
 import {
   PDFArray,
@@ -38,15 +38,15 @@ function lookup(context, value) {
 
 /**
  * Returns { status, ranges } where ranges is a sorted list of
- * { start, style, prefix, first } with start a zero-based page index, style
- * one of D R r A a or null, prefix a PDF string or null, and first the
- * numeric value of the range's first page. status is "absent", "read", or
- * "unreadable".
+ * { start, style, prefix, first }: start a zero-based page index, style one
+ * of D R r A a or null, prefix a PDF string or null, first the numeric value
+ * of the range's first page. status is "absent", "read", or "unreadable".
  */
 export function readSourcePageLabels(sourceDoc) {
   const context = sourceDoc.context;
+  if (sourceDoc.catalog.get(PAGE_LABELS) === undefined) return { status: "absent", ranges: [] };
   const root = lookup(context, sourceDoc.catalog.get(PAGE_LABELS));
-  if (!(root instanceof PDFDict)) return { status: "absent", ranges: [] };
+  if (!(root instanceof PDFDict)) return { status: "unreadable", ranges: [] };
   const ranges = new Map();
   const pending = [root];
   const seen = new Set();
@@ -89,41 +89,61 @@ export function readSourcePageLabels(sourceDoc) {
   return { status: sorted.length > 0 ? "read" : "absent", ranges: sorted };
 }
 
-/** Ranges for an output whose page j is source page sourceStart + j. */
-function followRanges(ranges, sourceStart, pageCount) {
-  const out = [];
-  const opening = [...ranges].reverse().find(range => range.start <= sourceStart);
-  if (opening) {
-    out.push({ ...opening, start: 0, first: opening.first + (sourceStart - opening.start) });
+/**
+ * The label a source page carries: { style, prefix, value }. A page no range
+ * covers (or any page of a source without labels) shows its plain number.
+ */
+export function pageLabelOf(labels, sourcePage) {
+  let covering = null;
+  for (const range of labels.ranges ?? []) {
+    if (range.start <= sourcePage) covering = range;
+    else break;
   }
-  for (const range of ranges) {
-    if (range.start > sourceStart && range.start < sourceStart + pageCount) {
-      out.push({ ...range, start: range.start - sourceStart });
-    }
-  }
-  return out;
+  if (!covering) return { style: "D", prefix: null, value: sourcePage + 1 };
+  return { style: covering.style, prefix: covering.prefix, value: covering.first + (sourcePage - covering.start) };
+}
+
+function samePrefix(left, right) {
+  if (left === null || right === null) return left === right;
+  return Buffer.from(left.asBytes()).equals(Buffer.from(right.asBytes()));
 }
 
 /**
- * Write labels into the target. placement is { kind: "scheme" } or
- * { kind: "follow", sourceStart }. Returns true when labels were written.
+ * Write labels for an output whose page j carries pageLabels[j], as returned
+ * by pageLabelOf. Consecutive pages that continue one range (same style and
+ * prefix, value one higher) share it. Returns true when labels were written.
  */
-export function writeCarriedPageLabels(targetDoc, labels, placement) {
-  if (labels.status !== "read") return false;
-  const pageCount = targetDoc.getPageCount();
-  const ranges = placement.kind === "follow"
-    ? followRanges(labels.ranges, placement.sourceStart, pageCount)
-    : labels.ranges.filter(range => range.start < pageCount);
-  if (ranges.length === 0) return false;
+export function writePageLabels(targetDoc, pageLabels) {
+  if (pageLabels.length === 0 || pageLabels.length !== targetDoc.getPageCount()) return false;
   const context = targetDoc.context;
   const nums = [];
-  for (const range of ranges) {
+  let previous = null;
+  for (const [index, label] of pageLabels.entries()) {
+    const continues = previous
+      && previous.style === label.style
+      && samePrefix(previous.prefix, label.prefix)
+      && label.value === previous.value + 1;
+    previous = label;
+    if (continues) continue;
     const dict = context.obj({});
-    if (range.style) dict.set(PDFName.of("S"), PDFName.of(range.style));
-    if (range.prefix) dict.set(PDFName.of("P"), range.prefix);
-    if (range.first !== 1) dict.set(PDFName.of("St"), PDFNumber.of(range.first));
-    nums.push(PDFNumber.of(range.start), dict);
+    if (label.style) dict.set(PDFName.of("S"), PDFName.of(label.style));
+    if (label.prefix) dict.set(PDFName.of("P"), label.prefix);
+    if (label.value !== 1) dict.set(PDFName.of("St"), PDFNumber.of(label.value));
+    nums.push(PDFNumber.of(index), dict);
   }
   targetDoc.catalog.set(PAGE_LABELS, context.register(context.obj({ Nums: context.obj(nums) })));
   return true;
+}
+
+/**
+ * Carry labels for an output built from parts [{ labels, sourcePages }], in
+ * output order. Returns "absent" when no part's source had labels,
+ * "not_carried" when one could not be read (the output then gets none, and
+ * the caller says so), or "carried".
+ */
+export function carryPageLabels(targetDoc, parts) {
+  if (parts.some(part => part.labels.status === "unreadable")) return "not_carried";
+  if (parts.every(part => part.labels.status !== "read")) return "absent";
+  const pageLabels = parts.flatMap(part => part.sourcePages.map(page => pageLabelOf(part.labels, page)));
+  return writePageLabels(targetDoc, pageLabels) ? "carried" : "not_carried";
 }

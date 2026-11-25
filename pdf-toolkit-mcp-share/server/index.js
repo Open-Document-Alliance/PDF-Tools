@@ -612,6 +612,13 @@ function outlineNotice(report) {
   return line ? `\n${line}` : "";
 }
 
+// Page labels are only worth a line when they could not be carried.
+function pageLabelNotice(status) {
+  return status === "not_carried"
+    ? "\nPage labels: NOT carried. The source's page-label tree could not be read safely, so the output uses plain page numbers."
+    : "";
+}
+
 // Helper: validate profile name to prevent path traversal
 function validateProfileName(name) {
   if (!name || typeof name !== "string") throw new Error("Profile name is required.");
@@ -6826,10 +6833,11 @@ async function handleToolCall(request) {
           total_pages: workerResult.total_pages,
           metadata_fields_omitted: workerResult.omitted_fields,
           outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
         });
         const metadataNotice = (workerResult.omitted_fields.length > 0
           ? `\nOmitted unverified metadata: ${workerResult.omitted_fields.join(", ")}`
-          : "") + outlineNotice(workerResult.outline);
+          : "") + outlineNotice(workerResult.outline) + pageLabelNotice(workerResult.page_labels);
 
         return {
           content: [{
@@ -6896,6 +6904,7 @@ async function handleToolCall(request) {
               outline: result.outlines[index],
             })),
             outline: result.outline,
+            page_labels: result.page_labels,
           };
         });
         const results = split.files.map(file => {
@@ -6904,11 +6913,11 @@ async function handleToolCall(request) {
         });
         // Per part, a bookmark for another part's page is expected to be
         // absent. Only a bookmark no part keeps is a loss worth naming.
-        const splitOutlineNotice = split.outline.status === "absent"
+        const splitOutlineNotice = (split.outline.status === "absent"
           ? ""
-          : split.outline.dropped_entries > 0 || split.outline.status === "not_carried"
-            ? outlineNotice(split.outline)
-            : `\nBookmarks: each part keeps the bookmarks for its own pages (${split.outline.source_entries} in the source, none lost).`;
+          : split.outline.status === "carried"
+            ? `\nBookmarks: each part keeps the bookmarks for its own pages (${split.outline.source_entries} in the source, none lost).`
+            : outlineNotice(split.outline)) + pageLabelNotice(split.page_labels);
 
         return {
           content: [{
@@ -6921,6 +6930,7 @@ async function handleToolCall(request) {
             file_count: split.files.length,
             files: split.files,
             outline: split.outline,
+            page_labels: split.page_labels,
           },
         };
       }
@@ -7029,12 +7039,13 @@ async function handleToolCall(request) {
           ...workerResult.form_info,
           page_order,
           outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
         });
 
         return {
           content: [{
             type: "text",
-            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB${outlineNotice(workerResult.outline)}`
+            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB${outlineNotice(workerResult.outline)}${pageLabelNotice(workerResult.page_labels)}`
           }],
           structuredContent: payload,
           _meta: {
@@ -7280,10 +7291,11 @@ async function handleToolCall(request) {
         let summary = `Saved ${page_order.length}-page PDF to: ${output_path}\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB`;
         if (deletedCount > 0) summary += `\n${deletedCount} page(s) removed`;
         if (rotatedCount > 0) summary += `\n${rotatedCount} page(s) rotated`;
-        summary += outlineNotice(workerResult.outline);
+        summary += outlineNotice(workerResult.outline) + pageLabelNotice(workerResult.page_labels);
         const payload = await buildNewOutputDocumentPayload(committedOutputPath, "apply_page_plan", 1, {
           ...workerResult.form_info,
           outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
           deleted_pages: deletedCount,
           rotated_pages: rotatedCount,
           page_order,

@@ -1,7 +1,7 @@
 // Rebuilt outputs (merge_pdfs, split_pdf, reorder_pdf_pages, apply_page_plan)
 // must carry the source outline and page labels. Before this they all
 // built a fresh document and copied only pages, so every bookmark was lost
-// without a word (host-fidelity benchmark v1, tasks P1 and P3).
+// without a word.
 //
 // Fixtures are synthetic and built here. The outline is read back with
 // PDF.js, an independent parser, so the tests do not grade pdf-lib's writing
@@ -18,6 +18,7 @@ import {
   PDFHexString,
   PDFName,
   PDFNumber,
+  PDFRef,
   PDFString,
   StandardFonts,
 } from "pdf-lib";
@@ -97,7 +98,7 @@ async function buildDocument({ pages, outline, labels = null, xmp = false, title
         dict.set(PDFName.of("First"), child.refs[0]);
         dict.set(PDFName.of("Last"), child.refs[child.refs.length - 1]);
         const open = item.open !== false;
-        dict.set(PDFName.of("Count"), PDFNumber.of(open ? child.visible : -item.children.length));
+        dict.set(PDFName.of("Count"), PDFNumber.of(open ? child.visible : -child.visible));
         if (open) visible += child.visible;
       }
       context.assign(refs[index], dict);
@@ -254,6 +255,58 @@ describe("outline carry (unit)", () => {
     expect(describeOutlineReport(report)).toMatch(/other than go-to/);
   });
 
+  it("compares destination names by their bytes, not their decoded text", async () => {
+    // <FEFF0061> and (a) both decode to "a" but are different names.
+    const doc = await PDFDocument.create();
+    const pages = [doc.addPage(), doc.addPage(), doc.addPage()];
+    const context = doc.context;
+    doc.catalog.set(PDFName.of("Names"), context.obj({
+      Dests: context.register(context.obj({
+        Names: context.obj([
+          PDFString.of("a"), context.obj([pages[0].ref, PDFName.of("Fit")]),
+          PDFHexString.of("FEFF0061"), context.obj([pages[2].ref, PDFName.of("Fit")]),
+        ]),
+      })),
+    }));
+    const item = context.nextRef();
+    const root = context.nextRef();
+    context.assign(item, context.obj({ Title: PDFString.of("A"), Parent: root, Dest: PDFString.of("a") }));
+    context.assign(root, context.obj({ Type: "Outlines", First: item, Last: item, Count: 1 }));
+    doc.catalog.set(PDFName.of("Outlines"), root);
+    const outline = readSourceOutline(await PDFDocument.load(await doc.save()));
+    expect(outline.entries[0].page).toBe(0);
+  });
+
+  it("writes a closed entry's /Count from every descendant it would show", async () => {
+    const source = await PDFDocument.load(await buildDocument({
+      pages: 1,
+      outline: [{ title: "A", dest: 0, open: false, children: [{ title: "B", dest: 0, children: [{ title: "C", dest: 0 }] }] }],
+    }));
+    const target = await PDFDocument.create();
+    const copied = await target.copyPages(source, [0]);
+    target.addPage(copied[0]);
+    writeCarriedOutline(target, [{ outline: readSourceOutline(source), targetPageFor: () => copied[0].ref }]);
+    const root = target.context.lookup(target.catalog.get(PDFName.of("Outlines")));
+    const a = target.context.lookup(root.get(PDFName.of("First")));
+    expect(a.get(PDFName.of("Count")).asNumber()).toBe(-2);
+    expect(root.get(PDFName.of("Count")).asNumber()).toBe(1);
+  });
+
+  it("ends a sibling chain at a reference to a missing object instead of dropping the outline", async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage();
+    const context = doc.context;
+    const item = context.nextRef();
+    const root = context.nextRef();
+    context.assign(item, context.obj({
+      Title: PDFString.of("Only"), Parent: root, Next: PDFRef.of(9999, 0), Dest: [page.ref, PDFName.of("Fit")],
+    }));
+    context.assign(root, context.obj({ Type: "Outlines", First: item, Last: item, Count: 1 }));
+    doc.catalog.set(PDFName.of("Outlines"), root);
+    const outline = readSourceOutline(await PDFDocument.load(await doc.save()));
+    expect(outline).toMatchObject({ status: "read", total: 1 });
+  });
+
   it("reads page labels, including ranges and starting values", async () => {
     const labels = readSourcePageLabels(await PDFDocument.load(await buildDocument({
       pages: 4,
@@ -335,9 +388,11 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
       [1, "Raw data", "SENTINEL-5"],
       [0, "Project site", "url:https://example.invalid/report"],
     ]);
-    // The document keeps its numbering scheme. Source XMP is deliberately not
-    // copied into a rebuilt output (docs/METADATA_PROVENANCE.md).
-    expect(read.labels).toEqual(["i", "ii", "1", "2", "3"]);
+    // Labels follow their pages: the page printed "3" is still "3" up front.
+    // Source XMP is deliberately not copied into a rebuilt output
+    // (docs/METADATA_PROVENANCE.md).
+    expect(read.labels).toEqual(["3", "i", "ii", "1", "2"]);
+    expect(structured.page_labels).toBe("carried");
     const reloaded = await PDFDocument.load(bytes);
     expect(reloaded.catalog.get(PDFName.of("Metadata"))).toBeUndefined();
     expect(reloaded.catalog.get(PDFName.of("PageMode"))).toBe(PDFName.of("UseOutlines"));
@@ -371,6 +426,14 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
       [1, "Raw data", "SENTINEL-5"],
       [0, "Project site", "url:https://example.invalid/report"],
     ]);
+    // Deleting the third page leaves every other page with its own label.
+    expect(read.labels).toEqual(["i", "ii", "2", "3"]);
+  });
+
+  it("apply_page_plan: deleting the cover keeps each page's printed label", async () => {
+    const output = path.join(directory, "no-cover.pdf");
+    await call("apply_page_plan", { input_path: report, output_path: output, plan: { page_order: [2, 3, 4, 5] } });
+    expect((await outlineWithPdfjs(await fs.readFile(output))).labels).toEqual(["ii", "1", "2", "3"]);
   });
 
   it("split_pdf: each part keeps its own pages' bookmarks and labels; a page in no part is named", async () => {
@@ -379,15 +442,16 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
       input_path: report, output_directory: outputDirectory, page_ranges: "1-2,4-5",
     });
     expect(structured.outline).toMatchObject({ status: "partial", dropped_entries: 2 });
-    expect(structured.files.map(file => file.outline.carried_entries)).toEqual([3, 4]);
+    expect(structured.files.map(file => file.outline.carried_entries)).toEqual([2, 4]);
     expect(text).toContain("\"Findings\" (page 3), \"Body\" (page 3)");
     const first = await outlineWithPdfjs(await fs.readFile(structured.files[0].output_path));
     expect(first.outline).toEqual([
       [0, "Cover", "SENTINEL-1"],
       [0, "Contents", "SENTINEL-2"],
-      [0, "Project site", "url:https://example.invalid/report"],
     ]);
     expect(first.labels).toEqual(["i", "ii"]);
+    // The link bookmark follows the bookmark before it (Appendix, page 5),
+    // so it lands in the part that holds page 5 and nowhere else.
     const second = await outlineWithPdfjs(await fs.readFile(structured.files[1].output_path));
     expect(second.outline).toEqual([
       [0, "Methods", "SENTINEL-4"],
@@ -397,6 +461,20 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
     ]);
     // Source pages 4 and 5 were labelled 2 and 3; the excerpt keeps that.
     expect(second.labels).toEqual(["2", "3"]);
+  });
+
+  it("split_pdf: never says none lost when a bookmark lost its target or action", async () => {
+    const broken = path.join(directory, "broken-target.pdf");
+    await fs.writeFile(broken, await buildDocument({
+      pages: 2,
+      outline: [{ title: "One", dest: 0 }, { title: "Nowhere", dest: { missing: true } }],
+    }));
+    const { text, structured } = await call("split_pdf", {
+      input_path: broken, output_directory: path.join(directory, "split-broken"), page_ranges: "1-2",
+    });
+    expect(structured.outline).toMatchObject({ status: "partial", unresolved_targets: 1 });
+    expect(text).not.toContain("none lost");
+    expect(text).toContain("destination the source does not resolve");
   });
 
   it("split_pdf: when every page lands in some part, it says nothing was lost", async () => {
@@ -421,6 +499,9 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
     ]);
     expect(read.outline.find(entry => entry[1] === "Methods")).toEqual([1, "Methods", "SENTINEL-4"]);
     expect(read.outline).toHaveLength(11);
+    // The form had no labels, so its pages keep the plain numbers it showed.
+    expect(read.labels).toEqual(["1", "2", "3", "i", "ii", "1", "2", "3"]);
+    expect(structured.page_labels).toBe("carried");
   });
 
   it("a source with no outline still produces none, and the reply stays quiet about bookmarks", async () => {
