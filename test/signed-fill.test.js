@@ -6,8 +6,9 @@
 // changes.
 //
 // The signed fixture is synthetic (scripts/make-signed-form-fixture.mjs).
-// Signatures are verified with `openssl cms` over their byte range when
-// openssl is on PATH, which is the same check a validator makes.
+// Signatures are verified with `openssl cms` over their byte range, the same
+// check a validator makes. Without openssl on PATH those tests are reported as
+// skipped (never silently passed), and CI requires it.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
@@ -35,6 +36,18 @@ function hasOpenssl() {
   } catch {
     return false;
   }
+}
+
+const OPENSSL = hasOpenssl();
+
+/** Verify the signature, or mark the test skipped when openssl is missing. */
+async function expectSignatureVerifies(file, directory, skip) {
+  if (!OPENSSL) {
+    if (process.env.CI) throw new Error("openssl is required in CI to verify signatures");
+    skip("openssl is not on PATH, so the signature was not verified");
+    return;
+  }
+  expect(await signatureVerifies(file, directory)).toBe(true);
 }
 
 async function signatureVerifies(file, directory) {
@@ -123,7 +136,7 @@ describe("filling signed and unsigned forms (stdio)", () => {
     }
   });
 
-  it("fills a signed form by appending, and the signature still verifies", async () => {
+  it("fills a signed form by appending, and the signature still verifies", async ({ skip }) => {
     const source = path.join(directory, "signed.pdf");
     const output = path.join(directory, "signed-filled.pdf");
     await fs.copyFile(SIGNED_FIXTURE, source);
@@ -136,10 +149,10 @@ describe("filling signed and unsigned forms (stdio)", () => {
     expect(keepsPrefix(new Uint8Array(await fs.readFile(output)), original)).toBe(true);
     expect(await textValue(output, "full_name")).toBe("Jane Q. Example");
     expect(await textValue(output, "company")).toBe("Example Widgets LLC");
-    if (hasOpenssl()) expect(await signatureVerifies(output, directory)).toBe(true);
+    await expectSignatureVerifies(output, directory, skip);
   });
 
-  it("fills a signed form in place, keeping a backup", async () => {
+  it("fills a signed form in place, keeping a backup", async ({ skip }) => {
     const file = path.join(directory, "in-place.pdf");
     await fs.copyFile(SIGNED_FIXTURE, file);
     const { structured, text } = await succeed("fill_pdf", {
@@ -147,7 +160,7 @@ describe("filling signed and unsigned forms (stdio)", () => {
     });
     expect(structured.save_mode).toBe("incremental");
     expect(text).toContain("Original backed up to:");
-    if (hasOpenssl()) expect(await signatureVerifies(file, directory)).toBe(true);
+    await expectSignatureVerifies(file, directory, skip);
   });
 
   it("refuses to write a signature field, and says filling cannot sign", async () => {
@@ -194,7 +207,7 @@ describe("filling signed and unsigned forms (stdio)", () => {
     expect(certifiedOutcome.text).toMatch(/DocMDP level 1/);
   });
 
-  it("fills only the requested field: another field without an appearance is left alone", async () => {
+  it("fills only the requested field: another field without an appearance is left alone", async ({ skip }) => {
     // Exclude-lock everything but full_name, and strip company's appearance,
     // which pdf-lib's form-wide update would otherwise regenerate.
     const file = path.join(directory, "exclude-lock.pdf");
@@ -215,7 +228,7 @@ describe("filling signed and unsigned forms (stdio)", () => {
     const companyBefore = before.getForm().getTextField("company").acroField.getWidgets()[0].dict;
     const companyAfter = after.getForm().getTextField("company").acroField.getWidgets()[0].dict;
     expect(companyAfter.has(PDFName.of("AP"))).toBe(companyBefore.has(PDFName.of("AP")));
-    if (hasOpenssl()) expect(await signatureVerifies(output, directory)).toBe(true);
+    await expectSignatureVerifies(output, directory, skip);
   });
 
   it("enforces a FieldMDP lock declared only in the signature's references", async () => {
@@ -247,7 +260,7 @@ describe("filling signed and unsigned forms (stdio)", () => {
     expect(outcome.text).toMatch(/carries an XFA form/);
   });
 
-  it("fills each row of a signed template by appending", async () => {
+  it("fills each row of a signed template by appending", async ({ skip }) => {
     const template = path.join(directory, "template.pdf");
     const csv = path.join(directory, "rows.csv");
     await fs.copyFile(SIGNED_FIXTURE, template);
@@ -259,7 +272,7 @@ describe("filling signed and unsigned forms (stdio)", () => {
     expect(text).toContain("each fill was appended as an incremental update");
     for (const row of structured.results) {
       expect(row.fields_filled).toBe(1);
-      if (hasOpenssl()) expect(await signatureVerifies(row.output_path, directory)).toBe(true);
+      await expectSignatureVerifies(row.output_path, directory, skip);
     }
     expect(await textValue(structured.results[0].output_path, "full_name")).toBe("Example, Jane");
   });

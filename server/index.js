@@ -610,7 +610,7 @@ import { describeOutlineReport } from "./outline-carry.js";
 function fillSaveNotice(result) {
   if (result.save_mode !== "incremental") return "";
   return `\nThe form was signed, so the fill was appended as an incremental update: the ${result.signatures_kept} `
-    + "existing signature(s) still cover their original bytes and verify. A validator will report that the "
+    + "existing signature(s) still cover their original, unchanged bytes. A validator will report that the "
     + "document was changed after signing (a form fill, which the signature permits).";
 }
 
@@ -3554,7 +3554,7 @@ async function listTools(request) {
       },
       {
         name: "fill_pdf",
-        description: "Fill a PDF form with provided data and save it. output_path may be the same as pdf_path for in-place editing; the original is backed up on the first same-path mutation. If the PDF is already signed, the fill is appended as an incremental update so existing signatures keep verifying; a field a signature locks, a signature field itself, and a certified PDF that permits no changes are refused. All paths must be absolute paths on the user's local machine, NOT Claude container paths (/mnt/...).",
+        description: "Fill a PDF form with provided data and save it. output_path may be the same as pdf_path for in-place editing; the original is backed up on the first same-path mutation. If the PDF is already signed, the fill is appended as an incremental update so the bytes existing signatures cover are not changed; a field a signature locks, a signature field itself, and a certified PDF that permits no changes are refused. All paths must be absolute paths on the user's local machine, NOT Claude container paths (/mnt/...).",
         inputSchema: {
           type: "object",
           properties: {
@@ -3643,7 +3643,7 @@ async function listTools(request) {
       },
       {
         name: "bulk_fill_from_csv",
-        description: "Fill multiple PDFs using data from a CSV file. A signed template is filled by appending an incremental update to each copy, so its signature keeps verifying. Output filenames must be unique. New outputs need no identity; every existing destination requires one exact entry in expected_output_identities. Any missing, stale, unrelated, or duplicate identity or any row failure aborts the whole batch.",
+        description: "Fill multiple PDFs using data from a CSV file. A signed template is filled by appending an incremental update to each copy, so the bytes its signature covers are not changed. Output filenames must be unique. New outputs need no identity; every existing destination requires one exact entry in expected_output_identities. Any missing, stale, unrelated, or duplicate identity or any row failure aborts the whole batch.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3746,7 +3746,7 @@ async function listTools(request) {
       },
       {
         name: "fill_with_profile",
-        description: "Fill a PDF using a saved profile. A signed PDF is filled by appending an incremental update, so its signatures keep verifying.",
+        description: "Fill a PDF using a saved profile. A signed PDF is filled by appending an incremental update, so the bytes its signatures cover are not changed.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5441,7 +5441,7 @@ async function handleToolCall(request) {
         });
 
         const bulkSaveNotice = bulkSaveMode === "incremental"
-          ? "\nThe template was signed, so each fill was appended as an incremental update; its signature still verifies in every output."
+          ? "\nThe template was signed, so each fill was appended as an incremental update; in every output its signature still covers the template's original, unchanged bytes."
           : "";
         const resultLines = results.map(result => {
           const marker = result.status === "error" ? "✗" : result.status === "warning" ? "!" : "✓";

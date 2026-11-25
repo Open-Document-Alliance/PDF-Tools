@@ -259,7 +259,10 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
 // page_labels ("positional" by default, or "follow_pages") and report
 // page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
-const TOOL_CONTRACT_SHA256 = "2e825d078f7d9a8e9bf63dbd2f3f3e4ef9ee5f2461fed7d3c757871de5b7833d";
+// 2026-11-25: the fill descriptions say a signed form's signed bytes are not
+// changed, rather than claiming the signatures verify, which nothing checks.
+// Inputs, outputs and annotations unchanged. Replaces 2e825d078f7d9a8e9bf63dbd2f3f3e4ef9ee5f2461fed7d3c757871de5b7833d.
+const TOOL_CONTRACT_SHA256 = "68a424352fcd5443ce94d5896011197e7f94a2760a0b883dd50c071862e9da70";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
