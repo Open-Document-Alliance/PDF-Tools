@@ -1051,7 +1051,10 @@ export function addSignatureFormField(pdfDoc, { page, x, y, width, height, field
     Type: "Annot",
     Subtype: "Widget",
     FT: "Sig",
-    T: PDFString.of(name),
+    // pdf-lib's PDFString writes its value unescaped and byte-truncated, so
+    // only plain ASCII without delimiters goes in a literal string; any other
+    // name is written as UTF-16BE text and reads back exactly.
+    T: /^[\x20-\x7e]*$/.test(name) && !/[()\\]/.test(name) ? PDFString.of(name) : PDFHexString.fromText(name),
     Rect: [userX, userY, userX + width, userY + height],
     F: 4,
     P: pdfPage.ref,

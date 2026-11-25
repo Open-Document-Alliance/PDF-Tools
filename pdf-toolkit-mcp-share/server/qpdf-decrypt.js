@@ -312,8 +312,10 @@ export const ENCRYPTED_READ_OPERATIONS = Object.freeze({
  *   - Stamping is `modify` — `/P` bit 4, "modify the contents of the
  *     document". Deliberately *not* `modifyannotations` (bit 6). These tools
  *     draw into the page content stream with pdf-lib's `drawRectangle`,
- *     `drawText` and `drawImage`; none of them creates an annotation object or
- *     touches `/Annots`. A document written with `--modify=annotate` denies
+ *     `drawText` and `drawImage`. `add_signature_field` also adds an unsigned
+ *     `/Sig` form field whose widget is an annotation; bit 4 is still the
+ *     right gate, because ISO 32000 lets bit 6 create form fields only when
+ *     bit 4 is also set. A document written with `--modify=annotate` denies
  *     `modify` while permitting `modifyannotations`, and accepting the
  *     annotation bit here would let PDF Tools burn content into a page whose
  *     owner allowed only commenting.
