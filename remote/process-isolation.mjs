@@ -105,8 +105,13 @@ class ChildToolProcess extends EventEmitter {
       });
       // A child that never started (no shell, EAGAIN, ENOMEM) emits "error"
       // and may never emit "exit"; nothing is running, so it has exited.
-      child.once("error", error => {
+      // on(), not once(): Node can emit "error" again (a failed kill after a
+      // failed spawn), and an unhandled second one would crash the parent.
+      let reported = false;
+      child.on("error", error => {
         if (!child.pid) resolve();
+        if (reported) return;
+        reported = true;
         this.emit("error", error);
       });
     });
@@ -163,7 +168,7 @@ export function checkChildIsolation({ dataLimitBytes = CHILD_DATA_LIMIT_BYTES, s
     }
     child.stdout?.resume();
     child.stderr?.resume();
-    child.once("error", () => finish({ ok: false, reason: "spawn_failed" }));
+    child.on("error", () => finish({ ok: false, reason: "spawn_failed" }));
     child.once("message", message => {
       if (message?.probe !== true) return finish({ ok: false, reason: "probe_unexpected_reply" });
       if (message.dataLimitBytes !== Math.floor(dataLimitBytes / 1024) * 1024) return finish({ ok: false, reason: "limit_not_applied" });

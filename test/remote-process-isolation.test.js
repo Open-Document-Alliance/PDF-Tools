@@ -61,7 +61,11 @@ describe("hosted child-process isolation", () => {
       const child = new EventEmitter();
       Object.assign(child, { pid: undefined, exitCode: null, signalCode: null, stdout: null, stderr: null, kill: () => false,
         send: () => { throw Object.assign(new Error("channel closed"), { code: "ERR_IPC_CHANNEL_CLOSED" }); } });
-      setImmediate(() => child.emit("error", Object.assign(new Error("spawn /bin/sh EAGAIN"), { code: "EAGAIN" })));
+      // Two errors, as Node can emit when a kill follows a failed spawn; the second must not throw.
+      setImmediate(() => {
+        child.emit("error", Object.assign(new Error("spawn /bin/sh EAGAIN"), { code: "EAGAIN" }));
+        child.emit("error", Object.assign(new Error("kill ESRCH"), { code: "ESRCH" }));
+      });
       return child;
     };
     const dispatch = createIsolatedDispatcher({ maxWorkers: 1, workerFactory: createChildToolFactory({ spawnImpl: neverStarted }), readRss: () => 0 });
