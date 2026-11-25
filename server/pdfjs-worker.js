@@ -1104,7 +1104,11 @@ async function observeDocument(bytes, source, password, options) {
       const names = { title: "dc:title", author: "dc:creator", subject: "dc:description", keywords: "pdf:keywords" };
       for (const [field, name] of Object.entries(names)) {
         const observed = ownXmpFields[field];
-        if (observed?.state !== "value" || Object.hasOwn(xmp, name)) continue;
+        // PDF.js joins every rdf:Alt entry into one string, so a title kept in
+        // several languages reads as "TitleTitre". PDF Tools' reader takes the
+        // x-default entry, and is preferred for the two rdf:Alt fields.
+        const alt = field === "title" || field === "subject";
+        if (observed?.state !== "value" || (Object.hasOwn(xmp, name) && !alt)) continue;
         xmp[name] = field === "author" ? observed.value.split(";").map(item => item.trim()).filter(Boolean) : observed.value;
       }
     }

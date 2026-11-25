@@ -136,6 +136,27 @@ describe("get_pdf_info source-bound observations", () => {
     });
   });
 
+  it("reads the default entry of a title kept in several languages", async () => {
+    const xmp = `<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Annual Report</rdf:li><rdf:li xml:lang="fr">Rapport annuel</rdf:li></rdf:Alt></dc:title>
+</rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>`;
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    doc.setTitle("Annual Report");
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+      doc.context.stream(new TextEncoder().encode(xmp), { Type: "Metadata", Subtype: "XML" }),
+    ));
+    const file = path.join(tempDirectory, "xmp-languages.pdf");
+    await fs.writeFile(file, await doc.save());
+    const result = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: file } });
+    expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+    expect(result.structuredContent.metadata.xmp.values["dc:title"]).toBe("Annual Report");
+    expect(result.structuredContent.metadata.disagreements.map(entry => entry.property)).not.toContain("title");
+  });
+
   it("does not inflate a huge metadata stream before checking its size", async () => {
     // 64 MiB of spaces compresses to about 64 KB. The stream is not marked as
     // XMP, so PDF.js skips it; PDF Tools' own reader used to inflate all of
