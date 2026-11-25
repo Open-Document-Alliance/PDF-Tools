@@ -2,4 +2,4 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { callTool } from "./server.mjs";
 
-parentPort.postMessage(await callTool(workerData.name, workerData.args));
+parentPort.postMessage(await callTool(workerData.name, workerData.args, workerData.context));

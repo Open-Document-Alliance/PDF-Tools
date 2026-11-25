@@ -63,6 +63,15 @@ The server is the OAuth authorization server Claude talks to, and a client of Lu
 
 `start_lumin_authorization` and `finish_lumin_authorization` do not exist here, because the connector's own OAuth replaces them. Because nothing is stored, the prepared packet is not kept between prepare and send: the client sends the document again, and the digest binds it to what the person saw.
 
+### As built (2026-11-25)
+
+- **Preparation is hosted-native.** The local transport requires a receipt from `prepare_signing_packet` that records an atomic file commit at a local path. The hosted surface has no such file and does not fabricate that receipt. `prepare_lumin_request` instead draws the same visible "sign here" boxes with the shared `drawSignatureFieldOnPage`, at caller-supplied locations (found with `detect_signature_zones`), one or more per signer. It reuses the local mapper (`mapLuminSignV1SignatureRequest`) and its request-mapping digest.
+- **The preparation token is sealed** (purpose `prepare`, 30 minutes) and carries the source digest, the prepared digest and size, the mapping digest and the full plan (title, expiry, people, box placements). The plan is encrypted, so recipient addresses do not appear in the token.
+- **Send re-prepares.** `send_lumin_request` takes the same source document, refuses `SOURCE_CHANGED` if its digest differs, prepares again (deterministic: pdf-lib loads with `updateMetadata: false`), and refuses `PREPARATION_MISMATCH` unless the bytes and mapping equal the preview. Only then does it make the single Lumin request, with the same multipart fields as the local transport (`use_text_tags: true`, `SAME_TIME`). The September 2026 live send used a PDF with visible boxes and no Lumin text tags, and Lumin accepted it; whether text tags would improve field placement is a question for Lumin.
+- **Limits:** at most 10 people and 40 boxes per request, expiry between one hour and one year, prepared PDF at most 3 MB (the hosted output limit).
+- **The token reaches the worker as data.** `/mcp/sign` opens the sealed access token and passes the Lumin token to the per-call worker in `workerData.context`, never as a tool argument. The public `/mcp` passes no context, so it can neither list nor call the signing tools.
+- **Configuration:** `PDF_TOOLS_SIGN_ENABLED=1`, `PDF_TOOLS_SIGN_SEALING_KEYS`, `PDF_TOOLS_LUMIN_CLIENT_ID` and optionally `PDF_TOOLS_LUMIN_CLIENT_SECRET`. Any missing piece returns 503 on every signing path.
+
 ## Gates before this surface is public
 
 1. Every S property above has a test that fails when it is broken, including a log audit over a full prepare, send, status and download run against a fake Lumin.

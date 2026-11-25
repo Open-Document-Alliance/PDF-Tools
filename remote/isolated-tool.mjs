@@ -11,7 +11,7 @@ export function createIsolatedDispatcher({
   maxWorkers = MAX_ACTIVE_TOOL_WORKERS,
 } = {}) {
   let active = 0;
-  return async (name, args = {}, { signal } = {}) => {
+  return async (name, args = {}, { signal, lumin } = {}) => {
     if (signal?.aborted) return failure("CANCELLED", "The document operation was cancelled before it started.");
     if (active >= maxWorkers) return failure("SERVICE_BUSY", "This service is busy. No document work was started.");
     active++;
@@ -33,7 +33,8 @@ export function createIsolatedDispatcher({
         timer = setTimeout(() => { void finish(failure("PROCESSING_TIMEOUT", "That operation exceeded the hosted processing time limit.")); }, deadlineMs);
         try {
           worker = workerFactory({
-            workerData: { name, args },
+            // The Lumin token crosses into the worker as data only, never as an argument the model sees.
+            workerData: { name, args, context: lumin ? { lumin: { accessToken: lumin.accessToken } } : {} },
             resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 32, stackSizeMb: 4 },
             stdout: true, stderr: true,
           });
