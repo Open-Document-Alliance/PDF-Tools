@@ -93,6 +93,49 @@ describe("get_pdf_info source-bound observations", () => {
     expect(after.size).toBe(before.size);
   }, 30_000);
 
+  it("reads XMP Alt and Seq properties, and reports a packet it cannot read as a gap", async () => {
+    // PDF.js 5.4 has no Metadata.getAll(); reading it returned no XMP for
+    // every document, silently.
+    const xmp = `<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">XMP Title</rdf:li></rdf:Alt></dc:title>
+<dc:creator><rdf:Seq><rdf:li>Example Corp Records</rdf:li></rdf:Seq></dc:creator>
+</rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>`;
+    const build = async packet => {
+      const doc = await PDFDocument.create();
+      doc.addPage([200, 200]);
+      doc.setTitle("Info Title");
+      doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+        doc.context.stream(new TextEncoder().encode(packet), { Type: "Metadata", Subtype: "XML" }),
+      ));
+      return doc.save();
+    };
+    const readable = path.join(tempDirectory, "xmp-readable.pdf");
+    const unreadable = path.join(tempDirectory, "xmp-unreadable.pdf");
+    await fs.writeFile(readable, await build(xmp));
+    await fs.writeFile(unreadable, await build("this is not an XMP packet <<<"));
+
+    const good = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: readable } });
+    expect(good.isError, JSON.stringify(good.content)).toBeFalsy();
+    expect(validateStructuredToolResult("get_pdf_info", good).isError).toBeFalsy();
+    expect(good.structuredContent.metadata.xmp.values).toMatchObject({
+      "dc:title": "XMP Title",
+      "dc:creator": ["Example Corp Records"],
+    });
+    expect(good.structuredContent.metadata.disagreements.map(entry => entry.property)).toContain("title");
+    expect(good.structuredContent.coverage.metadata.reason_codes).not.toContain("XMP_PARSE_UNAVAILABLE");
+
+    const bad = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: unreadable } });
+    expect(bad.isError, JSON.stringify(bad.content)).toBeFalsy();
+    expect(bad.structuredContent.metadata.xmp.values).toEqual({});
+    expect(bad.structuredContent.coverage.metadata).toMatchObject({
+      status: "partial",
+      reason_codes: ["XMP_PARSE_UNAVAILABLE"],
+    });
+  });
+
   it("reports page-scoped partial coverage without misreporting a collection cap", async () => {
     const result = await client.callTool({
       name: "get_pdf_info",

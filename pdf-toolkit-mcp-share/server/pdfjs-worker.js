@@ -11,7 +11,7 @@ import {
   parentPort,
   workerData,
 } from "node:worker_threads";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFName } from "pdf-lib";
 import {
   analyzePdfPages,
   deriveTextIntegrityForRouting,
@@ -946,6 +946,7 @@ function fieldRows(fieldObjects) {
 
 async function observeDocument(bytes, source, password, options) {
   let rawPages = null;
+  let hasXmpStream = null;
   const coverageReasons = {};
   const addCoverageReason = (channel, reason) => {
     coverageReasons[channel] = [...(coverageReasons[channel] ?? []), reason];
@@ -956,6 +957,7 @@ async function observeDocument(bytes, source, password, options) {
       updateMetadata: false,
     });
     rawPages = rawDocument.getPages();
+    hasXmpStream = rawDocument.catalog.get(PDFName.of("Metadata")) !== undefined;
   } catch {
     addCoverageReason("pages", "RAW_PAGE_GEOMETRY_UNAVAILABLE");
   }
@@ -1068,9 +1070,19 @@ async function observeDocument(bytes, source, password, options) {
     try {
       const rawMetadata = await document.getMetadata();
       info = rawMetadata?.info ?? {};
-      xmp = rawMetadata?.metadata?.getAll?.() ?? {};
+      // PDF.js 5.4 exposes parsed XMP as an iterable of [name, value]; it has
+      // no getAll(). Reading getAll() returned nothing for every document, so
+      // XMP was reported as an empty record with no gap.
+      const parsed = rawMetadata?.metadata;
+      xmp = parsed && typeof parsed[Symbol.iterator] === "function" ? Object.fromEntries(parsed) : {};
     } catch {
       addCoverageReason("metadata", "METADATA_PARSE_UNAVAILABLE");
+    }
+    // A packet that is present but yields nothing (PDF.js could not parse it,
+    // or it states no properties PDF.js reads) is a coverage gap, not proof
+    // the document has no XMP metadata.
+    if (hasXmpStream && Object.keys(xmp).length === 0) {
+      addCoverageReason("metadata", "XMP_PARSE_UNAVAILABLE");
     }
     const metadata = buildMetadataObservation(
       source.sha256,
