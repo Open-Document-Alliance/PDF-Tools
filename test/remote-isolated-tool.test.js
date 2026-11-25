@@ -86,3 +86,15 @@ describe("hosted worker boundary", () => {
     expect(factory).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("outcome-sensitive tools", () => {
+  it("reports an interrupted Lumin send as an unknown outcome, never as a plain timeout", async () => {
+    const silentWorker = () => Object.assign(new EventEmitter(), { terminate: async () => {}, stdout: null, stderr: null });
+    const dispatch = createIsolatedDispatcher({ workerFactory: silentWorker, deadlineMs: 20 });
+    const send = await dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } });
+    expect(send.content[0].text).toMatch(/^LUMIN_CREATE_OUTCOME_UNKNOWN: /);
+    expect(send.content[0].text).toMatch(/before sending again/);
+    const other = await dispatch("get_pdf_info", {});
+    expect(other.content[0].text).toMatch(/^PROCESSING_TIMEOUT/);
+  });
+});
