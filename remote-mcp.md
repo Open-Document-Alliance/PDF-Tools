@@ -127,7 +127,8 @@ fail on the way out even when the input arrived by URL.
 
 Two ways around it, in order of preference: pass a URL, which this service
 fetches itself, or run PDF Tools on the machine that holds the file. The
-desktop extension has no such ceiling because nothing crosses a network.
+local PDF Tools server (Claude plugin or desktop app) has no such ceiling
+because nothing crosses a network.
 
 The URL fetcher refuses anything other than `http` and `https`, refuses private,
 loopback, link-local and similar network ranges after resolving the name and
