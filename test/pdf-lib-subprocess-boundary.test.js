@@ -88,8 +88,8 @@ const OPTIONS = {
   merge_pdfs: {},
   split_pdf: { page_ranges: "1" },
   rotate_pdf_pages: { pages: [], degrees: 90 },
-  reorder_pdf_pages: { page_order: [1], rotations: {} },
-  apply_page_plan: { page_order: [1], rotations: {} },
+  reorder_pdf_pages: { page_labels: "positional", page_order: [1], rotations: {} },
+  apply_page_plan: { page_labels: "positional", page_order: [1], rotations: {} },
   add_signature_field: {
     allow_resign: false,
     field_name: null,

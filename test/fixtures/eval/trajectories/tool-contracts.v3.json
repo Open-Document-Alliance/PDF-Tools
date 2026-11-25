@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "2848e9ec05f73a4dd63f79a9b1db10c8a5503e45f18624e8c67dfc7c8e01a682",
+  "tools_sha256": "032434df24ed05b6cacdc1e09a550eb3a4eb5db3c361e01153d5c0dde75fb8d3",
   "tools": [
     {
       "name": "add_signature_field",
@@ -133,6 +133,14 @@
           "force_xfa": {
             "type": "boolean",
             "description": "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
+          },
+          "page_labels": {
+            "type": "string",
+            "enum": [
+              "positional",
+              "follow_pages"
+            ],
+            "description": "How page labels (the i, ii, 1, 2 numbering a viewer shows) are carried. positional (default) keeps the document's numbering scheme by position, so it stays sequential; follow_pages keeps each page's own label wherever it moves, for labels that name pages (such as \"Cover\")."
           },
           "expected_output_identity": {
             "type": "object",
@@ -1833,6 +1841,14 @@
               "type": "number"
             },
             "description": "Array of 1-based page numbers in desired order, e.g. [3, 1, 2, 4]"
+          },
+          "page_labels": {
+            "type": "string",
+            "enum": [
+              "positional",
+              "follow_pages"
+            ],
+            "description": "How page labels (the i, ii, 1, 2 numbering a viewer shows) are carried. positional (default) keeps the document's numbering scheme by position, so it stays sequential; follow_pages keeps each page's own label wherever it moves, for labels that name pages (such as \"Cover\")."
           },
           "expected_output_identity": {
             "type": "object",
