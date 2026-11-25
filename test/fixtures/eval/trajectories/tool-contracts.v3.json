@@ -3,7 +3,7 @@
   "contract_id": "pdf-tools.trajectory.tool-contracts.v3",
   "runtime": {
     "name": "pdf-tools",
-    "version": "0.14.0"
+    "version": "0.15.0"
   },
   "tools_sha256": "cbd4f2614576b123130ad430542f58cf07ca3730026c59545e7fe4b447dce4bf",
   "tools": [
