@@ -32,6 +32,7 @@ import {
   copyPdfPagesPreservingForms,
   detectExistingSignatures,
   detectXfaFormInDocument,
+  addSignatureFormField,
   drawSignatureFieldOnPage,
   getPageBoxGeometry,
   parsePageRanges,
@@ -195,6 +196,7 @@ const OPERATIONS = new Set([
   "split_pdf",
 ]);
 const METADATA_EDIT_FIELDS = Object.freeze(["title", "author", "subject", "keywords"]);
+const APPENDABLE_OPERATIONS = new Set(["add_signature_field"]);
 const MAX_METADATA_VALUE_LENGTH = 32_768;
 const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
@@ -212,7 +214,7 @@ const OPTION_KEYS = new Map([
   ["rotate_pdf_pages", ["degrees", "pages"]],
   ["reorder_pdf_pages", ["page_labels", "page_order", "rotations"]],
   ["apply_page_plan", ["page_labels", "page_order", "rotations"]],
-  ["add_signature_field", ["allow_resign", "placement"]],
+  ["add_signature_field", ["allow_resign", "field_name", "placement"]],
   ["apply_signature", [
     "allow_resign", "audit_line", "audit_text", "draw_audit_line",
     "modification_at", "placement", "signature",
@@ -506,6 +508,11 @@ function validateRequest(request) {
   }
   if (Object.hasOwn(options, "draw_audit_line") && typeof options.draw_audit_line !== "boolean") {
     throw new TypeError("draw_audit_line must be boolean.");
+  }
+  if (request.operation === "add_signature_field" && options.field_name !== null
+      && (typeof options.field_name !== "string" || options.field_name.length < 1
+        || options.field_name.length > 120 || /[.\u0000-\u001f]/.test(options.field_name))) {
+    throw new TypeError("field_name must be 1-120 characters with no period or control characters.");
   }
   if (request.operation === "set_pdf_metadata") {
     objectValue(options.edits, "edits");
@@ -2918,7 +2925,19 @@ async function execute(request, protection) {
     outputs = [edited.bytes];
     result = edited.result;
   } else {
-    const document = await loadMutationSource(protection, sourceBytes[0]);
+    // Additive edits are appended as an incremental update when the source is
+    // neither encrypted nor signed: nothing is replaced, so the original bytes
+    // stay as they were. A signed source is never appended to here: these
+    // edits change page content, and an append would leave the old signature
+    // verifying over a revision the edit comes after, which reads as signed
+    // when it is not. With allow_resign such a source is rewritten, as it
+    // always was, and its signature visibly breaks. Loading without pdf-lib's
+    // metadata rewrite keeps the update to the change that was asked for.
+    let appendable = APPENDABLE_OPERATIONS.has(request.operation);
+    const document = await loadMutationSource(protection, sourceBytes[0], { updateMetadata: !appendable });
+    if ((protection.sources.get(sourceBytes[0]) ?? null) !== null) appendable = false;
+    if (appendable && inspectSignatureState(document).signed.length > 0) appendable = false;
+    const snapshot = appendable ? snapshotIndirectObjects(document, sourceBytes[0]) : null;
     const expectedPageCount = document.getPageCount();
     if (request.operation === "prepare_signing_packet" && expectedPageCount > MAX_SIGNING_PACKET_PAGES) {
       throw resourceError(
@@ -2946,7 +2965,8 @@ async function execute(request, protection) {
     assertMayResave(document, options.allow_resign, request.operation === "apply_signature" ? "re-sign" : "modify");
     if (request.operation === "add_signature_field") {
       await drawSignatureFieldOnPage(document, options.placement);
-      result = { form_info: formInfo(document) };
+      const fieldName = addSignatureFormField(document, { ...options.placement, fieldName: options.field_name });
+      result = { field_name: fieldName, form_info: formInfo(document) };
     } else if (request.operation === "apply_signature") {
       await stampSignatureOnPage(document, options.signature, {
         ...options.placement,
@@ -2986,10 +3006,29 @@ async function execute(request, protection) {
       document.setModificationDate(new Date(options.modification_at));
       result = { form_info: formInfo(document) };
     }
-    outputs = [await savePdfDocumentSafely(document, {
-      expectedPageCount,
-      expectedPageRotations,
-    })];
+    let saveMode = "rewrite";
+    if (appendable) {
+      try {
+        outputs = [(await savePdfDocumentIncrementally(document, sourceBytes[0], snapshot, {
+          expectedPageCount,
+          expectedPageRotations,
+        })).bytes];
+        saveMode = "incremental";
+      } catch {
+        // The source is unsigned, so nothing depends on its bytes staying put.
+        // Anything that stops a faithful append (a damaged cross-reference,
+        // an unreachable broken object the append verifier will not accept)
+        // falls back to the rewrite these tools always did; save_mode says so.
+        saveMode = "rewrite";
+      }
+    }
+    if (saveMode === "rewrite") {
+      outputs = [await savePdfDocumentSafely(document, {
+        expectedPageCount,
+        expectedPageRotations,
+      })];
+    }
+    if (APPENDABLE_OPERATIONS.has(request.operation)) result = { ...result, save_mode: saveMode };
   }
   if (outputs.length > MAX_OUTPUTS) throw resourceError("too_many_outputs", "Mutation produced too many outputs.");
   if (

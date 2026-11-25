@@ -1019,7 +1019,15 @@ function normalizeAddSignatureFieldArguments(value) {
     }
     label = args.label || "Sign here";
   }
-  return { ...normalized, label };
+  let fieldName = null;
+  if (args.field_name !== undefined && args.field_name !== null) {
+    if (typeof args.field_name !== "string" || args.field_name.length < 1 || args.field_name.length > 120
+        || /[.\u0000-\u001f]/.test(args.field_name)) {
+      throw new Error("'field_name' must be 1-120 characters with no period or control characters.");
+    }
+    fieldName = args.field_name;
+  }
+  return { ...normalized, label, field_name: fieldName };
 }
 
 function normalizeApplyTextArguments(value) {
@@ -4726,7 +4734,7 @@ async function listTools(request) {
       },
       {
         name: "add_signature_field",
-        description: "Draw a visible 'Sign here' placeholder box on a PDF page and save as a new file. Marks where a signature should go — does NOT sign the document. Useful when preparing a PDF to send to another party for signing. Coordinates are in points (72pt = 1 inch), TOP-LEFT origin: x=distance from left, y=distance from top.",
+        description: "Add an unsigned signature form field (/Sig, with a widget) on a PDF page, drawn as a visible 'Sign here' box, and save it. A signing application such as Acrobat or Lumin Sign can then sign that field. It does NOT sign the document. Useful when preparing a PDF to send to another party for signing. Coordinates are in points (72pt = 1 inch), TOP-LEFT origin: x=distance from left, y=distance from top.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4738,6 +4746,7 @@ async function listTools(request) {
             width: { type: "number", description: "Width of the signature box, in points (e.g. 150 for a typical signature line)" },
             height: { type: "number", description: "Height of the signature box, in points (e.g. 36 for a typical signature line)" },
             label: { type: "string", description: "Text shown inside the box (default: 'Sign here')" },
+            field_name: { type: "string", description: "Name of the new signature form field (default: the first free of Signature, Signature2, ...). No periods." },
             allow_resign: {
               type: "boolean",
               description: "Proceed even if the PDF already contains cryptographic signature fields (default: false). Warning: saving will invalidate any existing signatures."
@@ -7775,7 +7784,7 @@ async function handleToolCall(request) {
 
       case "add_signature_field": {
         const {
-          pdf_path, output_path, page, x, y, width, height, label,
+          pdf_path, output_path, page, x, y, width, height, label, field_name,
           allow_resign, password, force_xfa, expected_output_identity,
         } = normalizeAddSignatureFieldArguments(args);
         const resolvedOutput = resolvePath(output_path);
@@ -7783,7 +7792,7 @@ async function handleToolCall(request) {
         const recoveredInput = await readPdfInputWithRecovery(pdf_path);
         const { pdfBytes, inputRecoveryBinding } = recoveredInput;
         assertXfaMutationAllowed(pdfBytes, { forceXfa: force_xfa });
-        const { payload, backupPath } = await runPdfLibMutation({
+        const { payload, backupPath, fieldName, saveMode } = await runPdfLibMutation({
           operation: "add_signature_field",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -7791,8 +7800,10 @@ async function handleToolCall(request) {
           options: {
             placement: { page, x, y, width, height, label },
             allow_resign,
+            field_name,
           },
-        }, ({ result, outputs, atomicTransition }) => persistPdfMutation({
+        }, async ({ result, outputs, atomicTransition }) => ({
+          ...(await persistPdfMutation({
             mutationOutput: { ...outputs[0], atomicTransition },
             formInfo: result.form_info,
             inputPath: resolvedInput,
@@ -7802,21 +7813,27 @@ async function handleToolCall(request) {
             expectedOutputIdentity: expected_output_identity,
             inputRecoveryBinding,
             initialPage: page,
-          }));
+            extraPayload: { save_mode: result.save_mode },
+          })),
+          fieldName: result.field_name,
+          saveMode: result.save_mode,
+        }));
         return {
           content: [{
             type: "text",
             text:
-              `Added signature field to page ${page} at (${x}, ${y}) — ${width}x${height} pts\n` +
+              `Added signature field '${fieldName}' to page ${page} at (${x}, ${y}) — ${width}x${height} pts\n` +
               `Output: ${resolvedOutput}\n` +
               (backupPath ? `Original backed up to: ${backupPath}\n` : "") +
-              `The field is a visible placeholder; use apply_signature to stamp a signature there.`
+              `It is a real, unsigned signature form field with a visible "${label}" box, so a signing application (Acrobat, Lumin Sign) can sign it. It does not sign the document.` +
+              (saveMode === "incremental" ? "\nAppended as an incremental update; the original bytes are unchanged." : "")
           }],
           structuredContent: {
             ...payload,
             pdf_path: resolvedOutput,
             page, x, y, width, height,
             label,
+            field_name: fieldName,
           },
           _meta: {
             ui: { resourceUri: "ui://pdf-toolkit/viewer" },

@@ -287,6 +287,8 @@ regenerated with `node scripts/eval-capture-tool-contracts.mjs`.
 
 `fill_pdf`, `fill_with_profile` and `bulk_fill_from_csv` use the same writer for a signed form: the fill is appended and the bytes the signature covers are not changed, and the result reports `save_mode: "incremental"` with `signatures_kept`. Refused before anything changes: DocMDP level 1, a field a signature's `/Lock` covers, a request to write a signature field (filling cannot sign), and an encrypted signed form. An unsigned form is rewritten as before. A requested signature or push-button field is now a fill error rather than being reported as filled. Only a `/Sig` field with a `/V` value counts as a signature for `assertMayResave`, so an empty signature field no longer blocks `apply_text` and the other stamp tools. Regression guard: `test/signed-fill.test.js`.
 
+`add_signature_field` creates a real unsigned `/Sig` AcroForm field (a merged field and widget at the drawn box, `SigFlags` bit 1 set) as well as the visible box, so a signing application finds a field to sign; `field_name` names it, otherwise the first free `Signature`, `Signature2`... It is appended as an incremental update when the source is not encrypted, falling back to the old rewrite for a damaged cross-reference or an encrypted file (`save_mode` says which). `prepare_signing_packet` still draws boxes only, because its packets go to Lumin, which places its own fields. Regression guard: `test/signature-field.test.js`.
+
 ## Development Commands
 
 ### Build and Package
@@ -349,7 +351,7 @@ qualification. Then perform manual host runs against `example-fw9.pdf`:
 26. **fetch_pdf_from_url** - Download a PDF to an allowed local folder under the destination, redirect, time, and byte policies
 27. **create_signature** - Save a reusable typed or image signature
 28. **list_signatures** - List saved signatures
-29. **add_signature_field** - Draw a "Sign here" placeholder box (does NOT sign)
+29. **add_signature_field** - Add an unsigned /Sig form field with a visible "Sign here" box, appended incrementally (does NOT sign)
 30. **apply_signature** - Stamp a saved signature at a location (requires explicit human intent; see Signature Architecture below)
 31. **prepare_signing_packet** - Fill form + add sign-here boxes in one pass
 32. **detect_signature_zones** - Locate signature, initials, printed-name, and date zones with coordinates. Use apply_signature for signatures and initials, and apply_text for names and dates.

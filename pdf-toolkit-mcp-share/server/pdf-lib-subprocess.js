@@ -90,7 +90,7 @@ const OPTION_KEYS = new Map([
   ["rotate_pdf_pages", ["degrees", "pages"]],
   ["reorder_pdf_pages", ["page_labels", "page_order", "rotations"]],
   ["apply_page_plan", ["page_labels", "page_order", "rotations"]],
-  ["add_signature_field", ["allow_resign", "placement"]],
+  ["add_signature_field", ["allow_resign", "field_name", "placement"]],
   ["apply_signature", [
     "allow_resign", "audit_line", "audit_text", "draw_audit_line",
     "modification_at", "placement", "signature",

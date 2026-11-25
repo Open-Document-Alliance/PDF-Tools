@@ -63,6 +63,8 @@ set, never a document-equivalence claim.
 
 `fill_pdf`, `fill_with_profile` and `bulk_fill_from_csv` use the same writer for a signed form: the fill is appended and the bytes the signature covers are not changed, and the result reports `save_mode: "incremental"` with `signatures_kept`. Refused before anything changes: DocMDP level 1, a field a signature's `/Lock` covers, a request to write a signature field (filling cannot sign), and an encrypted signed form. An unsigned form is rewritten as before. A requested signature or push-button field is now a fill error rather than being reported as filled. Only a `/Sig` field with a `/V` value counts as a signature for `assertMayResave`, so an empty signature field no longer blocks `apply_text` and the other stamp tools. Regression guard: `test/signed-fill.test.js`.
 
+`add_signature_field` creates a real unsigned `/Sig` AcroForm field (a merged field and widget at the drawn box, `SigFlags` bit 1 set) as well as the visible box, so a signing application finds a field to sign; `field_name` names it, otherwise the first free `Signature`, `Signature2`... It is appended as an incremental update when the source is not encrypted, falling back to the old rewrite for a damaged cross-reference or an encrypted file (`save_mode` says which). `prepare_signing_packet` still draws boxes only, because its packets go to Lumin, which places its own fields. Regression guard: `test/signature-field.test.js`.
+
 ## Build, Test, and Development Commands
 - `npm install`: install dependencies with Node.js 20.19+ or 22.12+; this is
   the contributor build/test floor imposed by Vite, not a claim about the

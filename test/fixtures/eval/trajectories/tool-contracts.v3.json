@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.15.0"
   },
-  "tools_sha256": "7c4420faded087bd11d19e3e618bf9725a713ef15be9543b446b095cb920a5a9",
+  "tools_sha256": "032434df24ed05b6cacdc1e09a550eb3a4eb5db3c361e01153d5c0dde75fb8d3",
   "tools": [
     {
       "name": "add_signature_field",
@@ -43,6 +43,10 @@
           "label": {
             "type": "string",
             "description": "Text shown inside the box (default: 'Sign here')"
+          },
+          "field_name": {
+            "type": "string",
+            "description": "Name of the new signature form field (default: the first free of Signature, Signature2, ...). No periods."
           },
           "allow_resign": {
             "type": "boolean",

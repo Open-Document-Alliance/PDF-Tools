@@ -1087,6 +1087,7 @@ endobj
     request.operation = "add_signature_field";
     request.options = {
       allow_resign: false,
+      field_name: null,
       placement: {
         page: 2,
         x: 10,
@@ -1111,6 +1112,7 @@ endobj
     request.operation = "add_signature_field";
     request.options = {
       allow_resign: false,
+      field_name: null,
       placement: {
         page: 1,
         x: 72,
@@ -1828,7 +1830,7 @@ describe("existing-signature resign guard coverage", () => {
     ["rotate_pdf_pages", { degrees: 90, pages: [] }],
     ["reorder_pdf_pages", { page_labels: "positional", page_order: [2, 1], rotations: {} }],
     ["apply_page_plan", { page_labels: "positional", page_order: [2, 1], rotations: {} }],
-    ["add_signature_field", { placement: LABELLED_PLACEMENT }],
+    ["add_signature_field", { field_name: null, placement: LABELLED_PLACEMENT }],
     ["apply_signature", {
       audit_line: "Signed by Alice",
       audit_text: "Signed by Alice",
