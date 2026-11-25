@@ -436,3 +436,8 @@ compiler-rt, libc++, libc++abi and libunwind) ships beside it in
 `vendor/qpdf-wasm/runtime/licenses/`, bound to its SHA-256 hashes by
 `licenses/manifest.json`. The npm dependencies keep their own licences inside
 `node_modules/`, including the PDF.js, Foxit and Liberation font notices.
+
+The MCP server SDK (`@modelcontextprotocol/server` and `@modelcontextprotocol/core`)
+is Apache-2.0 from 2.4.0, the version shipped since v0.15.0; earlier releases
+shipped 2.0.0 under MIT. Its licence text ships with it inside `node_modules/`,
+and both bills record the licence per version.

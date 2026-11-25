@@ -201,3 +201,7 @@ each of those native pieces hung off the WebAssembly runtime that ships them.
 The Emscripten image that compiled the runtime is recorded there as build
 tooling rather than as a shipped component, because it is not inside the
 artifact.
+
+The MCP server SDK (`@modelcontextprotocol/server` and `@modelcontextprotocol/core`)
+is Apache-2.0 from 2.4.0, the version this bundle locks since v0.15.0; earlier
+releases locked 2.0.0 under MIT. npm installs its licence text with it.
