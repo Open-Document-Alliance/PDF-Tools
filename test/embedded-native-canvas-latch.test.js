@@ -51,10 +51,58 @@ function readMarker() {
   return JSON.parse(readFileSync(markerPath(), "utf8"));
 }
 
+// The same primitive the guard uses, so "dead" here means what it means there.
+function pidIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM is another user's live process; only ESRCH is genuinely gone.
+    return error?.code !== "ESRCH";
+  }
+}
+
 // A pid that is definitely not running: spawn a trivial process, let it exit,
-// and reuse its number. Beats guessing a high integer, which can collide.
+// and reuse its number. Beats guessing a high integer, which can collide. The
+// number is probed before it is handed out, because it is only a dead pid if
+// the OS has not already given it to something else.
 function deadPid() {
-  return spawnSync(process.execPath, ["-e", ""]).pid;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const pid = spawnSync(process.execPath, ["-e", ""]).pid;
+    if (Number.isInteger(pid) && pid > 0 && !pidIsAlive(pid)) return pid;
+  }
+  throw new Error("could not obtain a pid that is not in use");
+}
+
+// Runs `check` against a marker owned by a process that is not running.
+//
+// Pid reuse is not a defect here, it is the product's documented answer: when a
+// crashed process's number has been handed to an unrelated live process,
+// nativeCanvasLatchState reports "concurrent" rather than "latched" on purpose,
+// failing toward retryable. On a busy host that can happen between deadPid()
+// and the read, and a test that treats it as a latch failure is asserting
+// against one of two intended outcomes.
+//
+// So a failed check is only accepted as a failure once the owner is confirmed
+// still dead; if the OS reused the number under us, the run proved nothing
+// either way and is repeated with a fresh one. A guard that genuinely stopped
+// latching fails on the first pass, because the owner stays dead and the
+// caller's assertions are re-run unweakened every time.
+//
+// The `force` cases below take a bare deadPid() instead: force short-circuits
+// before the latch is consulted, so their outcome does not turn on whether the
+// marker's owner is alive.
+function withDeadOwnerMarker(marker, check) {
+  for (let attempt = 0; ; attempt += 1) {
+    const pid = deadPid();
+    writeFileSync(markerPath(), JSON.stringify({ ...marker, pid }));
+    try {
+      check(pid);
+      return pid;
+    } catch (error) {
+      if (attempt >= 20 || !pidIsAlive(pid)) throw error;
+    }
+  }
 }
 
 function install({ dlopen }) {
@@ -236,28 +284,26 @@ describe("a load that never returns latches off on the next boot", () => {
     guarded.call(process, {}, CANVAS_BINDING);
     const marker = readMarker();
     installed.restore();
-    writeFileSync(markerPath(), JSON.stringify({ ...marker, pid: deadPid() }));
 
-    expect(nativeCanvasLatchState(markerPath())).toBe("latched");
-    expect(embeddedNativeCanvasAllowed({
-      env: { PDF_TOOLS_EMBEDDED_NATIVE_CANVAS: "1" },
-      platform: "win32",
-      markerPath: markerPath(),
-    })).toBe(false);
+    withDeadOwnerMarker(marker, () => {
+      expect(nativeCanvasLatchState(markerPath())).toBe("latched");
+      expect(embeddedNativeCanvasAllowed({
+        env: { PDF_TOOLS_EMBEDDED_NATIVE_CANVAS: "1" },
+        platform: "win32",
+        markerPath: markerPath(),
+      })).toBe(false);
+    });
   });
 
   it("refuses the next load and records why", () => {
-    writeFileSync(markerPath(), JSON.stringify({
-      phase: "drawing",
-      token: "someone-elses-token",
-      pid: deadPid(),
-    }));
     const guarded = install({ dlopen: () => "loaded" });
 
-    expect(() => guarded.call(process, {}, CANVAS_BINDING))
-      .toThrow(/native canvas binding is disabled/);
+    withDeadOwnerMarker({ phase: "drawing", token: "someone-elses-token" }, () => {
+      expect(() => guarded.call(process, {}, CANVAS_BINDING))
+        .toThrow(/native canvas binding is disabled/);
 
-    expect(nativeCanvasBlockReason()).toBe("latched");
+      expect(nativeCanvasBlockReason()).toBe("latched");
+    });
   });
 
   it("lets =force recover a latched install without hand-editing state", () => {
