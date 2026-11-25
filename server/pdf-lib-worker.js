@@ -83,6 +83,7 @@ import {
   hasXmlIllegalCharacters,
   editXmpDocumentFields,
   readXmpDocumentFields,
+  readXmpStreamBytes,
   xmpPacketFromInfo,
 } from "./xmp-metadata.js";
 
@@ -2528,8 +2529,12 @@ function fieldObjectOwners(document) {
   return owners;
 }
 
-/** Best-effort: keep the XMP dates in step with Info's ModDate. */
-function refreshCatalogXmpDates(document, modifiedAt) {
+/**
+ * Best-effort: keep the XMP dates in step with Info's ModDate, and with any
+ * Info fields named in edits. If those fields cannot be edited, the dates
+ * still are.
+ */
+function refreshCatalogXmpDates(document, modifiedAt, edits = {}) {
   let xmp;
   try {
     xmp = readCatalogXmp(document);
@@ -2537,15 +2542,22 @@ function refreshCatalogXmpDates(document, modifiedAt) {
     return;
   }
   if (!xmp) return;
+  const attempt = fields => {
+    try {
+      return editXmpDocumentFields(xmp.text, fields, { modifiedAt: modifiedAt.toISOString() });
+    } catch {
+      return null;
+    }
+  };
   try {
-    const edited = editXmpDocumentFields(xmp.text, {}, { modifiedAt: modifiedAt.toISOString() });
-    if (edited === xmp.text) return;
+    const edited = attempt(edits) ?? (Object.keys(edits).length > 0 ? attempt({}) : null);
+    if (edited === null || edited === xmp.text) return;
     document.context.assign(xmp.ref, document.context.stream(new TextEncoder().encode(edited), {
       Type: "Metadata",
       Subtype: "XML",
     }));
   } catch {
-    // Dates only: an XMP packet that cannot be edited is left as it was.
+    // An XMP packet that cannot be rewritten is left as it was.
   }
 }
 
@@ -3010,7 +3022,15 @@ async function execute(request, protection) {
         const keywords = document.getKeywords() || "";
         document.setKeywords([keywords ? `${keywords}\n${options.audit_line}` : options.audit_line]);
       }
-      document.setModificationDate(new Date(options.modification_at));
+      const modifiedAt = new Date(options.modification_at);
+      document.setModificationDate(modifiedAt);
+      // Info's ModDate moved, so the XMP dates move with it; otherwise the
+      // two records disagree about when the document last changed.
+      refreshCatalogXmpDates(
+        document,
+        modifiedAt,
+        options.record_audit_in_keywords ? { keywords: document.getKeywords() } : {},
+      );
       result = { audit_in_keywords: options.record_audit_in_keywords === true, form_info: formInfo(document) };
     }
     let saveMode = "rewrite";
@@ -3081,15 +3101,7 @@ function readCatalogXmp(document) {
   const raw = document.catalog.get(PDFName.of("Metadata"));
   if (raw === undefined) return null;
   const stream = raw instanceof PDFRef ? document.context.lookup(raw) : null;
-  if (!(stream instanceof PDFRawStream)) {
-    throw new XmpUnsupported("xmp_unreadable", "The PDF has an XMP metadata entry that is not a readable stream.");
-  }
-  let decoded;
-  try {
-    decoded = decodePDFRawStream(stream).decode();
-  } catch {
-    throw new XmpUnsupported("xmp_unreadable", "The PDF's XMP metadata stream uses an encoding PDF Tools cannot decode.");
-  }
+  const decoded = readXmpStreamBytes(stream, value => document.context.lookup(value));
   return { ref: raw, text: decodeXmpPacket(decoded) };
 }
 

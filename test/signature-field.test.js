@@ -124,6 +124,25 @@ describe("add_signature_field creates a real signature field (stdio)", () => {
     expect(widgets.map(widget => widget.name).sort()).toEqual(["Signature", "Signature2", "client_signature"]);
   });
 
+  it("writes a non-ASCII or delimiter-bearing field_name exactly, and refuses it the second time", async () => {
+    const source = path.join(directory, "unicode-name.pdf");
+    await fs.writeFile(source, await formDocument());
+    for (const [index, fieldName] of ["署名", "Sign (client)\\1"].entries()) {
+      const added = await call({
+        pdf_path: source, output_path: source, page: 1, x: 72, y: 72 + index * 60, width: 200, height: 30, field_name: fieldName,
+      });
+      expect(added.result.isError, added.text).toBeFalsy();
+      expect(added.result.structuredContent.field_name).toBe(fieldName);
+      const again = await call({
+        pdf_path: source, output_path: source, page: 1, x: 72, y: 300 + index * 60, width: 200, height: 30, field_name: fieldName,
+      });
+      expect(again.result.isError).toBe(true);
+      expect(again.text).toMatch(/already exists/);
+    }
+    const widgets = await signatureWidgets(await fs.readFile(source));
+    expect(widgets.map(widget => widget.name).sort()).toEqual(["Sign (client)\\1", "署名"].sort());
+  });
+
   it("does not reuse the full name of an existing parent field", async () => {
     // A form whose "Signature" is a parent of "Signature.date": pdf-lib lists
     // only the terminal field, but a new root "Signature" would share a name.

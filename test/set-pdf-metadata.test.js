@@ -24,9 +24,11 @@ import {
   snapshotIndirectObjects,
 } from "../server/incremental-update.js";
 import {
+  XMP_MAX_BYTES,
   XmpUnsupported,
   editXmpDocumentFields,
   readXmpDocumentFields,
+  readXmpStreamBytes,
 } from "../server/xmp-metadata.js";
 import { inspectSignatureState, isFieldLocked } from "../server/signature-state.js";
 import { createTestTempDirectory, removeTestTempDirectory } from "./helpers/temp-directory.js";
@@ -130,6 +132,32 @@ async function buildDocument({ xmp = STANDARD_XMP, objectStreams = false, certif
 }
 
 describe("XMP document fields", () => {
+  it("decodes a metadata stream under a cap instead of inflating all of it first", async () => {
+    const doc = await PDFDocument.create();
+    const reason = stream => {
+      try {
+        readXmpStreamBytes(stream);
+        return null;
+      } catch (error) {
+        expect(error).toBeInstanceOf(XmpUnsupported);
+        return error.reason;
+      }
+    };
+    const packetBytes = new TextEncoder().encode(STANDARD_XMP);
+    const plain = doc.context.stream(packetBytes, { Type: "Metadata", Subtype: "XML" });
+    const flate = doc.context.flateStream(packetBytes, { Type: "Metadata", Subtype: "XML" });
+    expect(new TextDecoder().decode(readXmpStreamBytes(plain))).toBe(STANDARD_XMP);
+    expect(new TextDecoder().decode(readXmpStreamBytes(flate))).toBe(STANDARD_XMP);
+    // 64 MiB of spaces compresses to about 64 KB; reading stops at the cap.
+    const bomb = doc.context.flateStream(new Uint8Array(64 * 1024 * 1024).fill(0x20), { Type: "Metadata", Subtype: "XML" });
+    expect(bomb.getContents().length).toBeLessThan(1024 * 1024);
+    expect(reason(bomb)).toBe("xmp_too_large");
+    expect(reason(doc.context.stream(packetBytes, { Subtype: "XML" }))).toBe("xmp_unreadable");
+    expect(reason(doc.context.stream(packetBytes, { Type: "Metadata", Subtype: "XML", Filter: "LZWDecode" })))
+      .toBe("xmp_unreadable");
+    expect(reason(doc.context.obj({}))).toBe("xmp_unreadable");
+  });
+
   it("reads Alt, Seq and attribute-form properties", () => {
     expect(readXmpDocumentFields(STANDARD_XMP)).toEqual({
       title: { state: "value", value: "Old Title" },
@@ -400,6 +428,19 @@ describe("set_pdf_metadata (stdio)", () => {
     await fs.writeFile(file, original);
     const refusal = await refuse({ pdf_path: file, output_path: file, title: "Nope" });
     expect(refusal).toMatch(/certified \(DocMDP level 2\)/);
+    expect((await fs.readFile(file)).equals(Buffer.from(original))).toBe(true);
+  });
+
+  it("refuses a metadata stream that would inflate past the cap, and leaves the file alone", async () => {
+    const file = path.join(directory, "bomb.pdf");
+    const doc = await PDFDocument.load(await buildDocument({ xmp: null }));
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(doc.context.flateStream(
+      new Uint8Array(XMP_MAX_BYTES * 4).fill(0x20), { Type: "Metadata", Subtype: "XML" },
+    )));
+    const original = await doc.save();
+    await fs.writeFile(file, original);
+    const refusal = await refuse({ pdf_path: file, output_path: file, title: "Nope" });
+    expect(refusal).toMatch(/xmp_too_large/);
     expect((await fs.readFile(file)).equals(Buffer.from(original))).toBe(true);
   });
 
