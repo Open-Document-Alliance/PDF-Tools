@@ -136,6 +136,25 @@ describe("get_pdf_info source-bound observations", () => {
     });
   });
 
+  it("does not inflate a huge metadata stream before checking its size", async () => {
+    // 64 MiB of spaces compresses to about 64 KB. The stream is not marked as
+    // XMP, so PDF.js skips it; PDF Tools' own reader used to inflate all of
+    // it before its size cap applied.
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    doc.setTitle("Info Title");
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+      doc.context.flateStream(new Uint8Array(64 * 1024 * 1024).fill(0x20)),
+    ));
+    const file = path.join(tempDirectory, "xmp-bomb.pdf");
+    await fs.writeFile(file, await doc.save());
+    expect((await fs.stat(file)).size).toBeLessThan(1024 * 1024);
+    const result = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: file } });
+    expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+    expect(result.structuredContent.metadata.xmp.values).toEqual({});
+    expect(result.structuredContent.coverage.metadata.reason_codes).toContain("XMP_PARSE_UNAVAILABLE");
+  });
+
   it("compares Info and XMP as the same record, not as raw strings", async () => {
     // PDF.js lowercases XMP names and returns lists for dc:creator and
     // dc:subject; Info states one string. A faithful pair must agree, and a

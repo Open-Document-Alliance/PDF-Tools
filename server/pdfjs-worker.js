@@ -11,8 +11,8 @@ import {
   parentPort,
   workerData,
 } from "node:worker_threads";
-import { PDFDocument, PDFName, PDFRawStream, PDFRef, decodePDFRawStream } from "pdf-lib";
-import { decodeXmpPacket, readXmpDocumentFields } from "./xmp-metadata.js";
+import { PDFDocument, PDFName, PDFRawStream, PDFRef } from "pdf-lib";
+import { decodeXmpPacket, readXmpDocumentFields, readXmpStreamBytes } from "./xmp-metadata.js";
 import {
   analyzePdfPages,
   deriveTextIntegrityForRouting,
@@ -965,10 +965,15 @@ async function observeDocument(bytes, source, password, options) {
     // attributes (pdf:Producer="..."), which Ghostscript and others write. On
     // an unencrypted file, read the four document fields with PDF Tools' own
     // bounded XMP reader so they are not reported missing.
+    // The stream is read under a hard cap (readXmpStreamBytes), never inflated
+    // whole first, so a small file with a huge compressed "XMP" cannot
+    // exhaust memory here.
     const stream = metadataRef instanceof PDFRef ? rawDocument.context.lookup(metadataRef) : null;
     if (!rawDocument.isEncrypted && stream instanceof PDFRawStream) {
       try {
-        ownXmpFields = readXmpDocumentFields(decodeXmpPacket(decodePDFRawStream(stream).decode()));
+        ownXmpFields = readXmpDocumentFields(decodeXmpPacket(
+          readXmpStreamBytes(stream, value => rawDocument.context.lookup(value)),
+        ));
       } catch {
         ownXmpFields = null;
       }
