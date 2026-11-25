@@ -249,26 +249,72 @@ function boundedValue(value, maximumCharacters = 16_384) {
   return { value: null, truncated: true };
 }
 
-function metadataAlias(key) {
-  const aliases = {
-    Author: "author",
-    CreationDate: "creation_date",
-    Creator: "creator",
-    Keywords: "keywords",
-    ModDate: "modification_date",
-    Producer: "producer",
-    Subject: "subject",
-    Title: "title",
-    "dc:creator": "author",
-    "dc:description": "subject",
-    "dc:subject": "keywords",
-    "dc:title": "title",
-    "pdf:Producer": "producer",
-    "xmp:CreateDate": "creation_date",
-    "xmp:CreatorTool": "creator",
-    "xmp:ModifyDate": "modification_date",
-  };
-  return aliases[key] ?? null;
+// PDF.js lowercases XMP property names (pdf:producer, xmp:modifydate), so
+// XMP keys are matched without regard to case; Info keys keep their case.
+function metadataAlias(key, { xmp = false } = {}) {
+  if (xmp) {
+    const lowered = String(key).toLowerCase();
+    for (const [name, alias] of Object.entries(METADATA_ALIASES)) {
+      if (name.includes(":") && name.toLowerCase() === lowered) return alias;
+    }
+    return null;
+  }
+  return METADATA_ALIASES[key] ?? null;
+}
+
+const METADATA_ALIASES = Object.freeze({
+  Author: "author",
+  CreationDate: "creation_date",
+  Creator: "creator",
+  Keywords: "keywords",
+  ModDate: "modification_date",
+  Producer: "producer",
+  Subject: "subject",
+  Title: "title",
+  "dc:creator": "author",
+  "dc:description": "subject",
+  "dc:subject": "keywords",
+  "dc:title": "title",
+  "pdf:Keywords": "keywords",
+  "pdf:Producer": "producer",
+  "xmp:CreateDate": "creation_date",
+  "xmp:CreatorTool": "creator",
+  "xmp:ModifyDate": "modification_date",
+});
+
+/** Seconds since the epoch for an Info "D:" date or an XMP ISO date, or null. */
+function metadataInstant(value) {
+  if (typeof value !== "string") return null;
+  const info = /^D:(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?([Zz+-])?(\d{2})?'?(\d{2})?'?$/.exec(value.trim());
+  if (info) {
+    const [, y, mo = "01", d = "01", h = "00", mi = "00", se = "00", sign, oh = "00", om = "00"] = info;
+    const utc = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(se));
+    const offset = (Number(oh) * 60 + Number(om)) * 60_000 * (sign === "-" ? -1 : sign === "+" ? 1 : 0);
+    return Math.floor((utc - offset) / 1000);
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : Math.floor(parsed / 1000);
+}
+
+/**
+ * The form in which an Info value and its XMP twin are compared. XMP states
+ * authors as a list and keywords as a bag while Info states one string, and
+ * Info dates are "D:" strings while XMP's are ISO; comparing the raw forms
+ * reported a disagreement after every faithful edit.
+ */
+function comparableMetadataValue(alias, value) {
+  const terms = (input, separator) => (Array.isArray(input) ? input : [input])
+    .flatMap(item => String(item ?? "").split(separator))
+    .map(item => item.trim())
+    .filter(Boolean);
+  if (alias === "keywords") return [...new Set(terms(value, /[;,]/))].sort(compareCodePoints);
+  if (alias === "author") return terms(value, /;/);
+  if (alias === "creation_date" || alias === "modification_date") {
+    const instant = metadataInstant(Array.isArray(value) ? value[0] : value);
+    if (instant !== null) return instant;
+  }
+  if (Array.isArray(value) && value.length === 1) return value[0];
+  return value;
 }
 
 function omittedMetadataKey(key) {
@@ -315,13 +361,16 @@ export function buildMetadataObservation(sourceSha256, info, xmp, maximumCharact
     const alias = metadataAlias(key);
     if (alias) infoAliases.set(alias, value);
   }
+  // Keys are sorted, so pdf:keywords is seen after dc:subject and, being
+  // the property that mirrors Info /Keywords exactly, takes precedence.
   for (const [key, value] of Object.entries(boundedXmp.values)) {
-    const alias = metadataAlias(key);
+    const alias = metadataAlias(key, { xmp: true });
     if (alias) xmpAliases.set(alias, value);
   }
   const disagreements = [...infoAliases.keys()]
     .filter(key => xmpAliases.has(key)
-      && canonicalObservationJson(infoAliases.get(key)) !== canonicalObservationJson(xmpAliases.get(key)))
+      && canonicalObservationJson(comparableMetadataValue(key, infoAliases.get(key)))
+        !== canonicalObservationJson(comparableMetadataValue(key, xmpAliases.get(key))))
     .sort(compareCodePoints)
     .map(property => ({
       property,

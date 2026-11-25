@@ -136,6 +136,41 @@ describe("get_pdf_info source-bound observations", () => {
     });
   });
 
+  it("compares Info and XMP as the same record, not as raw strings", async () => {
+    // PDF.js lowercases XMP names and returns lists for dc:creator and
+    // dc:subject; Info states one string. A faithful pair must agree, and a
+    // real difference (Producer) must still be reported.
+    const xmp = `<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:pdf="http://ns.adobe.com/pdf/1.3/"
+  pdf:Keywords="alpha, beta">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Same Title</rdf:li></rdf:Alt></dc:title>
+<dc:creator><rdf:Seq><rdf:li>Alice Example</rdf:li><rdf:li>Bob Example</rdf:li></rdf:Seq></dc:creator>
+<dc:subject><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></dc:subject>
+<pdf:Producer>Other Producer</pdf:Producer>
+</rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>`;
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    doc.setTitle("Same Title");
+    doc.setAuthor("Alice Example; Bob Example");
+    doc.setKeywords(["alpha, beta"]);
+    doc.setProducer("Info Producer");
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+      doc.context.stream(new TextEncoder().encode(xmp), { Type: "Metadata", Subtype: "XML" }),
+    ));
+    const file = path.join(tempDirectory, "xmp-compare.pdf");
+    await fs.writeFile(file, await doc.save({ updateFieldAppearances: false }));
+    const result = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: file } });
+    expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+    const { metadata, coverage } = result.structuredContent;
+    expect(metadata.disagreements.map(entry => entry.property)).toEqual(["producer"]);
+    // pdf:Keywords is an attribute, which PDF.js does not read; PDF Tools'
+    // own XMP reader supplies it.
+    expect(metadata.xmp.values["pdf:keywords"]).toBe("alpha, beta");
+    expect(coverage.metadata.reason_codes).not.toContain("XMP_PARSE_UNAVAILABLE");
+  });
+
   it("reports page-scoped partial coverage without misreporting a collection cap", async () => {
     const result = await client.callTool({
       name: "get_pdf_info",
