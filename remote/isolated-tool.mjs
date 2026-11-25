@@ -176,11 +176,13 @@ const processDispatcher = createIsolatedDispatcher({ workerFactory: createChildT
 const threadDispatcher = createIsolatedDispatcher();
 
 /** Decides once per instance; never throws. A failed check is logged at error level. */
-export function createIsolationSelector({ check = checkChildIsolation, log = line => process.stderr.write(line) } = {}) {
+export function createIsolationSelector({ check = checkChildIsolation, log = line => process.stderr.write(line), info = line => process.stdout.write(line) } = {}) {
   let decision = null;
   return () => {
     decision ??= Promise.resolve().then(check).catch(() => ({ ok: false, reason: "boot_check_failed" })).then(result => {
       if (!result?.ok) log(`ERROR pdf-tools: process isolation unavailable (${result?.reason ?? "unknown"}); using worker threads\n`);
+      // One line per instance, so the Node major Vercel actually runs is on record.
+      info(`pdf-tools: tool isolation ${result?.ok ? "process" : "thread"} on node ${process.versions.node}\n`);
       return result?.ok ? "process" : "thread";
     });
     return decision;
