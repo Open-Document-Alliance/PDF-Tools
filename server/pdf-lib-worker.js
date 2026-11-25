@@ -75,7 +75,7 @@ import {
   recoverTrailerReferences,
   snapshotIndirectObjects,
 } from "./incremental-update.js";
-import { inspectSignatureState } from "./signature-state.js";
+import { inspectSignatureState, isFieldLocked } from "./signature-state.js";
 import {
   XmpUnsupported,
   decodeXmpPacket,
@@ -2376,14 +2376,86 @@ function formInfo(document, { strict = false } = {}) {
 }
 
 function assertMayResave(document, allowResign, noun = "modify") {
-  const signatures = detectExistingSignatures(document);
-  if (signatures.present && !allowResign) {
+  // Only a signature field with a value is a signature. An empty /Sig field
+  // is a place to sign (add_signature_field makes them), and refusing every
+  // later edit to a document nobody has signed protects nothing.
+  const signed = inspectSignatureState(document).signed.map(entry => entry.name);
+  if (signed.length > 0 && !allowResign) {
     throw new Error(
-      `This PDF already contains ${signatures.fieldNames.length} cryptographic signature field(s) `
-      + `(${signatures.fieldNames.slice(0, 3).join(", ")}${signatures.fieldNames.length > 3 ? "..." : ""}). `
+      `This PDF already contains ${signed.length} signed cryptographic signature field(s) `
+      + `(${signed.slice(0, 3).join(", ")}${signed.length > 3 ? "..." : ""}). `
       + `Saving would invalidate those signatures. Pass allow_resign=true if you intend to ${noun} a signed PDF.`,
     );
   }
+}
+
+/**
+ * Fill a form and save it. A document without a signature is rewritten as
+ * before. A signed document is filled by appending an incremental update, so
+ * every byte a signature covers stays where it was and the signature keeps
+ * verifying; ISO 32000 lets an approval signature, and a certification at
+ * DocMDP level 2 or 3, survive a form fill made that way. What it cannot
+ * survive is refused before anything changes: DocMDP level 1, a field a
+ * signature's /Lock covers, writing a signature field itself, and an
+ * encrypted signed document (an update would need the document's own keys).
+ */
+async function fillAndSave(protection, sourceBytes, fieldData) {
+  let document = await loadMutationSource(protection, sourceBytes);
+  const state = inspectSignatureState(document);
+  if (state.signed.length === 0) {
+    const expectedPageCount = document.getPageCount();
+    const expectedPageRotations = normalizedPageRotations(document);
+    const fill = fillFields(document, fieldData);
+    const bytes = await savePdfDocumentSafely(document, { expectedPageCount, expectedPageRotations });
+    return { bytes, fill, saveMode: "rewrite", signaturesKept: 0, formInfo: formInfo(document) };
+  }
+  const names = state.signed.map(entry => entry.name).join(", ");
+  if ((protection.sources.get(sourceBytes) ?? null) !== null) {
+    throw new Error(
+      `This PDF is encrypted and signed (${names}). Filling it here would rewrite the file and invalidate the `
+      + "signature, because an appended update would need the document's own encryption keys. Nothing was changed.",
+    );
+  }
+  if (state.certification === 1) {
+    throw new Error(
+      "This PDF is certified with DocMDP level 1, which permits no changes at all after signing. Nothing was changed.",
+    );
+  }
+  const signatureFields = new Set([...state.signed.map(entry => entry.name), ...state.unsigned]);
+  for (const fieldName of Object.keys(fieldData ?? {})) {
+    if (signatureFields.has(fieldName)) {
+      throw new Error(`'${fieldName}' is a signature field. Filling cannot sign a document; nothing was changed.`);
+    }
+    if (isFieldLocked(state, fieldName)) {
+      throw new Error(
+        `'${fieldName}' is locked by an existing signature (${names}), so changing it would invalidate that `
+        + "signature. Nothing was changed.",
+      );
+    }
+  }
+  // Start again from the bytes on disk: the first load rewrote Producer and
+  // ModDate, and an update must not carry changes nobody asked for.
+  document = await loadMutationSource(protection, sourceBytes, { updateMetadata: false });
+  const snapshot = snapshotIndirectObjects(document, sourceBytes);
+  const expectedPageCount = document.getPageCount();
+  const expectedPageRotations = normalizedPageRotations(document);
+  const fill = fillFields(document, fieldData);
+  if (fill.filledFields.length === 0) {
+    throw new Error(`No requested field could be filled, so nothing was appended. ${fill.errors.join(" ")}`.trim());
+  }
+  document.getForm().updateFieldAppearances();
+  document.setModificationDate(new Date());
+  const saved = await savePdfDocumentIncrementally(document, sourceBytes, snapshot, {
+    expectedPageCount,
+    expectedPageRotations,
+  });
+  return {
+    bytes: saved.bytes,
+    fill,
+    saveMode: "incremental",
+    signaturesKept: state.signed.length,
+    formInfo: formInfo(saved.verified),
+  };
 }
 
 function fillFields(document, data, { objectErrors = false } = {}) {
@@ -2400,6 +2472,12 @@ function fillFields(document, data, { objectErrors = false } = {}) {
         else field.uncheck();
       } else if (name.includes("RadioGroup")) field.select(String(value));
       else if (name.includes("Dropdown") || name.includes("OptionList")) field.select(String(value));
+      else {
+        // A signature or push-button field holds no value a fill can set.
+        // Reporting it as filled would claim a change that never happened.
+        const kind = name.includes("Signature") ? "a signature field" : "not a fillable field";
+        throw new Error(`is ${kind}, so it was not changed`);
+      }
       filledFields.push(fieldName);
     } catch (error) {
       const message = error.message?.includes("No field")
@@ -2562,29 +2640,24 @@ async function execute(request, protection) {
   } else if (["inspect_pdf_form", "inspect_import_pdf", "read_pdf_fields", "validate_pdf", "extract_to_csv"].includes(request.operation)) {
     result = await inspectFormSource(sourceBytes[0], request.sources[0], request.operation, request.password);
   } else if (["fill_pdf", "fill_with_profile"].includes(request.operation)) {
-    const document = await loadMutationSource(protection, sourceBytes[0]);
-    const expectedPageCount = document.getPageCount();
-    const expectedPageRotations = normalizedPageRotations(document);
-    const fill = fillFields(document, options.field_data);
-    outputs = [await savePdfDocumentSafely(document, {
-      expectedPageCount,
-      expectedPageRotations,
-    })];
-    result = { ...fill, form_info: formInfo(document) };
+    const filled = await fillAndSave(protection, sourceBytes[0], options.field_data);
+    outputs = [filled.bytes];
+    result = {
+      ...filled.fill,
+      save_mode: filled.saveMode,
+      signatures_kept: filled.signaturesKept,
+      form_info: filled.formInfo,
+    };
   } else if (request.operation === "bulk_fill_from_csv") {
     const rows = [];
+    let saveMode = "rewrite";
     for (const record of options.records) {
-      const document = await loadMutationSource(protection, sourceBytes[0]);
-      const expectedPageCount = document.getPageCount();
-      const expectedPageRotations = normalizedPageRotations(document);
-      const fill = fillFields(document, record);
-      outputs.push(await savePdfDocumentSafely(document, {
-        expectedPageCount,
-        expectedPageRotations,
-      }));
-      rows.push(fill);
+      const filled = await fillAndSave(protection, sourceBytes[0], record);
+      outputs.push(filled.bytes);
+      rows.push(filled.fill);
+      saveMode = filled.saveMode;
     }
-    result = { rows };
+    result = { rows, save_mode: saveMode };
   } else if (request.operation === "merge_pdfs") {
     const target = await PDFDocument.create();
     const metadata = [];

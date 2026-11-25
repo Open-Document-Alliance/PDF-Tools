@@ -252,7 +252,11 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // keywords in Info and XMP together and appends the change as an incremental
 // update by default. 65 tools; no existing tool's inputs, annotations or
 // descriptions change. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
-const TOOL_CONTRACT_SHA256 = "c97b8652634e316f85745d14c98e9e6a8cdbddc9ef6509ed9ce111b7dade66d9";
+// 2026-11-25: fill_pdf and fill_with_profile report save_mode and
+// signatures_kept, because a signed form is now filled by appending an
+// incremental update; their descriptions and bulk_fill_from_csv's say so.
+// Inputs and annotations unchanged. Replaces c97b8652634e316f85745d14c98e9e6a8cdbddc9ef6509ed9ce111b7dade66d9.
+const TOOL_CONTRACT_SHA256 = "c69e7964bf355c3aa40b2e9b5ac5153560bf99944768cdea8db62e564e871f4e";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

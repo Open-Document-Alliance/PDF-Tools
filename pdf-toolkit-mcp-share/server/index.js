@@ -606,6 +606,14 @@ import {
 } from "./helpers.js";
 import { describeOutlineReport } from "./outline-carry.js";
 
+// How a fill was saved, when it matters: a signed form is filled by appending.
+function fillSaveNotice(result) {
+  if (result.save_mode !== "incremental") return "";
+  return `\nThe form was signed, so the fill was appended as an incremental update: the ${result.signatures_kept} `
+    + "existing signature(s) still cover their original bytes and verify. A validator will report that the "
+    + "document was changed after signing (a form fill, which the signature permits).";
+}
+
 // One reply line about bookmarks, so a rebuilt output never loses one silently.
 function outlineNotice(report) {
   const line = describeOutlineReport(report);
@@ -3525,7 +3533,7 @@ async function listTools(request) {
       },
       {
         name: "fill_pdf",
-        description: "Fill a PDF form with provided data and save it. output_path may be the same as pdf_path for in-place editing; the original is backed up on the first same-path mutation. All paths must be absolute paths on the user's local machine, NOT Claude container paths (/mnt/...).",
+        description: "Fill a PDF form with provided data and save it. output_path may be the same as pdf_path for in-place editing; the original is backed up on the first same-path mutation. If the PDF is already signed, the fill is appended as an incremental update so existing signatures keep verifying; a field a signature locks, a signature field itself, and a certified PDF that permits no changes are refused. All paths must be absolute paths on the user's local machine, NOT Claude container paths (/mnt/...).",
         inputSchema: {
           type: "object",
           properties: {
@@ -3614,7 +3622,7 @@ async function listTools(request) {
       },
       {
         name: "bulk_fill_from_csv",
-        description: "Fill multiple PDFs using data from a CSV file. Output filenames must be unique. New outputs need no identity; every existing destination requires one exact entry in expected_output_identities. Any missing, stale, unrelated, or duplicate identity or any row failure aborts the whole batch.",
+        description: "Fill multiple PDFs using data from a CSV file. A signed template is filled by appending an incremental update to each copy, so its signature keeps verifying. Output filenames must be unique. New outputs need no identity; every existing destination requires one exact entry in expected_output_identities. Any missing, stale, unrelated, or duplicate identity or any row failure aborts the whole batch.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3717,7 +3725,7 @@ async function listTools(request) {
       },
       {
         name: "fill_with_profile",
-        description: "Fill a PDF using a saved profile",
+        description: "Fill a PDF using a saved profile. A signed PDF is filled by appending an incremental update, so its signatures keep verifying.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5189,7 +5197,7 @@ async function handleToolCall(request) {
           inputRecoveryBinding,
         } = recoveredInput;
         assertXfaMutationAllowed(rawPdfBytes, { forceXfa: force_xfa });
-        const { payload, backupPath, filledFields, errors } = await runPdfLibMutation({
+        const { payload, backupPath, filledFields, errors, saveNotice } = await runPdfLibMutation({
           operation: "fill_pdf",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -5207,13 +5215,19 @@ async function handleToolCall(request) {
             expectedInputSha256: sha256Bytes(rawPdfBytes),
             expectedOutputIdentity: normalizeExpectedOutputIdentity(expected_output_identity),
             inputRecoveryBinding,
-            extraPayload: { filled_fields: filledFields, fill_errors: errors },
+            extraPayload: {
+              filled_fields: filledFields,
+              fill_errors: errors,
+              save_mode: result.save_mode,
+              signatures_kept: result.signatures_kept,
+            },
           });
-          return { ...committed, filledFields, errors };
+          return { ...committed, filledFields, errors, saveNotice: fillSaveNotice(result) };
         });
         
         let message = `PDF filled successfully and saved to: ${output_path}\n`;
         message += `Fields filled: ${filledFields.length}`;
+        message += saveNotice;
         if (backupPath) {
           message += `\nOriginal backed up to: ${backupPath}`;
         }
@@ -5369,6 +5383,7 @@ async function handleToolCall(request) {
           pendingOutputs,
           expectedOutputIdentities,
         );
+        let bulkSaveMode = "rewrite";
         const results = await runPdfLibMutation({
           operation: "bulk_fill_from_csv",
           sources: [bindRecoveredMutationSource(recoveredInput)],
@@ -5379,6 +5394,7 @@ async function handleToolCall(request) {
           if (outputs.length !== pendingOutputs.length || result.rows.length !== pendingOutputs.length) {
             throw new Error("Bulk fill worker returned an incomplete batch.");
           }
+          bulkSaveMode = result.save_mode;
           if (pendingOutputs.length === 0) return [];
           const atomicEntries = pendingOutputs.map((entry, index) => ({
             ...entry,
@@ -5401,6 +5417,9 @@ async function handleToolCall(request) {
           }));
         });
 
+        const bulkSaveNotice = bulkSaveMode === "incremental"
+          ? "\nThe template was signed, so each fill was appended as an incremental update; its signature still verifies in every output."
+          : "";
         const resultLines = results.map(result => {
           const marker = result.status === "error" ? "✗" : result.status === "warning" ? "!" : "✓";
           const suffix = result.errors.length > 0 ? ` (${result.errors.length} warnings/errors)` : "";
@@ -5410,7 +5429,7 @@ async function handleToolCall(request) {
         return {
           content: [{
             type: "text",
-            text: `Bulk fill complete!\n${resultLines.join('\n')}`
+            text: `Bulk fill complete!\n${resultLines.join('\n')}${bulkSaveNotice}`
           }],
           structuredContent: {
             row_count: records.length,
@@ -5487,7 +5506,7 @@ async function handleToolCall(request) {
         const mergedData = { ...profileData, ...additional_data };
         const recoveredInput = await readPdfInputWithRecovery(resolvedPdfPath);
         const { pdfBytes: rawPdfBytes, inputRecoveryBinding } = recoveredInput;
-        const { payload, backupPath, filledFields } = await runPdfLibMutation({
+        const { payload, backupPath, filledFields, saveNotice } = await runPdfLibMutation({
           operation: "fill_with_profile",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -5506,9 +5525,11 @@ async function handleToolCall(request) {
               profile_name,
               filled_fields: result.filledFields,
               fill_errors: result.errors,
+              save_mode: result.save_mode,
+              signatures_kept: result.signatures_kept,
             },
           });
-          return { ...committed, filledFields: result.filledFields };
+          return { ...committed, filledFields: result.filledFields, saveNotice: fillSaveNotice(result) };
         });
         
         return {
@@ -5516,6 +5537,7 @@ async function handleToolCall(request) {
             type: "text",
             text:
               `PDF filled with profile '${profile_name}' and saved to: ${output_path}\nFields filled: ${filledFields.length}` +
+              saveNotice +
               (backupPath ? `\nOriginal backed up to: ${backupPath}` : "")
           }],
           structuredContent: payload,
