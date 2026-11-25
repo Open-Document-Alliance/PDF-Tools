@@ -120,6 +120,17 @@ export const REVIEWED_COMPUTED_MODULE_LOADS = Object.freeze([
       + "WebAssembly runtime from a fixed repository-relative path.",
   }),
   Object.freeze({
+    file: "remote/pdfjs-bounded.mjs",
+    count: 1,
+    kinds: Object.freeze(["dynamic-import"]),
+    fingerprints: Object.freeze([
+      "3ef3605c95487070884e7efa6d6e5872ec4a19cf2b8d0a2c3c53cccc223a2475",
+    ]),
+    reason: "Hosted service loads the pinned pdfjs-dist worker module, with bounded-decode guard "
+      + "calls added at exact, fail-closed hook points, as a data: URL built from the installed "
+      + "file; it never loads a caller-supplied module.",
+  }),
+  Object.freeze({
     file: "scripts/dev-ui-document-session-smoke.mjs",
     count: 1,
     kinds: Object.freeze(["dynamic-import"]),
