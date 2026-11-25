@@ -38,4 +38,4 @@ Remote connectors come from `REMOTE_CONNECTORS` in `scripts/build-claude-plugin.
 
 ## Not yet decided
 
-The listing needs a public GitHub repository whose tracked branch archives under 50 MiB, so it cannot share the default branch of `Open-Document-Alliance/pdf-tools-plugin` (177 MB). The plugin's `name` (`pdf-tools`) is permanent once submitted, and the icon is taken only on the first save in the portal.
+The listing needs a public GitHub repository whose tracked branch archives under 50 MiB, so it cannot share the default branch of `Open-Document-Alliance/pdf-tools-plugin` (177 MB). Once the repository is decided, build with `--marketplace <owner>/<repo>` so the README carries the `/plugin install pdf-tools --marketplace <owner>/<repo>` line `claude plugin validate` asks for; without it validate passes with that one README warning. The plugin's `name` (`pdf-tools`) is permanent once submitted, and the icon is taken only on the first save in the portal.

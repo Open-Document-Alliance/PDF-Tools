@@ -21,6 +21,7 @@ import {
   hooksConfig,
   mcpConfig,
   pluginManifest,
+  pluginReadme,
 } from "../scripts/build-claude-plugin.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -60,6 +61,16 @@ describe("Claude plugin config", () => {
   it("prepares from a SessionStart hook rooted at the plugin", () => {
     const [entry] = hooksConfig().hooks.SessionStart;
     expect(entry.hooks).toEqual([{ type: "command", command: "node \"${CLAUDE_PLUGIN_ROOT}/runtime/start.mjs\" --prepare" }]);
+  });
+
+  it("adds the marketplace install line only when the listing repository is given", () => {
+    const source = "# PDF Tools\n\nIntro.\n\n## What you get\n\nText.\n";
+    expect(pluginReadme(source)).not.toMatch(/## Install/);
+    expect(pluginReadme(source)).toMatch(/!\[PDF Tools\]\(assets\/icon\.png\)/);
+    const withInstall = pluginReadme(source, "Example-Org/example-plugins");
+    expect(withInstall).toMatch(/\/plugin install pdf-tools --marketplace Example-Org\/example-plugins/);
+    expect(withInstall.indexOf("## Install")).toBeLessThan(withInstall.indexOf("## What you get"));
+    expect(() => pluginReadme(source, "not a repo")).toThrow(/<owner>\/<repo>/);
   });
 
   it("blocks what the directory blocks", () => {

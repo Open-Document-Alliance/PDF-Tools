@@ -14,8 +14,10 @@
 // first run. npm then fetches only this machine's canvas build, which is also
 // what makes Windows and Linux arm64 work without shipping every platform.
 //
-// Usage: node scripts/build-claude-plugin.mjs [output-dir] [--no-smoke]
+// Usage: node scripts/build-claude-plugin.mjs [output-dir] [--no-smoke] [--marketplace <owner>/<repo>]
 //   default output: dist-plugin/claude-pdf-tools
+//   --marketplace adds the README's install line for the repository that
+//   lists the plugin. Leave it out until that repository is decided.
 
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -212,9 +214,37 @@ function smoke(pluginDir) {
   });
 }
 
+// The listing README: the source README with the icon under the title and,
+// once the listing repository is known, an Install section naming it.
+export function pluginReadme(source, marketplace = null) {
+  let readme = source.replace(/^# PDF Tools\n/, "# PDF Tools\n\n![PDF Tools](assets/icon.png)\n");
+  if (marketplace === null) return readme;
+  if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/.test(marketplace)) throw new Error(`--marketplace must be <owner>/<repo>, got ${marketplace}`);
+  const install = [
+    "## Install",
+    "",
+    "In Claude Code:",
+    "",
+    "```",
+    `/plugin install ${PLUGIN_NAME} --marketplace ${marketplace}`,
+    "```",
+    "",
+    "In claude.ai, the Claude apps and Cowork, add PDF Tools from the Claude directory.",
+    "",
+    "",
+  ].join("\n");
+  const at = readme.indexOf("\n## ");
+  if (at === -1) throw new Error("plugin README has no section to put Install before");
+  return `${readme.slice(0, at + 1)}${install}${readme.slice(at + 1)}`;
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  const outputDir = path.resolve(args.find(arg => !arg.startsWith("--")) || path.join(REPO_ROOT, "dist-plugin", `claude-${PLUGIN_NAME}`));
+  const marketplaceAt = args.indexOf("--marketplace");
+  const marketplace = marketplaceAt === -1 ? null : args[marketplaceAt + 1];
+  if (marketplaceAt !== -1 && !marketplace) throw new Error("--marketplace needs <owner>/<repo>");
+  const positional = args.filter((arg, index) => !arg.startsWith("--") && index !== marketplaceAt + 1);
+  const outputDir = path.resolve(positional[0] || path.join(REPO_ROOT, "dist-plugin", `claude-${PLUGIN_NAME}`));
   const version = derivePluginVersion(PACKAGE_JSON.version, { cwd: REPO_ROOT }).version;
   console.error(`[claude-plugin] building ${PLUGIN_NAME}@${version} -> ${outputDir}`);
 
@@ -247,9 +277,7 @@ async function main() {
     cpSync(path.join(CLAUDE_SOURCE, "skills", "pdf-tools", "SKILL.md"), path.join(stage, "skills", "pdf-tools", "SKILL.md"));
     mkdirSync(path.join(stage, "skills", "pdf-tools-workflow"), { recursive: true });
     cpSync(WORKFLOW_SKILL, path.join(stage, "skills", "pdf-tools-workflow", "SKILL.md"));
-    const readme = readFileSync(path.join(CLAUDE_SOURCE, "README.md"), "utf8")
-      .replace(/^# PDF Tools\n/, "# PDF Tools\n\n![PDF Tools](assets/icon.png)\n");
-    writeFileSync(path.join(stage, "README.md"), readme);
+    writeFileSync(path.join(stage, "README.md"), pluginReadme(readFileSync(path.join(CLAUDE_SOURCE, "README.md"), "utf8"), marketplace));
 
     for (const rel of walk(stage)) {
       if (lstatSync(path.join(stage, rel)).isSymbolicLink()) throw new Error(`symlink: ${rel}`);
