@@ -26,6 +26,7 @@ filesystem, such as a hosted assistant working from a link or an attachment.
 - URL: `https://mcp.opendocuments.ai/mcp`
 - Authentication: none on this public endpoint
 - Protocol revisions: as published by the server's `initialize` response
+- Skill: on 2026-07-28 connections the server also offers `skill://pdf-tools-hosted/SKILL.md`, a short guide to using these tools well
 
 ## Tools
 
@@ -95,12 +96,13 @@ documents sent to this service.
 draws a visible signature onto the page and records the signer, the time and the
 person's stated intent in the document's metadata. That is a stamp, not a
 cryptographic signature and not a certificate-backed one. PDF Tools does not
-determine the stamp's legal validity. Lumin signing is not part of this hosted
-edition.
+determine the stamp's legal validity. Lumin signing is not part of this public
+endpoint; see [Signing with Lumin](#signing-with-lumin-separate-surface-not-yet-enabled).
 
 **It does not accept passwords.** Encrypted documents are refused rather than
-decrypted, because handling a password means accepting a secret. The desktop
-extension handles encrypted files on your own machine.
+decrypted, because handling a password means accepting a secret. The local
+PDF Tools server (Claude plugin or desktop app) handles encrypted files on your
+own machine.
 
 ## Limits and refusals
 
@@ -127,7 +129,8 @@ fail on the way out even when the input arrived by URL.
 
 Two ways around it, in order of preference: pass a URL, which this service
 fetches itself, or run PDF Tools on the machine that holds the file. The
-desktop extension has no such ceiling because nothing crosses a network.
+local PDF Tools server (Claude plugin or desktop app) has no such ceiling
+because nothing crosses a network.
 
 The URL fetcher refuses anything other than `http` and `https`, refuses private,
 loopback, link-local and similar network ranges after resolving the name and
@@ -138,6 +141,20 @@ may instead return partial results when item or character budgets are reached;
 preserve its status, truncation and gap warnings. When the service cannot prove
 something, it says so: filling a form never claims the form is complete or ready
 to submit.
+
+## Signing with Lumin (separate surface, not yet enabled)
+
+A second endpoint, `https://mcp.opendocuments.ai/mcp/sign`, lets a person send a PDF for signature through [Lumin Sign](https://www.luminpdf.com/) from Claude. It is separate from the public endpoint above, which stays account-free and unchanged. Until it is enabled, every signing path answers 503. Its contract is `docs/REMOTE_SIGNING_PROFILE_2026-11-25.md`.
+
+**It still stores nothing.** Connecting to Lumin happens through OAuth, but this service keeps no accounts, sessions or token tables. The Lumin authorization travels encrypted inside the token your AI app holds, and the service opens it only for the request it arrives with. Revoke access at Lumin, and it ends.
+
+**It knows who you are only through Lumin, and only per request.** The public endpoint's "does not know who you are" property does not apply here: signing needs your Lumin authorization. Nothing associates one request with another on this service's side.
+
+**Your document leaves only when you confirm the send.** Preparing a request draws visible "sign here" boxes and shows you the recipients, the disclosure and an exact confirmation statement. Nothing is sent until you give that statement. Then this service makes one request to Lumin with the prepared PDF and the names and email addresses you listed, and Lumin emails the signers. From that point Lumin's [terms](https://www.luminpdf.com/terms-of-use/) and [privacy policy](https://www.luminpdf.com/privacy-policy/) apply to the document.
+
+**It never resends on its own.** A send is attempted once. If the outcome is unknown, check Lumin before sending again.
+
+**Logs stay content-free.** As on the public endpoint, logs carry no document bytes, text, field values, filenames or URLs, and also no tokens, codes, recipient names or email addresses.
 
 ## Fair use
 

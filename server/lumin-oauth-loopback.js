@@ -223,6 +223,47 @@ function normalizeTokenResponse(value, expectedScopes) {
   });
 }
 
+/**
+ * One Lumin token-endpoint request and its bounded, validated response.
+ * Shared by the local loopback flow and the hosted signing surface, so both
+ * send the same PDF-Tools User-Agent and apply the same response checks.
+ */
+export async function exchangeLuminToken(form, { fetchFn = globalThis.fetch, expectedScopes } = {}) {
+  if (!(form instanceof URLSearchParams) || typeof fetchFn !== "function" || !Array.isArray(expectedScopes)) {
+    throw oauthError("LUMIN_OAUTH_TOKEN_REQUEST_INVALID", "Invalid Lumin token request.");
+  }
+  let response;
+  try {
+    response = await fetchFn(LUMIN_OAUTH_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+        "user-agent": LUMIN_CLIENT_USER_AGENT,
+      },
+      body: form.toString(),
+      redirect: "error",
+    });
+  } catch {
+    throw oauthError("LUMIN_OAUTH_TOKEN_REQUEST_FAILED", "Lumin token exchange failed.");
+  }
+  if (!(response instanceof Response) || !response.ok) {
+    throw oauthError("LUMIN_OAUTH_TOKEN_REQUEST_FAILED", "Lumin token exchange failed.");
+  }
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "application/json") {
+    throw oauthError("LUMIN_OAUTH_TOKEN_RESPONSE_INVALID", "Lumin returned an invalid token response.");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(await readBoundedResponse(response));
+  } catch (error) {
+    if (error?.code === "LUMIN_OAUTH_TOKEN_RESPONSE_INVALID") throw error;
+    throw oauthError("LUMIN_OAUTH_TOKEN_RESPONSE_INVALID", "Lumin returned an invalid token response.");
+  }
+  return normalizeTokenResponse(parsed, expectedScopes);
+}
+
 export async function createLuminOAuthLoopbackSession({
   clientId,
   scopes,
@@ -392,36 +433,7 @@ export async function createLuminOAuthLoopbackSession({
       form.set("code_verifier", codeVerifier);
       form.set("grant_type", "authorization_code");
       form.set("redirect_uri", redirectUri);
-      let response;
-      try {
-        response = await fetchFn(LUMIN_OAUTH_TOKEN_ENDPOINT, {
-          method: "POST",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/x-www-form-urlencoded",
-            "user-agent": LUMIN_CLIENT_USER_AGENT,
-          },
-          body: form.toString(),
-          redirect: "error",
-        });
-      } catch {
-        throw oauthError("LUMIN_OAUTH_TOKEN_REQUEST_FAILED", "Lumin token exchange failed.");
-      }
-      if (!(response instanceof Response) || !response.ok) {
-        throw oauthError("LUMIN_OAUTH_TOKEN_REQUEST_FAILED", "Lumin token exchange failed.");
-      }
-      const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
-      if (contentType !== "application/json") {
-        throw oauthError("LUMIN_OAUTH_TOKEN_RESPONSE_INVALID", "Lumin returned an invalid token response.");
-      }
-      let parsed;
-      try {
-        parsed = JSON.parse(await readBoundedResponse(response));
-      } catch (error) {
-        if (error?.code === "LUMIN_OAUTH_TOKEN_RESPONSE_INVALID") throw error;
-        throw oauthError("LUMIN_OAUTH_TOKEN_RESPONSE_INVALID", "Lumin returned an invalid token response.");
-      }
-      return normalizeTokenResponse(parsed, validatedScopes);
+      return exchangeLuminToken(form, { fetchFn, expectedScopes: validatedScopes });
     },
     waitForCallback() {
       return callbackPromise;

@@ -1,7 +1,7 @@
 // Adapted from OpenAI's vanilla MCP Apps bridge example, not the local viewer.
 // No external scripts, storage, network requests or document text in HTML.
 export const OUTPUT_RESOURCE_URI = "ui://pdf-tools/output-v1.html";
-export const OUTPUT_TOOL_NAMES = new Set(["fill_form", "flatten_form", "apply_signature", "select_pdf_pages", "rotate_pdf_pages", "merge_pdfs"]);
+export const OUTPUT_TOOL_NAMES = new Set(["fill_form", "flatten_form", "apply_signature", "select_pdf_pages", "rotate_pdf_pages", "merge_pdfs", "prepare_lumin_request", "download_lumin_artifact"]);
 
 export function installOutputCard() {
   const status = document.getElementById("status");
