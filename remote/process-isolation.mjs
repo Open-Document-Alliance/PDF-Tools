@@ -37,6 +37,14 @@ import { fileURLToPath } from "node:url";
 export const CHILD_DATA_LIMIT_BYTES = 1536 * 1024 * 1024;
 export const CHILD_OLD_SPACE_MB = 256;
 export const CHILD_SEMI_SPACE_MB = 16;
+/**
+ * The worker path ran with a 4 MB stack; a child's main thread defaults to
+ * about 1 MB, which turns deeply nested but valid PDFs into misleading page
+ * errors. V8's limit is set just under 4 MB, so the OS stack (raised to
+ * 8 MB below, and checked by the boot probe) always has room above it.
+ */
+export const CHILD_V8_STACK_KB = 3900;
+export const CHILD_OS_STACK_KB = 8192;
 const BOOT_CHECK_TIMEOUT_MS = 10_000;
 const TERMINATION_CONFIRM_MS = 5_000;
 const ULIMIT_FAILED_EXIT = 97;
@@ -79,8 +87,8 @@ export function isMemoryExit(code, signal) {
 function spawnLimited(mode, { dataLimitBytes, env, spawnImpl = spawn }) {
   const kib = String(Math.floor(dataLimitBytes / 1024));
   return spawnImpl("/bin/sh", [
-    "-c", `ulimit -d "$0" || exit ${ULIMIT_FAILED_EXIT}; exec "$@"`, kib,
-    process.execPath, `--max-old-space-size=${CHILD_OLD_SPACE_MB}`, `--max-semi-space-size=${CHILD_SEMI_SPACE_MB}`, CHILD_ENTRY, mode,
+    "-c", `ulimit -d "$0" || exit ${ULIMIT_FAILED_EXIT}; ulimit -s ${CHILD_OS_STACK_KB} 2>/dev/null; exec "$@"`, kib,
+    process.execPath, `--max-old-space-size=${CHILD_OLD_SPACE_MB}`, `--max-semi-space-size=${CHILD_SEMI_SPACE_MB}`, `--stack-size=${CHILD_V8_STACK_KB}`, CHILD_ENTRY, mode,
   ], { stdio: ["ignore", "pipe", "pipe", "ipc"], serialization: "advanced", env });
 }
 
@@ -145,8 +153,10 @@ export function createChildToolFactory({ dataLimitBytes = CHILD_DATA_LIMIT_BYTES
 }
 
 /**
- * Boot check: a child must start under the limit, see the limit applied by the
- * kernel, and answer over IPC. Resolves { ok, reason } and never throws.
+ * Boot check: a child must start under the limit, see the limit and its stack
+ * applied by the kernel, load the tool code, run one real PDF.js read of a
+ * small built-in PDF, and answer over IPC. Resolves { ok, reason } and never
+ * throws.
  */
 export function checkChildIsolation({ dataLimitBytes = CHILD_DATA_LIMIT_BYTES, spawnImpl, timeoutMs = BOOT_CHECK_TIMEOUT_MS } = {}) {
   return new Promise(resolve => {
@@ -172,6 +182,8 @@ export function checkChildIsolation({ dataLimitBytes = CHILD_DATA_LIMIT_BYTES, s
     child.once("message", message => {
       if (message?.probe !== true) return finish({ ok: false, reason: "probe_unexpected_reply" });
       if (message.dataLimitBytes !== Math.floor(dataLimitBytes / 1024) * 1024) return finish({ ok: false, reason: "limit_not_applied" });
+      if (!(message.stackLimitBytes >= CHILD_OS_STACK_KB * 1024)) return finish({ ok: false, reason: "stack_too_small" });
+      if (message.toolCall !== "ok") return finish({ ok: false, reason: "tool_call_failed_under_limit" });
       finish({ ok: true, reason: "ok" });
     });
     child.once("exit", (code, signal) => finish({

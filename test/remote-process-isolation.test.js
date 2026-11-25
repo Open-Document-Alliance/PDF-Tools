@@ -82,11 +82,21 @@ describe("hosted child-process isolation", () => {
 
   it.runIf(linux)("bounds buffers and WebAssembly memory inside the child, and kills only the child on heap exhaustion", () => {
     const buffers = underLimit(`const p=[];try{for(let i=0;i<256;i++){const b=new Uint8Array(16<<20);b.fill(1);p.push(b)}console.log("unbounded")}catch(e){console.log(e.constructor.name, process.memoryUsage().rss)}`);
-    const [kind, rss] = buffers.stdout.trim().split(" ");
-    expect(kind).toBe("RangeError");
-    expect(Number(rss)).toBeLessThan(CHILD_DATA_LIMIT_BYTES);
+    // Node 22 and later throw RangeError at the limit; Node 20 aborts the child instead. Either way the
+    // growth stops inside the child, below the limit, and never reaches "unbounded".
+    const stoppedInside = (run, expectRss) => {
+      if (isMemoryExit(run.status, run.signal)) return;
+      const [kind, rss] = run.stdout.trim().split(" ");
+      expect(kind).toBe("RangeError");
+      if (expectRss) expect(Number(rss)).toBeLessThan(CHILD_DATA_LIMIT_BYTES);
+    };
+    stoppedInside(buffers, true);
     const wasm = underLimit(`try{const m=new WebAssembly.Memory({initial:256,maximum:65536});for(let i=0;i<64;i++){m.grow(1024);new Uint8Array(m.buffer).fill(1)}console.log("unbounded")}catch(e){console.log(e.constructor.name)}`);
-    expect(wasm.stdout.trim()).toBe("RangeError");
+    stoppedInside(wasm, false);
+    if (Number(process.versions.node.split(".")[0]) >= 22) {
+      expect(buffers.stdout.trim().split(" ")[0]).toBe("RangeError");
+      expect(wasm.stdout.trim()).toBe("RangeError");
+    }
     // Old space is left at its default here so the data limit, not the heap flag, is what stops it.
     const heap = underLimit(`const p=[];for(let i=0;i<1e6;i++)p.push(new Array(131072).fill(i));`, 768 * MiB);
     expect(isMemoryExit(heap.status, heap.signal)).toBe(true);
@@ -99,6 +109,26 @@ describe("hosted child-process isolation", () => {
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent.pages[0]).toMatchObject({ width: 310, height: 420 });
     expect(code(await dispatch("get_pdf_info", { pdf_base64: "not PDF secret" }))).toBe("INVALID_BASE64");
+  }, 60_000);
+
+  it.runIf(linux)("gives the child the worker's stack depth, so deeply nested valid PDFs still read", async () => {
+    // A valid page whose dictionary holds an array nested 5,000 deep: fine on a 4 MB stack, lost on a 1 MB one.
+    const nested = `${"[".repeat(5000)}1${"]".repeat(5000)}`;
+    const body = "BT /F1 12 Tf 72 720 Td (Deep) Tj ET";
+    const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Deep ${nested} >>`,
+      `<< /Length ${body.length} >>\nstream\n${body}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+    let pdf = "%PDF-1.7\n";
+    const offsets = objects.map((object, index) => { const at = pdf.length; pdf += `${index + 1} 0 obj\n${object}\nendobj\n`; return at; });
+    const xref = pdf.length;
+    pdf += `xref\n0 6\n0000000000 65535 f \n${offsets.map(at => `${String(at).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    const dispatch = createIsolatedDispatcher({ workerFactory: createChildToolFactory(), readRss: instanceRss });
+    const pdf_base64 = Buffer.from(pdf, "latin1").toString("base64");
+    const result = await dispatch("read_pdf_pages", { pdf_base64, start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.stringify(result.structuredContent)).toContain("Deep");
+    const rotated = await dispatch("rotate_pdf_pages", { pdf_base64, page_numbers: [1], rotation: 90 });
+    expect(rotated.isError).toBeFalsy();
   }, 60_000);
 
   it.runIf(linux)("reports a child that dies at its memory limit as MEMORY_LIMIT, and a send as outcome unknown", async () => {
