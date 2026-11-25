@@ -22,8 +22,10 @@ Rules:
 - If only `pdf-tools-hosted` is connected and the user names a file on their
   computer, say that this surface cannot reach local files and ask them to
   attach the PDF instead.
-- If the local server reports that it is installing its dependencies, tell the
-  user it is a one-time setup and retry after it finishes.
+- If the local `pdf-tools` tools are missing or failed to connect right after
+  the plugin was installed or updated, its one-time dependency install may
+  still be running. Tell the user it is a one-time setup and to reconnect PDF
+  Tools from `/mcp` (or start a new session) in a minute or two.
 - If the local server says no folders are allowed, run
   `get_allowed_directories` and give the user the exact config file path it
   reports. Only the user edits that file; never offer to widen it yourself.
@@ -32,7 +34,9 @@ Rules:
 
 Privacy, stated the same way everywhere:
 
-- Local runs keep files on the user's machine.
+- Local runs keep files on the user's machine. The one exception is a Lumin
+  signing request the user explicitly confirms, which uploads that one
+  prepared PDF to Lumin.
 - The hosted service processes each request without storing documents.
 - Content returned into the conversation follows the host's data terms.
 

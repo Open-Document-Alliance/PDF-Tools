@@ -17,12 +17,12 @@ The Claude directory stops validating a repository over 50 MiB as a GitHub archi
 
 1. The build writes `runtime/payload.json`, the SHA-256 of every payload file, and a digest of that list.
 2. On start, the launcher looks for `${CLAUDE_PLUGIN_DATA}/runtime/<digest16>/.pdf-tools-ready`.
-3. If it is missing, the launcher takes a lock, copies the payload into a staging folder, verifies every hash, runs `npm ci --omit=dev --ignore-scripts` through `node npm-cli.js` (no shell, no PATH lookup), marks it ready, renames it into place, and deletes older runtimes.
+3. If it is missing, the launcher starts a detached installer (`start.mjs --prepare-now`) and waits for it. The installer takes a lock, copies the payload into a staging folder, verifies every hash, runs `npm ci --omit=dev --ignore-scripts` through `node npm-cli.js` (no shell), checks the canvas build (below), marks it ready, renames it into place, and deletes older runtimes. Being detached, it finishes even if the host stops the launcher at its MCP startup timeout. A lock whose installer has died is taken over at once.
 4. It then starts `server/index.js` from that folder with `PLUGIN_DATA` set to the plugin data folder, so the existing folder-boundary and private-workspace logic applies unchanged.
 
-npm installs only the host's own `@napi-rs/canvas` build from the lockfile, so every platform the lockfile covers renders (including Linux arm64, which the MCPB does not ship) without the bundle carrying every binary.
+npm installs only the host's own `@napi-rs/canvas` build from the lockfile, so the bundle does not carry every binary. The launcher installs only where the build this machine loads is one of the five the Canvas archive policy in `docs/MAINTAINERS.md` reviews (macOS arm64 and x64, Linux x64 glibc, Windows arm64 and x64), the same platforms the MCPB ships. On any other platform the install stops before downloading, with a message naming the build. npm also fetches the musl build on Linux x64; it is never loaded on a glibc host, and the installer deletes it along with any other unreviewed canvas build. Widening that list is a change to the policy first, then to `REVIEWED_CANVAS` in `start.mjs`.
 
-The SessionStart hook runs `start.mjs --prepare`, which starts the install in a detached process and returns at once, so the first PDF tool call usually finds the runtime ready. Measured on silvercloud on 2026-11-25: a cold-cache install took 2.6 s and pulled about 43 MB. A home connection will take longer. If the first start outlasts the host's MCP startup timeout, reconnecting from `/mcp` after the install finishes works.
+The SessionStart hook runs `start.mjs --prepare`, which starts the install in a detached process and returns at once, so the first PDF tool call usually finds the runtime ready. Measured on a Linux x64 host on 2026-11-25: a cold-cache install took 2.6 s and pulled about 43 MB. A home connection will take longer. If the first start outlasts the host's MCP startup timeout, reconnecting from `/mcp` after the install finishes works.
 
 ## Checks
 
@@ -32,9 +32,9 @@ The SessionStart hook runs `start.mjs --prepare`, which starts the install in a 
 
 Items the directory holds for a reviewer, all expected: `server/index.js`, `server/layout-extraction.js` and `dist-ui/index.html` exceed 256 KiB, `vendor/qpdf-wasm/runtime/qpdf.wasm` is a binary, and dependencies install from a lockfile.
 
-## Adding a partner connector
+## Adding a remote connector
 
-Remote connectors come from `REMOTE_CONNECTORS` in `scripts/build-claude-plugin.mjs`. Lumin's own signing connector (`https://mcp.luminpdf.com/mcp`) would be one more entry there, with its host added to `network.hosts`, a README line, and a routing row in the `pdf-tools` skill. Add it only when Lumin agrees.
+Remote connectors come from `REMOTE_CONNECTORS` in `scripts/build-claude-plugin.mjs`. Another connector is one more entry there, with its host added to `network.hosts`, a README line, and a routing row in the `pdf-tools` skill.
 
 ## Not yet decided
 

@@ -12,7 +12,7 @@
 // (copyRuntimeSource) with package.json and package-lock.json, and
 // runtime/start.mjs installs the locked graph into ${CLAUDE_PLUGIN_DATA} on
 // first run. npm then fetches only this machine's canvas build, which is also
-// what makes Windows and Linux arm64 work without shipping every platform.
+// what lets each supported platform work without shipping every build.
 //
 // Usage: node scripts/build-claude-plugin.mjs [output-dir] [--no-smoke] [--marketplace <owner>/<repo>]
 //   default output: dist-plugin/claude-pdf-tools
@@ -49,8 +49,7 @@ export const PLUGIN_NAME = "pdf-tools";
 export const HOSTED_URL = "https://mcp.opendocuments.ai/mcp";
 
 // Remote connectors this plugin references, keyed by the server name Claude
-// shows. A partner connector (for example Lumin's own signing connector) is
-// added here, and only with that partner's agreement, so the README, the
+// shows. Another remote connector is one more entry here, so the README, the
 // .mcp.json and the tests all follow from one list.
 export const REMOTE_CONNECTORS = Object.freeze([
   Object.freeze({ name: "pdf-tools-hosted", url: HOSTED_URL, operator: "Open Document Alliance" }),
@@ -197,7 +196,8 @@ function smoke(pluginDir) {
     const timer = setTimeout(() => done(new Error(`smoke timed out.\nstderr:\n${stderr.slice(-2000)}`)), 180000);
     child.stdout.on("data", chunk => {
       stdout += chunk;
-      for (const line of stdout.split("\n")) {
+      // Only complete lines: a chunk can end part-way through a message.
+      for (const line of stdout.split("\n").slice(0, -1)) {
         if (!line.includes('"id":2')) continue;
         const message = JSON.parse(line);
         const tools = message.result?.tools ?? [];
@@ -238,13 +238,31 @@ export function pluginReadme(source, marketplace = null) {
   return `${readme.slice(0, at + 1)}${install}${readme.slice(at + 1)}`;
 }
 
+export function parseBuildArgs(args) {
+  let marketplace = null;
+  let smoke = true;
+  const positional = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--no-smoke") smoke = false;
+    else if (arg === "--marketplace") {
+      marketplace = args[index + 1];
+      if (!marketplace || marketplace.startsWith("--")) throw new Error("--marketplace needs <owner>/<repo>");
+      index += 1;
+    } else if (arg.startsWith("--")) throw new Error(`unknown option ${arg}`);
+    else positional.push(arg);
+  }
+  if (positional.length > 1) throw new Error(`expected at most one output folder, got ${positional.join(" ")}`);
+  return {
+    outputDir: path.resolve(positional[0] || path.join(REPO_ROOT, "dist-plugin", `claude-${PLUGIN_NAME}`)),
+    marketplace,
+    smoke,
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  const marketplaceAt = args.indexOf("--marketplace");
-  const marketplace = marketplaceAt === -1 ? null : args[marketplaceAt + 1];
-  if (marketplaceAt !== -1 && !marketplace) throw new Error("--marketplace needs <owner>/<repo>");
-  const positional = args.filter((arg, index) => !arg.startsWith("--") && index !== marketplaceAt + 1);
-  const outputDir = path.resolve(positional[0] || path.join(REPO_ROOT, "dist-plugin", `claude-${PLUGIN_NAME}`));
+  const { outputDir, marketplace, smoke: runSmoke } = parseBuildArgs(args);
   const version = derivePluginVersion(PACKAGE_JSON.version, { cwd: REPO_ROOT }).version;
   console.error(`[claude-plugin] building ${PLUGIN_NAME}@${version} -> ${outputDir}`);
 
@@ -291,7 +309,7 @@ async function main() {
     console.error(`[claude-plugin] ${check.files} files; payload digest ${digest.slice(0, 16)}`);
     for (const item of check.held) console.error(`[claude-plugin] held for a reviewer: ${item}`);
 
-    if (!args.includes("--no-smoke")) {
+    if (runSmoke) {
       console.error("[claude-plugin] smoke: first-run install into an empty data folder, then tools/list…");
       const result = await smoke(outputDir);
       console.error(`[claude-plugin] smoke: ${result.tools} tools listed after ${result.seconds.toFixed(1)} s (includes the install)`);

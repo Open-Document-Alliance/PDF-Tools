@@ -16,7 +16,7 @@ The `pdf-tools` skill tells Claude to use the local server for files on your com
 
 ## Privacy
 
-- **Local runs keep files on your machine.** The local server reads and writes only folders you have allowed, and does not upload files to a PDF service.
+- **Local runs keep files on your machine.** The local server reads and writes only folders you have allowed. The one exception is a Lumin signing request: when you confirm the send, `send_lumin_request` uploads that one prepared PDF to Lumin, which emails the signers you listed.
 - **The hosted connector processes each request without storing documents.** It receives only the PDF supplied for that call (an attachment, a URL, or inline bytes) and returns the result.
 - **Your Claude host's data terms apply** to any content returned into the conversation.
 
@@ -30,7 +30,7 @@ Everything below is in this folder as readable source.
 2. **SessionStart hook.** `hooks/hooks.json` runs `runtime/start.mjs --prepare` when a session starts. If the install for this version is missing, it starts that install in the background and returns at once. It does nothing else.
 3. **Local MCP server (`pdf-tools`).** `node runtime/start.mjs` starts `server/index.js` over stdio. It makes no network requests except:
    - `fetch_pdf_from_url`, which downloads a PDF from a URL you give it into an allowed folder, with redirect, size and destination limits;
-   - the optional Lumin signing tools (`*_lumin_*`), which contact Lumin (`auth.luminpdf.com`, `api.luminpdf.com`) only when you use them: to connect your Lumin account, to send a prepared PDF and the recipients you listed at the explicitly confirmed send step, and to check status and download the completed file.
+   - the optional Lumin signing tools (`*_lumin_*`), which contact Lumin (`auth.luminpdf.com`, `api.luminpdf.com`) only when you use them: to connect your Lumin account, to send a prepared PDF and the recipients you listed at the explicitly confirmed send step, and to check status and download the completed file from the link Lumin provides.
 
    For an encrypted PDF it can open a short-lived password page served only on `127.0.0.1`, so you type the password there instead of into the conversation.
 4. **Hosted MCP connector (`pdf-tools-hosted`).** `https://mcp.opendocuments.ai/mcp`, operated by Open Document Alliance. No account or API key is needed. It is contacted only when Claude calls one of its tools.
@@ -52,6 +52,7 @@ Use absolute paths only, then restart the session. A non-empty list replaces the
 ## Requirements and limits
 
 - The local server needs Node.js 20.19+ or 22.12+ with npm, and network access to the npm registry on first run.
+- The local server runs on macOS (Apple silicon and Intel), Windows (x64 and arm64) and Linux x64 with glibc: the platforms whose native rendering build PDF Tools reviews. On any other platform the first-run install stops and says so; the hosted connector still works.
 - No OCR. Scanned pages are reported as needing vision, not read as text.
 - Signatures are visible stamps, not cryptographic or legally binding signatures. Applying one requires your own words confirming intent.
 - The hosted connector reads at most 10 pages per call, takes inputs up to 25 MB and 200 pages, returns at most 3 MB inline, and refuses encrypted PDFs.

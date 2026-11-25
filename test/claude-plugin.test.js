@@ -8,7 +8,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,9 +20,11 @@ import {
   directoryCheck,
   hooksConfig,
   mcpConfig,
+  parseBuildArgs,
   pluginManifest,
   pluginReadme,
 } from "../scripts/build-claude-plugin.mjs";
+import { REVIEWED_CANVAS, acquireLock, hostCanvasPackage, npmCli, unreviewedCanvas } from "../scripts/claude-plugin/runtime/start.mjs";
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LAUNCHER = path.join(REPO_ROOT, "scripts", "claude-plugin", "runtime", "start.mjs");
@@ -73,6 +75,14 @@ describe("Claude plugin config", () => {
     expect(() => pluginReadme(source, "not a repo")).toThrow(/<owner>\/<repo>/);
   });
 
+  it("reads the output folder, --no-smoke and --marketplace in any order", () => {
+    expect(parseBuildArgs(["out", "--no-smoke"])).toMatchObject({ outputDir: path.resolve("out"), smoke: false, marketplace: null });
+    expect(parseBuildArgs(["--marketplace", "Org/repo", "out"])).toMatchObject({ outputDir: path.resolve("out"), smoke: true, marketplace: "Org/repo" });
+    expect(parseBuildArgs([]).outputDir).toMatch(/dist-plugin[\\/]claude-pdf-tools$/);
+    expect(() => parseBuildArgs(["--marketplace"])).toThrow(/needs <owner>\/<repo>/);
+    expect(() => parseBuildArgs(["--smoke-off"])).toThrow(/unknown option/);
+  });
+
   it("blocks what the directory blocks", () => {
     const dir = tempDir("claude-plugin-check-");
     writeFileSync(path.join(dir, "README.md"), "too short");
@@ -118,6 +128,63 @@ function launch(root, dataDir, args = []) {
   });
 }
 
+describe("Claude plugin launcher helpers", () => {
+  it("takes over a lock whose installer has died, and waits on a live one", () => {
+    const root = tempDir("claude-plugin-lock-");
+    const lockDir = path.join(root, ".install-lock");
+    const dead = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+    mkdirSync(lockDir);
+    writeFileSync(path.join(lockDir, "owner"), `${dead.stdout}\n`);
+    const started = Date.now();
+    acquireLock(lockDir, { waitMs: 5000 });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(readFileSync(path.join(lockDir, "owner"), "utf8").trim()).toBe(String(process.pid));
+
+    writeFileSync(path.join(lockDir, "owner"), `${process.ppid}\n`);
+    expect(() => acquireLock(lockDir, { waitMs: 600 })).toThrow(/another install still holds/);
+  });
+
+  it("names the canvas build each platform loads", () => {
+    expect(hostCanvasPackage({ platform: "darwin", arch: "arm64" })).toBe("canvas-darwin-arm64");
+    expect(hostCanvasPackage({ platform: "win32", arch: "x64" })).toBe("canvas-win32-x64-msvc");
+    expect(hostCanvasPackage({ platform: "linux", arch: "x64", glibc: true })).toBe("canvas-linux-x64-gnu");
+    expect(hostCanvasPackage({ platform: "linux", arch: "arm64", glibc: true })).toBe("canvas-linux-arm64-gnu");
+    expect(hostCanvasPackage({ platform: "linux", arch: "x64", glibc: false })).toBe("canvas-linux-x64-musl");
+    expect(REVIEWED_CANVAS).not.toContain(hostCanvasPackage({ platform: "linux", arch: "arm64", glibc: true }));
+  });
+
+  it("lists canvas builds outside the reviewed five", () => {
+    const runtime = tempDir("claude-plugin-canvas-");
+    expect(unreviewedCanvas(runtime)).toEqual([]);
+    for (const name of ["canvas", "canvas-linux-x64-gnu", "canvas-linux-arm64-gnu"]) {
+      mkdirSync(path.join(runtime, "node_modules", "@napi-rs", name), { recursive: true });
+    }
+    expect(unreviewedCanvas(runtime)).toEqual(["canvas-linux-arm64-gnu"]);
+  });
+
+  it("finds npm in a Homebrew layout and through an npm on PATH", () => {
+    const root = tempDir("claude-plugin-npm-");
+    const cellar = path.join(root, "Cellar", "node", "26.0.0");
+    const brewCli = path.join(cellar, "libexec", "lib", "node_modules", "npm", "bin", "npm-cli.js");
+    mkdirSync(path.dirname(brewCli), { recursive: true });
+    writeFileSync(brewCli, "");
+    expect(npmCli({ execPath: path.join(cellar, "bin", "node"), env: { PATH: "" } })).toBe(brewCli);
+
+    if (process.platform === "win32") return; // symlinks need extra rights on Windows
+    const otherCli = path.join(root, "elsewhere", "npm", "bin", "npm-cli.js");
+    mkdirSync(path.dirname(otherCli), { recursive: true });
+    writeFileSync(otherCli, "");
+    mkdirSync(path.join(root, "bin"));
+    symlinkSync(otherCli, path.join(root, "bin", "npm"));
+    expect(npmCli({ execPath: path.join(root, "bare", "node"), env: { PATH: path.join(root, "bin") } })).toBe(realpathOf(otherCli));
+    expect(npmCli({ execPath: path.join(root, "bare", "node"), env: { PATH: "", npm_execpath: path.join(root, "yarn.js") } })).not.toBe(path.join(root, "yarn.js"));
+  });
+});
+
+function realpathOf(file) {
+  return realpathSync(file);
+}
+
 describe("Claude plugin launcher", () => {
   it("installs into the data folder once, then starts the server with stdout clean", () => {
     const { root, digest } = stubPlugin();
@@ -145,6 +212,17 @@ describe("Claude plugin launcher", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toMatch(/payload file does not match its manifest: server\/index\.js/);
+  });
+
+  it("refuses a payload manifest whose digest does not match its file list", () => {
+    const { root } = stubPlugin();
+    const manifestFile = path.join(root, "runtime", "payload.json");
+    const manifest = JSON.parse(readFileSync(manifestFile, "utf8"));
+    writeFileSync(manifestFile, JSON.stringify({ ...manifest, digest: "0".repeat(64) }));
+    const result = launch(root, tempDir("claude-plugin-data-"));
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toMatch(/digest does not match its file list/);
   });
 
   it("installs a new runtime per payload and keeps only the previous one", () => {
