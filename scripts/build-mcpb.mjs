@@ -63,7 +63,7 @@ const MCPB_VERSION = "2.1.2";
 const FFLATE_VERSION = "0.8.3";
 const MCP_SERVER_VERSION = "2.4.0";
 const MCP_CORE_VERSION = "2.4.0";
-const MCP_V1_DEV_VERSION = "1.32.2";
+const MCP_V1_DEV_VERSION = "1.30.0";
 const PROTECTED_PDFJS_VERSION = "5.4.624";
 /*
  * Every module the production archive stages under `server/`. This is an
