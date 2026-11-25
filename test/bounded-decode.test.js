@@ -59,15 +59,19 @@ const XMP = title => `<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
 </rdf:Description></rdf:RDF></x:xmpmeta>
 <?xpacket end="w"?>`;
 
-/** Flate data that decodes to the given number of spaces, built in chunks. */
-async function deflatedSpaces(totalBytes) {
+/**
+ * Flate data that decodes to totalBytes copies of one byte, built in 1 MiB
+ * chunks so the test process never holds the decoded size.
+ */
+async function deflatedFill(totalBytes, byte) {
   const deflate = createDeflate({ level: 9 });
   const chunks = [];
   deflate.on("data", chunk => chunks.push(chunk));
   const ended = once(deflate, "end");
-  const block = Buffer.alloc(MIB, 0x20);
+  const block = Buffer.alloc(MIB, byte);
   for (let written = 0; written < totalBytes; written += block.length) {
-    if (!deflate.write(block)) await once(deflate, "drain");
+    const piece = totalBytes - written < block.length ? block.subarray(0, totalBytes - written) : block;
+    if (!deflate.write(piece)) await once(deflate, "drain");
   }
   deflate.end();
   await ended;
@@ -128,15 +132,21 @@ describe("bounded decode budget", () => {
   });
 
   it("caps pdf-lib's stream decoder", async () => {
-    const data = deflateSync(Buffer.alloc(MAX_DECODED_STREAM_BYTES + 16 * MIB, 0x20), { level: 9 });
+    // A small stream, decoded after most of the call's budget is spent, so
+    // the cap is reached without allocating anything large.
     const doc = await PDFDocument.create();
-    const stream = doc.context.stream(data, { Filter: "FlateDecode" });
+    const stream = doc.context.stream(deflateSync(Buffer.alloc(8 * MIB, 0x20)), { Filter: "FlateDecode" });
     const { decodePDFRawStream } = await import("pdf-lib");
     await withCallBudget(async () => {
+      // 378 MiB in steps under the per-stream limit, leaving 6 MiB.
+      for (let step = 0; step < 6; step += 1) guardDecodeGrowth(63 * MIB, 0);
       expect(() => decodePDFRawStream(stream).decode()).toThrow(DecodeBudgetExceeded);
       expect(decodeLimitReached()).toBe(true);
     });
-  }, 60_000);
+    await withCallBudget(async () => {
+      expect(decodePDFRawStream(stream).decode().length).toBe(8 * MIB);
+    });
+  });
 });
 
 describe("get_pdf_info metadata decoding (observe_document, in process)", () => {
@@ -145,7 +155,7 @@ describe("get_pdf_info metadata decoding (observe_document, in process)", () => 
 
   beforeAll(async () => {
     directory = await createTestTempDirectory(REPO_ROOT, "bounded-decode");
-    compressed = await deflatedSpaces(512 * MIB);
+    compressed = await deflatedFill(512 * MIB, 0x20);
   }, 60_000);
 
   afterAll(async () => {
@@ -218,7 +228,7 @@ describe("get_pdf_info metadata decoding (observe_document, in process)", () => 
 async function documentWithImage(width, height) {
   const doc = await PDFDocument.create();
   const page = doc.addPage([612, 792]);
-  const data = deflateSync(Buffer.alloc(width * height, 0xcc), { level: 9 });
+  const data = await deflatedFill(width * height, 0xcc);
   const image = doc.context.register(doc.context.stream(data, {
     Type: "XObject",
     Subtype: "Image",
@@ -300,10 +310,9 @@ describe("images over the image limit (stdio)", () => {
   it("refuses page text past the decode limit with a typed, explained error", async () => {
     const doc = await PDFDocument.create();
     const page = doc.addPage([612, 792]);
-    const body = Buffer.alloc(MAX_DECODED_STREAM_BYTES + 2 * MIB, 0x20);
-    body.write("BT ET", body.length - 6, "latin1");
+    // Spaces only: an empty content stream, decoded in full to read its text.
     page.node.set(PDFName.of("Contents"), doc.context.register(
-      doc.context.stream(deflateSync(body, { level: 9 }), { Filter: "FlateDecode" }),
+      doc.context.stream(await deflatedFill(MAX_DECODED_STREAM_BYTES + 2 * MIB, 0x20), { Filter: "FlateDecode" }),
     ));
     const file = path.join(directory, "large-content.pdf");
     await fs.writeFile(file, await doc.save());
