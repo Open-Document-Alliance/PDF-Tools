@@ -59,6 +59,31 @@ export function guardDecodeGrowth(size, current) {
   state.usedBytes += size - current;
 }
 
+/**
+ * Images are bounded per image, not per call: a scanned document is many
+ * ordinary images, each decoded and released in turn. An image over these
+ * limits is not decoded; PDF.js skips it as it skips a damaged image, and the
+ * call continues. Memory across many images is the process-memory
+ * backstop's job (isolated-tool.mjs), and these per-image limits keep any one
+ * allocation small enough for that backstop to act before the platform limit.
+ */
+export const MAX_IMAGE_PIXELS = 64 * 1024 * 1024;
+export const MAX_IMAGE_ALLOCATION_BYTES = 256 * 1024 * 1024;
+
+export class ImageTooLarge extends Error {
+  constructor() {
+    super("image exceeds the hosted limit and was not decoded");
+  }
+}
+
+export function guardImagePixels(width, height) {
+  if (!(width * height <= MAX_IMAGE_PIXELS)) throw new ImageTooLarge();
+}
+
+export function guardImageAllocation(bytes) {
+  if (!(bytes <= MAX_IMAGE_ALLOCATION_BYTES)) throw new ImageTooLarge();
+}
+
 if (!DecodeStream.prototype.__pdfToolsBounded) {
   const original = DecodeStream.prototype.ensureBuffer;
   DecodeStream.prototype.ensureBuffer = function boundedEnsureBuffer(requested) {

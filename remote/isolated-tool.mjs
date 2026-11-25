@@ -31,8 +31,8 @@ const unknownOutcome = () => failure(
  * - Above the absolute ceiling, new calls are refused before any work starts,
  *   and an idle process above it exits so the platform replaces it.
  */
-export const PROCESS_MEMORY_CEILING_BYTES = 1700 * 1024 * 1024;
-export const PROCESS_MEMORY_GROWTH_BYTES = 1100 * 1024 * 1024;
+export const PROCESS_MEMORY_CEILING_BYTES = 1500 * 1024 * 1024;
+export const PROCESS_MEMORY_GROWTH_BYTES = 900 * 1024 * 1024;
 export const MEMORY_SAMPLE_MS = 25;
 const SENSITIVE_GRACE_SAMPLES = 8;
 

@@ -279,7 +279,7 @@ describe("bounded PDF.js worker", () => {
   const source = readFileSync(require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"), "utf8");
 
   it("adds the guard to every decode growth path of the pinned build", () => {
-    expect((boundedWorkerSource(source).match(/__pdfToolsGuardDecodeGrowth/g) ?? []).length).toBe(4);
+    expect((boundedWorkerSource(source).match(/__pdfToolsGuard[A-Za-z]+\(/g) ?? []).length).toBe(5);
   });
 
   it("fails closed when the pinned source does not match exactly", () => {
@@ -312,14 +312,9 @@ describe("bounded PDF.js worker", () => {
     expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
   }, 120_000);
 
-  it("bounds JPEG decoding by the codestream's own frame size, not only the declared size", async () => {
-    // Declared 1x1, so the declared-size check passes; the frame header claims 20000x20000.
-    const jpeg = Buffer.from([
-      0xff, 0xd8,
-      0xff, 0xc0, 0x00, 0x0b, 0x08, 0x4e, 0x20, 0x4e, 0x20, 0x01, 0x01, 0x11, 0x00,
-      0xff, 0xd9,
-    ]);
-    const content = deflateSync(Buffer.from("q 100 0 0 100 0 0 cm /Im0 Do Q", "latin1"));
+  /** A one-page PDF drawing image object 5 (optionally with an /SMask object 6) over the page. */
+  function pdfWithImage(imageDict, imageData, smask = null) {
+    const content = deflateSync(Buffer.from("BT /F1 12 Tf 72 720 Td (Synthetic text) Tj ET q 100 0 0 100 0 0 cm /Im0 Do Q", "latin1"));
     const parts = [];
     const offsets = [];
     let position = 0;
@@ -327,17 +322,55 @@ describe("bounded PDF.js worker", () => {
     push("%PDF-1.7\n");
     offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
     offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
-    offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>\nendobj\n");
+    offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> /Font << /F1 7 0 R >> >> >>\nendobj\n");
     offsets[4] = position; push(`4 0 obj\n<< /Filter /FlateDecode /Length ${content.length} >>\nstream\n`); push(content); push("\nendstream\nendobj\n");
-    offsets[5] = position; push(`5 0 obj\n<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`); push(jpeg); push("\nendstream\nendobj\n");
+    offsets[5] = position; push(`5 0 obj\n<< /Type /XObject /Subtype /Image ${imageDict}${smask ? " /SMask 6 0 R" : ""} /Length ${imageData.length} >>\nstream\n`); push(imageData); push("\nendstream\nendobj\n");
+    offsets[6] = position;
+    if (smask) { push(`6 0 obj\n<< /Type /XObject /Subtype /Image ${smask.dict} /Length ${smask.data.length} >>\nstream\n`); push(smask.data); push("\nendstream\nendobj\n"); }
+    else push("6 0 obj\nnull\nendobj\n");
+    offsets[7] = position; push("7 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
     const xref = position;
-    let table = "xref\n0 6\n0000000000 65535 f \n";
-    for (let index = 1; index <= 5; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
-    push(`${table}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    let table = "xref\n0 8\n0000000000 65535 f \n";
+    for (let index = 1; index <= 7; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+    push(`${table}trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    return Buffer.concat(parts);
+  }
+
+  // A JPEG whose frame header claims 20000x20000 (and no image data).
+  const hugeFrameJpeg = Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x4e, 0x20, 0x4e, 0x20, 0x01, 0x01, 0x11, 0x00, 0xff, 0xd9]);
+
+  it("skips a JPEG whose own frame size is over the limit, without a large allocation or failing the call", async () => {
+    const pdf = pdfWithImage(`/Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode`, hugeFrameJpeg);
     const before = process.memoryUsage().arrayBuffers;
-    const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.concat(parts).toString("base64"), start_page: 1, end_page: 1 });
-    // 20000x20000 needs about 800 MB of block buffers; the guard must refuse before allocating.
-    expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
-    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(MAX_DECODED_STREAM_BYTES);
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(JSON.stringify(result.structuredContent)).toContain("Synthetic text");
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(128 * 1024 * 1024);
   }, 60_000);
+
+  it("bounds a soft mask by its own declared size", async () => {
+    const tiny = deflateSync(Buffer.alloc(64, 0x80));
+    const pdf = pdfWithImage(`/Width 8 /Height 8 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode`, tiny, {
+      dict: "/Width 16000 /Height 16000 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode",
+      data: hugeFrameJpeg,
+    });
+    const before = process.memoryUsage().arrayBuffers;
+    const result = await callTool("convert_pdf_to_markdown", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(128 * 1024 * 1024);
+  }, 60_000);
+
+  it("reads an ordinary ten-page 300 dpi scan", async () => {
+    const { createCanvas } = await import("@napi-rs/canvas");
+    const canvas = createCanvas(2550, 3300);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#f4f4f4"; context.fillRect(0, 0, 2550, 3300);
+    context.fillStyle = "#222"; context.font = "48px sans-serif"; context.fillText("Synthetic scanned page", 200, 400);
+    const jpeg = canvas.toBuffer("image/jpeg", 80);
+    const doc = await PDFDocument.create();
+    const image = await doc.embedJpg(jpeg);
+    for (let index = 0; index < 10; index++) doc.addPage([612, 792]).drawImage(image, { x: 0, y: 0, width: 612, height: 792 });
+    const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.from(await doc.save()).toString("base64"), start_page: 1, end_page: 10 });
+    expect(result.content[0].text).not.toMatch(/^(DOCUMENT_TOO_LARGE_DECODED|MEMORY_LIMIT|INTERNAL_ERROR)/);
+  }, 120_000);
 });

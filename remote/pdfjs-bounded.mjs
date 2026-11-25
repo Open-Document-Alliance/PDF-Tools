@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
-import { guardDecodeGrowth } from "./decode-budget.mjs";
+import { guardDecodeGrowth, guardImageAllocation, guardImagePixels } from "./decode-budget.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -59,7 +59,7 @@ const HOOKS = [
       "    const blocksBufferSize = 64 * blocksPerColumnForMcu * (blocksPerLineForMcu + 1);",
       "",
     ].join("\n"),
-    add: "    globalThis.__pdfToolsGuardDecodeGrowth(blocksBufferSize * 2, 0);\n",
+    add: "    globalThis.__pdfToolsGuardImageAllocation(blocksBufferSize * 2);\n",
   },
   {
     // JBIG2: the page bitmap sized from the page information segment.
@@ -69,21 +69,24 @@ const HOOKS = [
       "    const rowSize = info.width + 7 >> 3;",
       "",
     ].join("\n"),
-    add: "    globalThis.__pdfToolsGuardDecodeGrowth(rowSize * info.height, 0);\n",
+    add: "    globalThis.__pdfToolsGuardImageAllocation(rowSize * info.height);\n",
+  },
+  {
+    // Every image, soft mask and mask: after PDF.js settles its dimensions
+    // (preferring the image data's own size over the dictionary's).
+    after: [
+      "    this.width = width;",
+      "    this.height = height;",
+      "    this.interpolate = dict.get(\"I\", \"Interpolate\");",
+      "",
+    ].join("\n"),
+    add: "    globalThis.__pdfToolsGuardImagePixels(width, height);\n",
   },
 ];
 
-/**
- * Images larger than this many pixels (by their declared size) are skipped by
- * PDF.js rather than decoded. Text extraction does not need image pixels.
- * JPX decodes inside WebAssembly, so beyond this check it is bounded only by
- * the process-memory backstop.
- */
-export const MAX_IMAGE_PIXELS = 16 * 1024 * 1024;
-
-/** getDocument options every hosted PDF.js call uses. */
+/** getDocument options every hosted PDF.js call uses: no parser warnings carrying document values into logs. */
 export function boundedDocumentOptions(options) {
-  return { ...options, verbosity: 0, maxImageSize: MAX_IMAGE_PIXELS };
+  return { ...options, verbosity: 0 };
 }
 
 export class BoundedPdfjsUnavailable extends Error {}
@@ -105,6 +108,8 @@ let loading = null;
 export function loadBoundedPdfjs() {
   loading ??= (async () => {
     globalThis.__pdfToolsGuardDecodeGrowth = guardDecodeGrowth;
+    globalThis.__pdfToolsGuardImageAllocation = guardImageAllocation;
+    globalThis.__pdfToolsGuardImagePixels = guardImagePixels;
     if (globalThis.pdfjsWorker && !globalThis.pdfjsWorker.__pdfToolsBounded) {
       // An unbounded worker is already registered in this thread; do not run.
       throw new BoundedPdfjsUnavailable("an unbounded PDF.js worker is already loaded");
