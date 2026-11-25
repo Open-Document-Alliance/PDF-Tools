@@ -11,7 +11,8 @@ import {
   parentPort,
   workerData,
 } from "node:worker_threads";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, PDFName, PDFRawStream, PDFRef } from "pdf-lib";
+import { decodeXmpPacket, readXmpDocumentFields, readXmpStreamBytes } from "./xmp-metadata.js";
 import {
   analyzePdfPages,
   deriveTextIntegrityForRouting,
@@ -946,6 +947,8 @@ function fieldRows(fieldObjects) {
 
 async function observeDocument(bytes, source, password, options) {
   let rawPages = null;
+  let hasXmpStream = null;
+  let ownXmpFields = null;
   const coverageReasons = {};
   const addCoverageReason = (channel, reason) => {
     coverageReasons[channel] = [...(coverageReasons[channel] ?? []), reason];
@@ -956,6 +959,25 @@ async function observeDocument(bytes, source, password, options) {
       updateMetadata: false,
     });
     rawPages = rawDocument.getPages();
+    const metadataRef = rawDocument.catalog.get(PDFName.of("Metadata"));
+    hasXmpStream = metadataRef !== undefined;
+    // PDF.js reads XMP properties stated as elements but not those stated as
+    // attributes (pdf:Producer="..."), which Ghostscript and others write. On
+    // an unencrypted file, read the four document fields with PDF Tools' own
+    // bounded XMP reader so they are not reported missing.
+    // The stream is read under a hard cap (readXmpStreamBytes), never inflated
+    // whole first, so a small file with a huge compressed "XMP" cannot
+    // exhaust memory here.
+    const stream = metadataRef instanceof PDFRef ? rawDocument.context.lookup(metadataRef) : null;
+    if (!rawDocument.isEncrypted && stream instanceof PDFRawStream) {
+      try {
+        ownXmpFields = readXmpDocumentFields(decodeXmpPacket(
+          readXmpStreamBytes(stream, value => rawDocument.context.lookup(value)),
+        ));
+      } catch {
+        ownXmpFields = null;
+      }
+    }
   } catch {
     addCoverageReason("pages", "RAW_PAGE_GEOMETRY_UNAVAILABLE");
   }
@@ -1065,12 +1087,37 @@ async function observeDocument(bytes, source, password, options) {
 
     let info = {};
     let xmp = {};
+    let metadataReadFailed = false;
     try {
       const rawMetadata = await document.getMetadata();
       info = rawMetadata?.info ?? {};
-      xmp = rawMetadata?.metadata?.getAll?.() ?? {};
+      // PDF.js 5.4 exposes parsed XMP as an iterable of [name, value]; it has
+      // no getAll(). Reading getAll() returned nothing for every document, so
+      // XMP was reported as an empty record with no gap.
+      const parsed = rawMetadata?.metadata;
+      xmp = parsed && typeof parsed[Symbol.iterator] === "function" ? Object.fromEntries(parsed) : {};
     } catch {
+      metadataReadFailed = true;
       addCoverageReason("metadata", "METADATA_PARSE_UNAVAILABLE");
+    }
+    if (ownXmpFields) {
+      const names = { title: "dc:title", author: "dc:creator", subject: "dc:description", keywords: "pdf:keywords" };
+      for (const [field, name] of Object.entries(names)) {
+        const observed = ownXmpFields[field];
+        // PDF.js joins every rdf:Alt entry into one string, so a title kept in
+        // several languages reads as "TitleTitre". PDF Tools' reader takes the
+        // x-default entry, and is preferred for the two rdf:Alt fields.
+        const alt = field === "title" || field === "subject";
+        if (observed?.state !== "value" || (Object.hasOwn(xmp, name) && !alt)) continue;
+        xmp[name] = field === "author" ? observed.value.split(";").map(item => item.trim()).filter(Boolean) : observed.value;
+      }
+    }
+    // A packet that is present but yields nothing (PDF.js could not parse it,
+    // and neither could PDF Tools' reader) is a coverage gap, not proof the
+    // document has no XMP metadata. When getMetadata itself failed, that
+    // reason already says so.
+    if (hasXmpStream && !metadataReadFailed && Object.keys(xmp).length === 0) {
+      addCoverageReason("metadata", "XMP_PARSE_UNAVAILABLE");
     }
     const metadata = buildMetadataObservation(
       source.sha256,

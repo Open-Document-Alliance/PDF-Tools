@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -92,6 +93,124 @@ describe("get_pdf_info source-bound observations", () => {
     expect(after.mtimeMs).toBe(before.mtimeMs);
     expect(after.size).toBe(before.size);
   }, 30_000);
+
+  it("reads XMP Alt and Seq properties, and reports a packet it cannot read as a gap", async () => {
+    // PDF.js 5.4 has no Metadata.getAll(); reading it returned no XMP for
+    // every document, silently.
+    const xmp = `<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">XMP Title</rdf:li></rdf:Alt></dc:title>
+<dc:creator><rdf:Seq><rdf:li>Example Corp Records</rdf:li></rdf:Seq></dc:creator>
+</rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>`;
+    const build = async packet => {
+      const doc = await PDFDocument.create();
+      doc.addPage([200, 200]);
+      doc.setTitle("Info Title");
+      doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+        doc.context.stream(new TextEncoder().encode(packet), { Type: "Metadata", Subtype: "XML" }),
+      ));
+      return doc.save();
+    };
+    const readable = path.join(tempDirectory, "xmp-readable.pdf");
+    const unreadable = path.join(tempDirectory, "xmp-unreadable.pdf");
+    await fs.writeFile(readable, await build(xmp));
+    await fs.writeFile(unreadable, await build("this is not an XMP packet <<<"));
+
+    const good = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: readable } });
+    expect(good.isError, JSON.stringify(good.content)).toBeFalsy();
+    expect(validateStructuredToolResult("get_pdf_info", good).isError).toBeFalsy();
+    expect(good.structuredContent.metadata.xmp.values).toMatchObject({
+      "dc:title": "XMP Title",
+      "dc:creator": ["Example Corp Records"],
+    });
+    expect(good.structuredContent.metadata.disagreements.map(entry => entry.property)).toContain("title");
+    expect(good.structuredContent.coverage.metadata.reason_codes).not.toContain("XMP_PARSE_UNAVAILABLE");
+
+    const bad = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: unreadable } });
+    expect(bad.isError, JSON.stringify(bad.content)).toBeFalsy();
+    expect(bad.structuredContent.metadata.xmp.values).toEqual({});
+    expect(bad.structuredContent.coverage.metadata).toMatchObject({
+      status: "partial",
+      reason_codes: ["XMP_PARSE_UNAVAILABLE"],
+    });
+  });
+
+  it("reads the default entry of a title kept in several languages", async () => {
+    const xmp = `<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Annual Report</rdf:li><rdf:li xml:lang="fr">Rapport annuel</rdf:li></rdf:Alt></dc:title>
+</rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>`;
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    doc.setTitle("Annual Report");
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+      doc.context.stream(new TextEncoder().encode(xmp), { Type: "Metadata", Subtype: "XML" }),
+    ));
+    const file = path.join(tempDirectory, "xmp-languages.pdf");
+    await fs.writeFile(file, await doc.save());
+    const result = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: file } });
+    expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+    expect(result.structuredContent.metadata.xmp.values["dc:title"]).toBe("Annual Report");
+    expect(result.structuredContent.metadata.disagreements.map(entry => entry.property)).not.toContain("title");
+  });
+
+  it("does not inflate a huge metadata stream before checking its size", async () => {
+    // 8 MiB of spaces, past the 4 MiB XMP cap, compresses to a few KB. The
+    // stream is not marked as XMP, so PDF.js skips it; PDF Tools' own reader
+    // used to inflate all of it before its size cap applied.
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    doc.setTitle("Info Title");
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+      doc.context.stream(deflateSync(Buffer.alloc(8 * 1024 * 1024, 0x20)), { Filter: "FlateDecode" }),
+    ));
+    const file = path.join(tempDirectory, "xmp-bomb.pdf");
+    await fs.writeFile(file, await doc.save());
+    expect((await fs.stat(file)).size).toBeLessThan(1024 * 1024);
+    const result = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: file } });
+    expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+    expect(result.structuredContent.metadata.xmp.values).toEqual({});
+    expect(result.structuredContent.coverage.metadata.reason_codes).toContain("XMP_PARSE_UNAVAILABLE");
+  });
+
+  it("compares Info and XMP as the same record, not as raw strings", async () => {
+    // PDF.js lowercases XMP names and returns lists for dc:creator and
+    // dc:subject; Info states one string. A faithful pair must agree, and a
+    // real difference (Producer) must still be reported.
+    const xmp = `<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:pdf="http://ns.adobe.com/pdf/1.3/"
+  pdf:Keywords="alpha, beta">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Same Title</rdf:li></rdf:Alt></dc:title>
+<dc:creator><rdf:Seq><rdf:li>Alice Example</rdf:li><rdf:li>Bob Example</rdf:li></rdf:Seq></dc:creator>
+<dc:subject><rdf:Bag><rdf:li>alpha</rdf:li><rdf:li>beta</rdf:li></rdf:Bag></dc:subject>
+<pdf:Producer>Other Producer</pdf:Producer>
+</rdf:Description></rdf:RDF></x:xmpmeta>
+<?xpacket end="w"?>`;
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    doc.setTitle("Same Title");
+    doc.setAuthor("Alice Example; Bob Example");
+    doc.setKeywords(["alpha, beta"]);
+    doc.setProducer("Info Producer");
+    doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
+      doc.context.stream(new TextEncoder().encode(xmp), { Type: "Metadata", Subtype: "XML" }),
+    ));
+    const file = path.join(tempDirectory, "xmp-compare.pdf");
+    await fs.writeFile(file, await doc.save({ updateFieldAppearances: false }));
+    const result = await client.callTool({ name: "get_pdf_info", arguments: { pdf_path: file } });
+    expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+    const { metadata, coverage } = result.structuredContent;
+    expect(metadata.disagreements.map(entry => entry.property)).toEqual(["producer"]);
+    // pdf:Keywords is an attribute, which PDF.js does not read; PDF Tools'
+    // own XMP reader supplies it.
+    expect(metadata.xmp.values["pdf:keywords"]).toBe("alpha, beta");
+    expect(coverage.metadata.reason_codes).not.toContain("XMP_PARSE_UNAVAILABLE");
+  });
 
   it("reports page-scoped partial coverage without misreporting a collection cap", async () => {
     const result = await client.callTool({

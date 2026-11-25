@@ -109,8 +109,8 @@
     {
       "role": "pdf_observations_module",
       "path": "server/pdf-observations.js",
-      "bytes": 43255,
-      "sha256": "7eca5efe0658f3f5512567d4da0aa193bebea470a441db5269d5369f24d582d2"
+      "bytes": 45660,
+      "sha256": "56000d2cb38ce5dd608063d635fdd7efafd597241f592a112c5b398b05315a02"
     },
     {
       "role": "pdfjs_package",
@@ -131,7 +131,7 @@
       "sha256": "ef40501b2afbe4cd2adfa80480344783bbec1a00e8e9850086a5d044231d1f53"
     }
   ],
-  "validator_source_set_sha256": "a0bf8d24bcee182460e1f877e145a0492127f4f89675988d53f69b6f865438a1",
+  "validator_source_set_sha256": "1822b6ce0f0ba19b9a7becde76f8b9b66f4ec80e23b5a7e94136803694a38ccd",
   "pdfjs_version": "5.4.624",
   "generation_contract": {
     "source_path": "source.pdf",

@@ -291,6 +291,8 @@ regenerated with `node scripts/eval-capture-tool-contracts.mjs`.
 
 `apply_text` no longer writes its audit line into the document's Keywords: those are the document's own search terms, and every stamp used to change them. `record_audit_in_keywords: true` restores the old behaviour for a caller who wants it. Like `add_signature_field`, it is appended as an incremental update when the source is not encrypted. `apply_signature` still records its audit trail in Keywords, which is part of the human-intent record for signatures (see Signature Architecture). Regression guard: `test/apply-text-keywords.test.js`.
 
+`get_pdf_info` reads XMP through PDF.js's metadata iterator. It used to call a `getAll()` that PDF.js 5.4 does not have, so every document's XMP came back as an empty record with no gap. A catalog `/Metadata` stream that yields nothing is now reported as the metadata coverage reason `XMP_PARSE_UNAVAILABLE` rather than as a document without XMP. Regression guard: `test/get-pdf-info.test.js`.
+
 ## Development Commands
 
 ### Build and Package
