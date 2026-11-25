@@ -42,6 +42,9 @@ const storage = new AsyncLocalStorage();
  * canvas limit); it never raises the limit.
  */
 export function withCallBudget(fn, { maxImagePixels = MAX_IMAGE_PIXELS } = {}) {
+  if (typeof maxImagePixels !== "number" || !Number.isFinite(maxImagePixels) || maxImagePixels <= 0) {
+    throw new TypeError("maxImagePixels must be a positive finite number.");
+  }
   return storage.run({
     usedBytes: 0,
     exceeded: false,
@@ -59,11 +62,21 @@ export function decodeLimitReached() {
  * The shared growth check for both decoders: a buffer about to grow from
  * `current` to `size` bytes. Throws DecodeBudgetExceeded over a limit.
  */
+// Limits reached outside any call budget. Nothing can read decodeLimitReached()
+// for those, so a code path that forgot withCallBudget would lose the signal;
+// tests assert this stays 0 for the tool paths.
+let unscopedLimitHits = 0;
+
+export function unscopedDecodeLimitHits() {
+  return unscopedLimitHits;
+}
+
 export function guardDecodeGrowth(size, current) {
   if (size <= current) return;
   const state = storage.getStore();
   if (size > MAX_DECODED_STREAM_BYTES || (state && state.usedBytes + (size - current) > MAX_DECODED_CALL_BYTES)) {
     if (state) state.exceeded = true;
+    else unscopedLimitHits += 1;
     throw new DecodeBudgetExceeded();
   }
   if (state) state.usedBytes += size - current;

@@ -30,6 +30,7 @@ import {
   MAX_DECODED_STREAM_BYTES,
   decodeLimitReached,
   guardDecodeGrowth,
+  unscopedDecodeLimitHits,
   withCallBudget,
 } from "../server/decode-budget.js";
 import { BoundedPdfjsUnavailable, boundedWorkerSource } from "../server/pdfjs-bounded.js";
@@ -123,12 +124,22 @@ describe("bounded decode budget", () => {
     await withCallBudget(async () => expect(decodeLimitReached()).toBe(false));
   });
 
+  it("accepts only a positive finite image limit for a call", () => {
+    for (const maxImagePixels of [Number.NaN, 0, -1, Infinity, "16"]) {
+      expect(() => withCallBudget(() => {}, { maxImagePixels })).toThrow(TypeError);
+    }
+    expect(() => withCallBudget(() => {}, { maxImagePixels: 16 * MIB })).not.toThrow();
+  });
+
   it("does not accumulate one budget across work outside a call", () => {
     // A long-running local server decodes far more than one call's budget
     // over its lifetime; only the per-stream limit applies outside a call.
     for (let index = 0; index < 16; index += 1) guardDecodeGrowth(64 * MIB, 0);
+    const before = unscopedDecodeLimitHits();
     expect(() => guardDecodeGrowth(MAX_DECODED_STREAM_BYTES + 1, 0)).toThrow(DecodeBudgetExceeded);
     expect(decodeLimitReached()).toBe(false);
+    // Counted, so a tool path missing its budget shows up in the tests.
+    expect(unscopedDecodeLimitHits()).toBe(before + 1);
   });
 
   it("caps pdf-lib's stream decoder", async () => {
@@ -171,6 +182,8 @@ describe("get_pdf_info metadata decoding (observe_document, in process)", () => 
     expect(result.reason_codes).toContain("METADATA_STREAM_UNBOUNDED");
     expect(result.info).toMatchObject({ Title: "Kept Title" });
     expect(result.xmp).toEqual({});
+    // The limit was reached inside the operation's budget, not outside one.
+    expect(result.unscoped_limit_hits).toBe(0);
     expect(result.max_rss_bytes).toBeLessThan(MAX_DECODED_STREAM_BYTES + 384 * MIB);
   }, 120_000);
 

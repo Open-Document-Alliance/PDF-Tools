@@ -7,6 +7,7 @@
 import path from "node:path";
 import { hashBoundedPdfFileSafely } from "../../server/bounded-pdf-file.js";
 import { createPdfjsSubprocessRequest, runPdfjsSubprocess } from "../../server/pdfjs-subprocess.js";
+import { unscopedDecodeLimitHits } from "../../server/decode-budget.js";
 
 const file = path.resolve(process.argv[2]);
 const sourceFile = await hashBoundedPdfFileSafely(file, 250 * 1024 * 1024, {
@@ -29,5 +30,6 @@ process.stdout.write(JSON.stringify({
   info: result.metadata.info.values,
   xmp: result.metadata.xmp.values,
   max_rss_bytes: process.resourceUsage().maxRSS * 1024,
+  unscoped_limit_hits: unscopedDecodeLimitHits(),
 }));
 process.exit(0);
