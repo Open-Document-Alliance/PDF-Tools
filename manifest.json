@@ -219,7 +219,7 @@
     },
     {
       "name": "add_signature_field",
-      "description": "Draw a visible 'Sign here' placeholder box on a PDF page (marks location only; does NOT sign)"
+      "description": "Add an unsigned signature form field with a visible 'Sign here' box, ready for a signing app (does NOT sign)"
     },
     {
       "name": "apply_signature",
