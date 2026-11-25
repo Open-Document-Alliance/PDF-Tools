@@ -1462,7 +1462,12 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     recoverable: { const: false },
   }),
   read_pdf_fields: activeDocument(),
-  fill_pdf: activeDocument({ filled_fields: stringArray, fill_errors: stringArray }),
+  fill_pdf: activeDocument({
+    filled_fields: stringArray,
+    fill_errors: stringArray,
+    save_mode: enumString(["incremental", "rewrite"]),
+    signatures_kept: integer,
+  }),
   set_pdf_metadata: activeDocument({
     save_mode: enumString(["incremental", "rewrite"]),
     appended_objects: integer,
@@ -1489,6 +1494,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     profile_name: string,
     filled_fields: stringArray,
     fill_errors: stringArray,
+    save_mode: enumString(["incremental", "rewrite"]),
+    signatures_kept: integer,
   }),
   extract_to_csv: object({
     output_csv: string,

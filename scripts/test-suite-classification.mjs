@@ -89,6 +89,7 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
   "test/mutation-input-limits.test.js",
   "test/outline-carry.test.js",
   "test/set-pdf-metadata.test.js",
+  "test/signed-fill.test.js",
   "test/path-handler-toctou.test.js",
   "test/pdfjs-worker-contract.test.js",
   "test/plugin-data-config.test.js",

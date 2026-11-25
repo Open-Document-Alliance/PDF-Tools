@@ -252,12 +252,19 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // keywords in Info and XMP together and appends the change as an incremental
 // update by default. 65 tools; no existing tool's inputs, annotations or
 // descriptions change. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+// 2026-11-25: fill_pdf and fill_with_profile report save_mode and
+// signatures_kept, because a signed form is now filled by appending an
+// incremental update; their descriptions and bulk_fill_from_csv's say so.
+// Inputs and annotations unchanged. Replaces c97b8652634e316f85745d14c98e9e6a8cdbddc9ef6509ed9ce111b7dade66d9.
 // 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
 // page_labels ("positional" by default, or "follow_pages") and report
 // page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+// 2026-11-25: the fill descriptions say a signed form's signed bytes are not
+// changed, rather than claiming the signatures verify, which nothing checks.
+// Inputs, outputs and annotations unchanged. Replaces 2e825d078f7d9a8e9bf63dbd2f3f3e4ef9ee5f2461fed7d3c757871de5b7833d.
 // 2026-11-25: set_pdf_metadata is not idempotent (each call appends a
-// revision), so idempotentHint is false. Replaces f8951febb6f6123ced9fc3b5dfff83ca624a7bc96ae123dab046ff963aa87d05.
-const TOOL_CONTRACT_SHA256 = "a541bd30be3bbf20ece76dc76c70f72bdbf21bbe6983dbc959a22a5257973378";
+// revision), so idempotentHint is false. Replaces 68a424352fcd5443ce94d5896011197e7f94a2760a0b883dd50c071862e9da70.
+const TOOL_CONTRACT_SHA256 = "bf8e3cd8255a285cc26f3d4e2d4e6c995002167ef7cd1c150d0b35c206d64466";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

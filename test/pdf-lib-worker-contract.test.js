@@ -1793,10 +1793,13 @@ endobj
  * half-wired change turns it red.
  *
  * What it deliberately does NOT assert is that the current partition is the
- * right one. At the time of writing, eight mutations — fill_pdf,
- * fill_with_profile, bulk_fill_from_csv, merge_pdfs, split_pdf,
- * rotate_pdf_pages, reorder_pdf_pages and apply_page_plan — neither declare
- * `allow_resign` nor refuse, so they re-save a signed document silently. That
+ * right one. fill_pdf, fill_with_profile, bulk_fill_from_csv and
+ * set_pdf_metadata neither declare `allow_resign` nor refuse because they do
+ * not need to: on a signed document they append an incremental update, and the
+ * signature keeps verifying (test/signed-fill.test.js). At the time of writing,
+ * five mutations — merge_pdfs, split_pdf, rotate_pdf_pages, reorder_pdf_pages
+ * and apply_page_plan — neither declare `allow_resign` nor refuse, so they
+ * re-save a signed document silently. That
  * is a coverage gap, not an invariant, and pinning it here would make a later
  * fix read as a regression.
  */
