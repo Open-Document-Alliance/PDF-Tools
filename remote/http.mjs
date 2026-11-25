@@ -15,6 +15,7 @@ import { createMcpHandler } from "@modelcontextprotocol/server";
 
 import { createRemoteServer } from "./server.mjs";
 import { callToolIsolated } from "./isolated-tool.mjs";
+import { trackRequest } from "./inflight.mjs";
 
 export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a third
 
@@ -35,7 +36,7 @@ const handler = createMcpHandler(({ era }) => createRemoteServer({ dispatchTool:
 });
 
 export async function handleMcpFetch(request) {
-  return handler.fetch(request);
+  return trackRequest(() => handler.fetch(request));
 }
 
 /** Node http request to a Web Request, with the body capped before it is read. */

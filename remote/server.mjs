@@ -270,7 +270,7 @@ const TOOLS = [
       const bytes = await resolveBytes(args);
       const document = await loadDocument(bytes);
       // PDF.js decodes these again with its own decoders; check them under the cap first.
-      predecodeForText(document, document.getPageIndices().map(index => index + 1));
+      predecodeForText(document);
       const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
       const zones = await detectSignatureZones({
         pdfDoc: document,

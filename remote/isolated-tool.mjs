@@ -1,5 +1,6 @@
 /** Wall-clock termination for hosted fetch/parser/mutation work, not an OS sandbox. */
 import { Worker } from "node:worker_threads";
+import { requestsInFlight } from "./inflight.mjs";
 
 export const TOOL_DEADLINE_MS = 45_000;
 export const MAX_ACTIVE_TOOL_WORKERS = 2;
@@ -44,6 +45,7 @@ export function createIsolatedDispatcher({
   sampleMs = MEMORY_SAMPLE_MS,
   readRss = () => process.memoryUsage.rss(),
   recycle = () => process.exit(0),
+  busy = () => requestsInFlight() > 0,
 } = {}) {
   let active = 0;
   const running = new Set();
@@ -61,8 +63,10 @@ export function createIsolatedDispatcher({
       const rss = safeRss();
       if (!over(rss)) { overSamples = 0; return; }
       overSamples++;
-      const ordinary = [...running].filter(entry => !entry.sensitive);
+      const ordinary = [...running].filter(entry => !entry.sensitive && !entry.stopping);
       if (ordinary.length) { for (const entry of ordinary) entry.stop(); return; }
+      // Wait for stopped workers to be gone before judging what remains.
+      if ([...running].some(entry => entry.stopping)) return;
       if (overSamples > SENSITIVE_GRACE_SAMPLES) for (const entry of running) entry.stop();
     }, sampleMs);
     watchdog.unref?.();
@@ -73,15 +77,17 @@ export function createIsolatedDispatcher({
     watchdog = null;
     // Memory a stopped worker held may stay mapped. If the idle process is
     // still above the ceiling, let the platform replace it.
-    if (safeRss() > memoryCeilingBytes) {
-      const timer = setTimeout(() => { if (active === 0 && safeRss() > memoryCeilingBytes) recycle(); }, 1000);
+    const admissionRss = safeRss();
+    if (admissionRss > memoryCeilingBytes || (watchdog && admissionRss - baseline > memoryGrowthBytes)) {
+      const timer = setTimeout(() => { if (active === 0 && !busy() && safeRss() > memoryCeilingBytes) recycle(); }, 1000);
       timer.unref?.();
     }
   };
   return async (name, args = {}, { signal, lumin } = {}) => {
     if (signal?.aborted) return failure("CANCELLED", "The document operation was cancelled before it started.");
     if (active >= maxWorkers) return failure("SERVICE_BUSY", "This service is busy. No document work was started.");
-    if (safeRss() > memoryCeilingBytes) {
+    const admissionRss = safeRss();
+    if (admissionRss > memoryCeilingBytes || (watchdog && admissionRss - baseline > memoryGrowthBytes)) {
       return OUTCOME_SENSITIVE_TOOLS.has(name)
         ? failure("SEND_NOT_STARTED", "This service is short of memory right now, so nothing was sent to Lumin. Sending again in a moment is safe.")
         : failure("SERVICE_BUSY", "This service is short of memory right now. No document work was started; try again in a moment.");
@@ -104,7 +110,20 @@ export function createIsolatedDispatcher({
           resolve(result);
         };
         const sensitive = OUTCOME_SENSITIVE_TOOLS.has(name);
-        entry = { sensitive, stop: () => { void finish(sensitive ? unknownOutcome() : memoryFailure()); } };
+        entry = {
+          sensitive,
+          stopping: false,
+          stop: () => {
+            if (entry.stopping) return;
+            entry.stopping = true;
+            void finish(sensitive ? unknownOutcome() : memoryFailure()).then(() => {
+              // Memory a stopped worker held may stay mapped; measure the
+              // remaining calls from here so it is not counted against them.
+              baseline = safeRss();
+              overSamples = 0;
+            });
+          },
+        };
         running.add(entry);
         startWatchdog();
         timer = setTimeout(() => { void finish(sensitive ? unknownOutcome() : failure("PROCESSING_TIMEOUT", "That operation exceeded the hosted processing time limit.")); }, deadlineMs);

@@ -85,6 +85,38 @@ function pdfWithPageContent(decodedBytes) {
   return Buffer.concat(parts);
 }
 
+
+/** One page plus extra stream objects (dict text, decoded size or raw bytes), unreferenced or referenced by the page. */
+function pdfWithStreams({ contents = null, extra = [] }) {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]${contents ? " /Contents 4 0 R" : ""} >>`,
+  ];
+  const streams = [];
+  if (contents) streams.push(contents);
+  streams.push(...extra);
+  const parts = [];
+  const offsets = [];
+  let position = 0;
+  const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+  push("%PDF-1.7\n");
+  objects.forEach((text, index) => { offsets[index + 1] = position; push(`${index + 1} 0 obj\n${text}\nendobj\n`); });
+  streams.forEach((stream, index) => {
+    const number = objects.length + index + 1;
+    const data = stream.raw ?? deflateSync(Buffer.alloc(stream.decoded, 0x20), { level: 9 });
+    offsets[number] = position;
+    push(`${number} 0 obj\n<< ${stream.dict ?? ""} /Filter /FlateDecode /Length ${data.length} >>\nstream\n`);
+    push(data); push("\nendstream\nendobj\n");
+  });
+  const total = objects.length + streams.length;
+  const xref = position;
+  let table = `xref\n0 ${total + 1}\n0000000000 65535 f \n`;
+  for (let index = 1; index <= total; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  push(`${table}trailer\n<< /Size ${total + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
 describe("decoded data bounds for text extraction", () => {
   it("checks page content under the cap before PDF.js reads it", async () => {
     const pdf = pdfWithPageContent(MAX_DECODED_STREAM_BYTES + 8 * 1024 * 1024);
@@ -95,6 +127,24 @@ describe("decoded data bounds for text extraction", () => {
     const zones = await callTool("detect_signature_zones", { pdf_base64: pdf.toString("base64") });
     expect(zones.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
   }, 120_000);
+
+  it("refuses an oversized stream wherever it sits in the document, not only in page contents", async () => {
+    const pdf = pdfWithStreams({ contents: { decoded: 64 }, extra: [{ dict: "/Type /XObject /Subtype /Form /BBox [0 0 10 10]", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+  }, 60_000);
+
+  it("does not decode image streams for text extraction", async () => {
+    const pdf = pdfWithStreams({ contents: { decoded: 64 }, extra: [{ dict: "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+  }, 60_000);
+
+  it("still reads a document with a damaged stream, as before", async () => {
+    const pdf = pdfWithStreams({ contents: { decoded: 64 }, extra: [{ dict: "", raw: Buffer.from([0x78, 0x9c, 0x01, 0x02, 0x03, 0xff, 0xfe]) }] });
+    const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.content[0].text).not.toMatch(/^(INTERNAL_ERROR|DOCUMENT_TOO_LARGE_DECODED)/);
+  });
 
   it("keeps budgets separate for overlapping calls", async () => {
     const large = pdfWithObjectStream(MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024).toString("base64");
@@ -156,10 +206,48 @@ describe("process memory backstop", () => {
     expect(outcome).toBe("still running");
   });
 
+  it("measures later calls from after a stop, so a concurrent send and the next calls are unaffected", async () => {
+    let rss = 100;
+    let calls = 0;
+    const factory = () => (calls++ === 0 ? silentWorker() : replying(120)());
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 2, workerFactory: factory, readRss: () => rss, recycle: () => {} });
+    const hog = dispatch("read_pdf_pages", {});
+    const send = dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } });
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await hog).content[0].text).toMatch(/^MEMORY_LIMIT/);
+    // The stopped worker's memory stays mapped; rss does not fall back.
+    expect((await send).content[0].text).toBe("done");
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
+  });
+
+  it("refuses new work while growth is already over the limit", async () => {
+    let rss = 100;
+    let started = 0;
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 2, sampleMs: 1_000, workerFactory: () => { started++; return silentWorker(); }, readRss: () => rss });
+    const first = dispatch("read_pdf_pages", {});
+    rss = 1_500;
+    const second = await dispatch("read_pdf_pages", {});
+    expect(second.content[0].text).toMatch(/^SERVICE_BUSY/);
+    expect(started).toBe(1);
+    rss = 100;
+    void first;
+  });
+
+  it("does not replace the process while any request is in flight", async () => {
+    let rss = 100;
+    let recycled = 0;
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss, recycle: () => { recycled++; }, busy: () => true });
+    const pending = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 12_000; }, 20);
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 1_200));
+    expect(recycled).toBe(0);
+  });
+
   it("asks the platform to replace an idle process left above the ceiling", async () => {
     let rss = 100;
     let recycled = 0;
-    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss, recycle: () => { recycled++; } });
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss, recycle: () => { recycled++; }, busy: () => false });
     const pending = dispatch("read_pdf_pages", {});
     setTimeout(() => { rss = 12_000; }, 20);
     await pending;

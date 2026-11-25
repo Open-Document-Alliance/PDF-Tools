@@ -44,7 +44,7 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
     const { bytes, document, source } = await input(args);
     const [start, end] = range(args, document.getPageCount());
     // PDF.js decodes these again with its own decoders; check them under the cap first.
-    predecodeForText(document, Array.from({ length: end - start + 1 }, (_, index) => start + index));
+    predecodeForText(document);
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     // Prevent parser warnings from placing document-derived values in logs.
     const pdfjsLib = { ...pdfjs, getDocument: options => pdfjs.getDocument({ ...options, verbosity: 0 }) };
