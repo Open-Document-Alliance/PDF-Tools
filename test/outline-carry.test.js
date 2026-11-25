@@ -388,11 +388,13 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
       [1, "Raw data", "SENTINEL-5"],
       [0, "Project site", "url:https://example.invalid/report"],
     ]);
-    // Labels follow their pages: the page printed "3" is still "3" up front.
-    // Source XMP is deliberately not copied into a rebuilt output
+    // Labels are a numbering scheme and keep their positions by default, so
+    // numbering stays sequential; the reply names a moved page whose label
+    // changed. Source XMP is deliberately not copied into a rebuilt output
     // (docs/METADATA_PROVENANCE.md).
-    expect(read.labels).toEqual(["3", "i", "ii", "1", "2"]);
-    expect(structured.page_labels).toBe("carried");
+    expect(read.labels).toEqual(["i", "ii", "1", "2", "3"]);
+    expect(structured).toMatchObject({ page_labels: "carried", page_labels_changed: 5 });
+    expect(text).toContain("source page 5, labelled \"3\", now shows \"i\"");
     const reloaded = await PDFDocument.load(bytes);
     expect(reloaded.catalog.get(PDFName.of("Metadata"))).toBeUndefined();
     expect(reloaded.catalog.get(PDFName.of("PageMode"))).toBe(PDFName.of("UseOutlines"));
@@ -426,14 +428,23 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
       [1, "Raw data", "SENTINEL-5"],
       [0, "Project site", "url:https://example.invalid/report"],
     ]);
-    // Deleting the third page leaves every other page with its own label.
-    expect(read.labels).toEqual(["i", "ii", "2", "3"]);
+    // By position, the numbering stays sequential after the delete.
+    expect(read.labels).toEqual(["i", "ii", "1", "2"]);
   });
 
-  it("apply_page_plan: deleting the cover keeps each page's printed label", async () => {
-    const output = path.join(directory, "no-cover.pdf");
-    await call("apply_page_plan", { input_path: report, output_path: output, plan: { page_order: [2, 3, 4, 5] } });
-    expect((await outlineWithPdfjs(await fs.readFile(output))).labels).toEqual(["ii", "1", "2", "3"]);
+  it("page_labels follow_pages keeps each page's own label through a delete or reorder", async () => {
+    const noCover = path.join(directory, "no-cover.pdf");
+    const { structured } = await call("apply_page_plan", {
+      input_path: report, output_path: noCover, plan: { page_order: [2, 3, 4, 5] }, page_labels: "follow_pages",
+    });
+    expect(structured.page_labels_changed).toBe(0);
+    expect((await outlineWithPdfjs(await fs.readFile(noCover))).labels).toEqual(["ii", "1", "2", "3"]);
+    const moved = path.join(directory, "moved-follow.pdf");
+    const reordered = await call("reorder_pdf_pages", {
+      input_path: report, output_path: moved, page_order: [5, 1, 2, 3, 4], page_labels: "follow_pages",
+    });
+    expect(reordered.text).not.toContain("Page labels keep their positions");
+    expect((await outlineWithPdfjs(await fs.readFile(moved))).labels).toEqual(["3", "i", "ii", "1", "2"]);
   });
 
   it("split_pdf: each part keeps its own pages' bookmarks and labels; a page in no part is named", async () => {
