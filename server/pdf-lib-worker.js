@@ -194,7 +194,7 @@ const OPERATIONS = new Set([
   "split_pdf",
 ]);
 const METADATA_EDIT_FIELDS = Object.freeze(["title", "author", "subject", "keywords"]);
-const APPENDABLE_OPERATIONS = new Set(["add_signature_field"]);
+const APPENDABLE_OPERATIONS = new Set(["add_signature_field", "apply_text"]);
 const APPEND_FALLBACK_REASONS = new Set(["no_startxref", "bad_startxref", "damaged_cross_reference", "too_large"]);
 const MAX_METADATA_VALUE_LENGTH = 32_768;
 const OPTION_KEYS = new Map([
@@ -222,7 +222,8 @@ const OPTION_KEYS = new Map([
     "allow_resign", "field_values", "require_provider_ready", "signature_locations",
   ]],
   ["apply_text", [
-    "allow_resign", "audit_line", "font_style", "modification_at", "placement", "text",
+    "allow_resign", "audit_line", "font_style", "modification_at", "placement",
+    "record_audit_in_keywords", "text",
   ]],
 ]);
 
@@ -500,6 +501,9 @@ function validateRequest(request) {
     )
   ) {
     throw new TypeError("audit_text is invalid.");
+  }
+  if (Object.hasOwn(options, "record_audit_in_keywords") && typeof options.record_audit_in_keywords !== "boolean") {
+    throw new TypeError("record_audit_in_keywords must be boolean.");
   }
   if (Object.hasOwn(options, "draw_audit_line") && typeof options.draw_audit_line !== "boolean") {
     throw new TypeError("draw_audit_line must be boolean.");
@@ -2988,10 +2992,15 @@ async function execute(request, protection) {
       };
     } else if (request.operation === "apply_text") {
       await stampTextOnPage(document, { ...options.placement, text: options.text, fontStyle: options.font_style });
-      const keywords = document.getKeywords() || "";
-      document.setKeywords([keywords ? `${keywords}\n${options.audit_line}` : options.audit_line]);
+      // Keywords are the document's own search terms. Writing an audit trail
+      // into them changed descriptive metadata the user never asked to
+      // change, so it happens only on request.
+      if (options.record_audit_in_keywords) {
+        const keywords = document.getKeywords() || "";
+        document.setKeywords([keywords ? `${keywords}\n${options.audit_line}` : options.audit_line]);
+      }
       document.setModificationDate(new Date(options.modification_at));
-      result = { form_info: formInfo(document) };
+      result = { audit_in_keywords: options.record_audit_in_keywords === true, form_info: formInfo(document) };
     }
     let saveMode = "rewrite";
     if (appendable) {

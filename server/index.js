@@ -1018,11 +1018,13 @@ function normalizeApplyTextArguments(value) {
     throw new Error("'font_style' must be 'normal' or 'italic'.");
   }
   const legacyOverwrite = optionalBooleanArgument(args.overwrite, "overwrite");
+  const recordAudit = optionalBooleanArgument(args.record_audit_in_keywords, "record_audit_in_keywords") === true;
   return {
     ...normalized,
     text,
     font_style: fontStyle,
     legacy_overwrite: legacyOverwrite,
+    record_audit_in_keywords: recordAudit,
   };
 }
 
@@ -4866,7 +4868,7 @@ async function listTools(request) {
       },
       {
         name: "apply_text",
-        description: "Stamp a plain text string at a location on a PDF, saving the result as a new file. Use this for date zones (stamp today's date), or any other \"put these characters here\" operation that isn't a signature. NO user_intent_statement required — text is not a signature. Coordinates use TOP-LEFT origin in points, same as apply_signature. Writes a one-line audit entry to the PDF's Keywords metadata.",
+        description: "Stamp a plain text string at a location on a PDF, saving the result as a new file. Use this for date zones (stamp today's date), or any other \"put these characters here\" operation that isn't a signature. NO user_intent_statement required — text is not a signature. Coordinates use TOP-LEFT origin in points, same as apply_signature. Leaves the document's Keywords alone unless record_audit_in_keywords is true, and is appended as an incremental update when the PDF is not encrypted.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4879,6 +4881,7 @@ async function listTools(request) {
             height: { type: "number", description: "Height in points" },
             text: { type: "string", description: "Text to stamp (max 200 chars)" },
             font_style: { type: "string", enum: ["normal", "italic"], description: "Font style (default: normal)" },
+            record_audit_in_keywords: { type: "boolean", description: "Also add a one-line audit entry to the document's Keywords metadata (default: false; Keywords are left unchanged)" },
             allow_resign: { type: "boolean", description: "Proceed even if the PDF has existing cryptographic signatures (default: false — saving would invalidate them)" },
             force_xfa: { type: "boolean", description: "Proceed even if the PDF uses XFA forms (default: false — the XFA layer will be stripped)" },
             overwrite: {
@@ -8024,6 +8027,7 @@ async function handleToolCall(request) {
           password,
           expected_output_identity,
           legacy_overwrite,
+          record_audit_in_keywords,
         } = normalizeApplyTextArguments(args);
 
         const resolvedOutput = resolvePath(output_path);
@@ -8033,10 +8037,10 @@ async function handleToolCall(request) {
         const { pdfBytes, inputRecoveryBinding } = recoveredInput;
         assertXfaMutationAllowed(pdfBytes, { forceXfa: force_xfa });
 
-        // Short audit line so filling dates/initials shows up in Keywords.
+        // Short audit line, written to Keywords only when the caller asks.
         const modificationAt = new Date().toISOString();
         const auditLine = `stamped text via pdf-toolkit; text="${String(text).replace(/\s+/g, " ").slice(0, 80)}"; at=${modificationAt}; page=${page}`;
-        const { payload, backupPath } = await runPdfLibMutation({
+        const { payload, backupPath, saveMode, auditInKeywords } = await runPdfLibMutation({
           operation: "apply_text",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -8048,8 +8052,10 @@ async function handleToolCall(request) {
             audit_line: auditLine,
             modification_at: modificationAt,
             allow_resign,
+            record_audit_in_keywords,
           },
-        }, ({ result, outputs, atomicTransition }) => persistPdfMutation({
+        }, async ({ result, outputs, atomicTransition }) => ({
+          ...(await persistPdfMutation({
             mutationOutput: { ...outputs[0], atomicTransition },
             formInfo: result.form_info,
             inputPath: resolvedInput,
@@ -8060,7 +8066,11 @@ async function handleToolCall(request) {
             legacyOverwrite: legacy_overwrite,
             inputRecoveryBinding,
             initialPage: page,
-          }));
+            extraPayload: { save_mode: result.save_mode, audit_in_keywords: result.audit_in_keywords },
+          })),
+          saveMode: result.save_mode,
+          auditInKeywords: result.audit_in_keywords,
+        }));
 
         return {
           content: [{
@@ -8068,7 +8078,9 @@ async function handleToolCall(request) {
             text:
               `Stamped text "${text}" on page ${page} at (${x}, ${y}).\n` +
               (backupPath ? `Original backed up to: ${backupPath}\n` : "") +
-              `Output: ${resolvedOutput}`
+              `Output: ${resolvedOutput}` +
+              (saveMode === "incremental" ? "\nAppended as an incremental update; the original bytes are unchanged." : "") +
+              (auditInKeywords ? "\nAn audit line was added to the document's Keywords, as requested." : "")
           }],
           structuredContent: {
             ...payload,

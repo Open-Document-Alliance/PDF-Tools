@@ -65,6 +65,8 @@ set, never a document-equivalence claim.
 
 `add_signature_field` creates a real unsigned `/Sig` AcroForm field (a merged field and widget at the drawn box, `SigFlags` bit 1 set) as well as the visible box, so a signing application finds a field to sign; `field_name` names it, otherwise the first free `Signature`, `Signature2`... It is appended as an incremental update when the source is not encrypted, falling back to the old rewrite for a damaged cross-reference or an encrypted file (`save_mode` says which). `prepare_signing_packet` still draws boxes only, because its packets go to Lumin, which places its own fields. Regression guard: `test/signature-field.test.js`.
 
+`apply_text` no longer writes its audit line into the document's Keywords: those are the document's own search terms, and every stamp used to change them. `record_audit_in_keywords: true` restores the old behaviour for a caller who wants it. Like `add_signature_field`, it is appended as an incremental update when the source is not encrypted. `apply_signature` still records its audit trail in Keywords, which is part of the human-intent record for signatures (see Signature Architecture). Regression guard: `test/apply-text-keywords.test.js`.
+
 ## Build, Test, and Development Commands
 - `npm install`: install dependencies with Node.js 20.19+ or 22.12+; this is
   the contributor build/test floor imposed by Vite, not a claim about the

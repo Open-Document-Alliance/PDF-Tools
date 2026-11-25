@@ -259,7 +259,10 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-11-25: add_signature_field creates a real /Sig form field: new
 // optional field_name input, field_name and save_mode outputs, and a
 // description that says so. Replaces c69e7964bf355c3aa40b2e9b5ac5153560bf99944768cdea8db62e564e871f4e.
-const TOOL_CONTRACT_SHA256 = "29d807da213b35fdc32bf15a2ce08fcfd3335aa88db5ecde75d419ca9141a127";
+// 2026-11-25: apply_text leaves Keywords alone unless the new
+// record_audit_in_keywords is true, is appended incrementally, and reports
+// save_mode and audit_in_keywords. Replaces 29d807da213b35fdc32bf15a2ce08fcfd3335aa88db5ecde75d419ca9141a127.
+const TOOL_CONTRACT_SHA256 = "4b1e23a3ced66c22d1ebdfc5b1e6febfdb8aacac3192f04d6dc2fcff4fca87b6";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

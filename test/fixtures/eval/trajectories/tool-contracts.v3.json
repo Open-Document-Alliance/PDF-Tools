@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.14.0"
   },
-  "tools_sha256": "2848e9ec05f73a4dd63f79a9b1db10c8a5503e45f18624e8c67dfc7c8e01a682",
+  "tools_sha256": "83b2aa81e8a26b713a54df901e10d471d67f472ec2f866e9c7aa06ca2498c017",
   "tools": [
     {
       "name": "add_signature_field",
@@ -322,6 +322,10 @@
               "italic"
             ],
             "description": "Font style (default: normal)"
+          },
+          "record_audit_in_keywords": {
+            "type": "boolean",
+            "description": "Also add a one-line audit entry to the document's Keywords metadata (default: false; Keywords are left unchanged)"
           },
           "allow_resign": {
             "type": "boolean",

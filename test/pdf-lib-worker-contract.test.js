@@ -1861,6 +1861,7 @@ describe("existing-signature resign guard coverage", () => {
       font_style: "normal",
       modification_at: "2026-09-21T08:00:00.000Z",
       placement: PLACEMENT,
+      record_audit_in_keywords: false,
       text: "Alice Example",
     }],
   ]);

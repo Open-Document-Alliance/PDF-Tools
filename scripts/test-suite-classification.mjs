@@ -91,6 +91,7 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
   "test/set-pdf-metadata.test.js",
   "test/signed-fill.test.js",
   "test/signature-field.test.js",
+  "test/apply-text-keywords.test.js",
   "test/path-handler-toctou.test.js",
   "test/pdfjs-worker-contract.test.js",
   "test/plugin-data-config.test.js",
