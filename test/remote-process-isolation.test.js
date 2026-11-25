@@ -39,14 +39,17 @@ describe("hosted child-process isolation", () => {
 
   it("falls back to worker threads, loudly, when the boot check fails", async () => {
     const lines = [];
-    const failing = createIsolationSelector({ check: async () => ({ ok: false, reason: "ulimit_failed" }), log: line => lines.push(line) });
+    const infos = [];
+    const failing = createIsolationSelector({ check: async () => ({ ok: false, reason: "ulimit_failed" }), log: line => lines.push(line), info: line => infos.push(line) });
     expect(await failing()).toBe("thread");
     expect(await failing()).toBe("thread");
     expect(lines).toEqual(["ERROR pdf-tools: process isolation unavailable (ulimit_failed); using worker threads\n"]);
-    const throwing = createIsolationSelector({ check: () => { throw new Error("boom"); }, log: line => lines.push(line) });
+    expect(infos).toEqual([`pdf-tools: tool isolation thread on node ${process.versions.node}\n`]);
+    const throwing = createIsolationSelector({ check: () => { throw new Error("boom"); }, log: line => lines.push(line), info: () => {} });
     expect(await throwing()).toBe("thread");
-    const passing = createIsolationSelector({ check: async () => ({ ok: true, reason: "ok" }), log: line => lines.push(line) });
+    const passing = createIsolationSelector({ check: async () => ({ ok: true, reason: "ok" }), log: line => lines.push(line), info: line => infos.push(line) });
     expect(await passing()).toBe("process");
+    expect(infos.at(-1)).toBe(`pdf-tools: tool isolation process on node ${process.versions.node}\n`);
     expect(lines).toHaveLength(2);
   });
 
