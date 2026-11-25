@@ -139,7 +139,7 @@ async function loadDocument(bytes) {
     if (/encrypt/i.test(String(error?.message))) {
       throw new ToolRefusal(
         "ENCRYPTED",
-        "That PDF is encrypted. This service never takes passwords; the PDF Tools desktop extension handles encrypted files on your own machine.",
+        "That PDF is encrypted. This service never takes passwords; the local PDF Tools server (Claude plugin or desktop app) handles encrypted files on your own machine.",
       );
     }
     throw new ToolRefusal("UNREADABLE", "That file could not be read as a PDF.");
@@ -370,7 +370,7 @@ TOOLS.push(...createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocu
 export const INSTRUCTIONS =
   "PDF Tools runs on a server. Each call takes an explicit PDF attachment, URL or inline PDF and returns its result without storing it. Read or convert bounded page ranges, search text, fill forms, and assemble or rotate pages. Extraction reports gaps and page coverage; no OCR is performed. " +
   "Signatures are visible stamps, not cryptographic signatures, and need the person's own words confirming intent. " +
-  "Encrypted PDFs are refused here; the PDF Tools desktop extension handles those on the person's own machine.";
+  "Encrypted PDFs are refused here; the local PDF Tools server (Claude plugin or desktop app) handles those on the person's own machine.";
 
 /**
  * Dispatch one tool call and convert refusals into typed, content-free tool
