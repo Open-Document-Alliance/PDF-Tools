@@ -21,6 +21,14 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const DecodeStream = require("pdf-lib/cjs/core/streams/DecodeStream.js").default;
 
+export const MEMORY_LIMIT_CODE = "MEMORY_LIMIT";
+export const MEMORY_LIMIT_MESSAGE = "That document needs more memory than the hosted service allows, so the operation was stopped. Use local PDF Tools for it: https://github.com/Open-Document-Alliance/PDF-Tools";
+
+/** A failed allocation at the process memory limit, from buffers or WebAssembly. */
+export function isAllocationFailure(error) {
+  return error instanceof RangeError && /Array buffer allocation failed|Unable to grow instance memory|WebAssembly\.Memory|Out of memory/i.test(String(error.message));
+}
+
 export const MAX_DECODED_STREAM_BYTES = 128 * 1024 * 1024;
 export const MAX_DECODED_CALL_BYTES = 384 * 1024 * 1024;
 
