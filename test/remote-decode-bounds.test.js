@@ -279,7 +279,7 @@ describe("bounded PDF.js worker", () => {
   const source = readFileSync(require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"), "utf8");
 
   it("adds the guard to every decode growth path of the pinned build", () => {
-    expect((boundedWorkerSource(source).match(/__pdfToolsGuard[A-Za-z]+\(/g) ?? []).length).toBe(5);
+    expect((boundedWorkerSource(source).match(/__pdfToolsGuard[A-Za-z]+\(/g) ?? []).length).toBe(7);
   });
 
   it("fails closed when the pinned source does not match exactly", () => {
@@ -373,4 +373,13 @@ describe("bounded PDF.js worker", () => {
     const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.from(await doc.save()).toString("base64"), start_page: 1, end_page: 10 });
     expect(result.content[0].text).not.toMatch(/^(DOCUMENT_TOO_LARGE_DECODED|MEMORY_LIMIT|INTERNAL_ERROR)/);
   }, 120_000);
+
+  it("bounds an image mask by its declared size before allocating it", async () => {
+    // Declared 40000x40000 with almost no data and an inverted Decode, so PDF.js would fill a buffer from the declared size.
+    const pdf = pdfWithImage("/Width 40000 /Height 40000 /ImageMask true /BitsPerComponent 1 /Decode [1 0] /Filter /FlateDecode", deflateSync(Buffer.alloc(16, 0)));
+    const before = process.memoryUsage().arrayBuffers;
+    const result = await callTool("convert_pdf_to_markdown", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.isError).toBeFalsy();
+    expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(64 * 1024 * 1024);
+  }, 60_000);
 });

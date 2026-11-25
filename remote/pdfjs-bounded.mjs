@@ -59,7 +59,7 @@ const HOOKS = [
       "    const blocksBufferSize = 64 * blocksPerColumnForMcu * (blocksPerLineForMcu + 1);",
       "",
     ].join("\n"),
-    add: "    globalThis.__pdfToolsGuardImageAllocation(blocksBufferSize * 2);\n",
+    add: "    globalThis.__pdfToolsGuardImagePixels(frame.samplesPerLine, frame.scanLines);\n    globalThis.__pdfToolsGuardImageAllocation(blocksBufferSize * 2);\n",
   },
   {
     // JBIG2: the page bitmap sized from the page information segment.
@@ -78,6 +78,16 @@ const HOOKS = [
       "    this.width = width;",
       "    this.height = height;",
       "    this.interpolate = dict.get(\"I\", \"Interpolate\");",
+      "",
+    ].join("\n"),
+    add: "    globalThis.__pdfToolsGuardImagePixels(width, height);\n",
+  },
+  {
+    // Image masks (including inline and Type 3 glyph masks) are built by
+    // createMask, which never constructs a PDFImage and allocates from the
+    // declared size alone.
+    after: [
+      "    const computedLength = (width + 7 >> 3) * height;",
       "",
     ].join("\n"),
     add: "    globalThis.__pdfToolsGuardImagePixels(width, height);\n",
