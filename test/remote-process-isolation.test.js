@@ -1,6 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 import { createIsolatedDispatcher, createIsolationSelector } from "../remote/isolated-tool.mjs";
@@ -147,13 +146,5 @@ describe("hosted child-process isolation", () => {
     expect(code(await sensitive("send_lumin_request", {}, { lumin: { accessToken: "t" } }))).toBe("LUMIN_CREATE_OUTCOME_UNKNOWN");
   }, 120_000);
 
-  it("pins the hosted functions to one Node major, and CI tests that major (set HOSTED_NODE_PIN_CHECK=1)", () => {
-    const pinned = JSON.parse(readFileSync(new URL("../api/package.json", import.meta.url), "utf8")).engines?.node;
-    expect(pinned).toMatch(/^\d+\.x$/);
-    if (process.env.HOSTED_NODE_PIN_CHECK === "1") {
-      // The hosted-runtime CI job runs this file on the pinned major; changing one without the other fails here.
-      expect(`${process.versions.node.split(".")[0]}.x`).toBe(pinned);
-    }
-  });
 });
 

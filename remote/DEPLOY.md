@@ -22,7 +22,6 @@ allocation, documentation that matches, and a reproducible deploy.
 | `fetch-guard.mjs` | Pinned public connection, redirect/whole-body deadline, size cap |
 | `isolated-tool.mjs`, `process-isolation.mjs`, `tool-child.mjs` | Per-call child process under an OS memory limit, parent deadline, concurrency admission and memory watchdog |
 | `tool-worker.mjs` | Per-call worker thread, used only if the child-process boot check fails on an instance |
-| `../api/package.json` | Pins the functions' Node major; CI's hosted-runtime job tests that major |
 | `http.mjs` | `fetch(Request) => Response` handler, one server per request |
 | `../api/mcp.js` | Vercel function that calls that handler |
 
