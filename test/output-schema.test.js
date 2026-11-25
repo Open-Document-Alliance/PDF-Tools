@@ -72,6 +72,7 @@ const STRUCTURED_TOOLS = [
   "search_pdf_text",
   "set_active_document",
   "send_lumin_request",
+  "set_pdf_metadata",
   "split_pdf",
   "submit_extraction_proposal",
   "start_lumin_authorization",
@@ -148,6 +149,7 @@ describe("output schema definitions", () => {
       "render_pdf_region",
       "rotate_pdf_pages",
       "search_pdf_text",
+      "set_pdf_metadata",
       "split_pdf",
     ];
     const resourceFailure = {
@@ -171,11 +173,11 @@ describe("output schema definitions", () => {
     expect(rejected.structuredContent.error.code).toBe("internal_validation_error");
   });
 
-  it("covers the exact 61 structured schemas including optional OCR", () => {
+  it("covers the exact 62 structured schemas including optional OCR", () => {
     expect(Object.keys(TOOL_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_ERROR_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
     expect(Object.keys(TOOL_SUCCESS_OUTPUT_SCHEMAS).sort()).toEqual(STRUCTURED_TOOLS);
-    expect(STRUCTURED_TOOLS).toHaveLength(61);
+    expect(STRUCTURED_TOOLS).toHaveLength(62);
     expect(TEXT_ONLY_TOOLS).toHaveLength(7);
   });
 

@@ -78,6 +78,10 @@
       "description": "Fill a PDF form; may save in place with automatic backup"
     },
     {
+      "name": "set_pdf_metadata",
+      "description": "Change a PDF's title, author, subject or keywords, keeping Info and XMP in step"
+    },
+    {
       "name": "bulk_fill_from_csv",
       "description": "Fill multiple PDFs using data from a CSV file"
     },
@@ -215,7 +219,7 @@
     },
     {
       "name": "add_signature_field",
-      "description": "Draw a visible 'Sign here' placeholder box on a PDF page (marks location only; does NOT sign)"
+      "description": "Add an unsigned signature form field with a visible 'Sign here' box, ready for a signing app (does NOT sign)"
     },
     {
       "name": "apply_signature",

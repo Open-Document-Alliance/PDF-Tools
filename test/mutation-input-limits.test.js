@@ -52,6 +52,14 @@ const MUTATING_PDF_TOOLS = [
     }),
   },
   {
+    name: "set_pdf_metadata",
+    argumentsFor: ({ inputPath, outputPath }) => ({
+      pdf_path: inputPath,
+      output_path: outputPath,
+      title: "Retitled",
+    }),
+  },
+  {
     name: "merge_pdfs",
     argumentsFor: ({ inputPath, outputPath, validControlPath }) => ({
       input_paths: [inputPath, validControlPath],
