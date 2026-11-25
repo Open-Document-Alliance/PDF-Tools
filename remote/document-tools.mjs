@@ -1,5 +1,5 @@
 /** Stateless adapters over the existing PDF Tools byte and extraction engines. */
-import { predecodeForText } from "./decode-budget.mjs";
+import { loadBoundedPdfjs } from "./pdfjs-bounded.mjs";
 import { createHash } from "node:crypto";
 import { PDFDocument, degrees } from "pdf-lib";
 import { detectXfaFormInDocument, detectExistingSignatures } from "../server/helpers.js";
@@ -43,9 +43,7 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
   async function layout(args) {
     const { bytes, document, source } = await input(args);
     const [start, end] = range(args, document.getPageCount());
-    // PDF.js decodes these again with its own decoders; check them under the cap first.
-    predecodeForText(document);
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdfjs = await loadBoundedPdfjs();
     // Prevent parser warnings from placing document-derived values in logs.
     const pdfjsLib = { ...pdfjs, getDocument: options => pdfjs.getDocument({ ...options, verbosity: 0 }) };
     const extracted = await extractPdfLayoutForMarkdown({

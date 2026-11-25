@@ -3,7 +3,11 @@ import { deflateSync } from "node:zlib";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+
 import { MAX_DECODED_STREAM_BYTES } from "../remote/decode-budget.mjs";
+import { BoundedPdfjsUnavailable, boundedWorkerSource } from "../remote/pdfjs-bounded.mjs";
 import { createIsolatedDispatcher } from "../remote/isolated-tool.mjs";
 import { callTool } from "../remote/server.mjs";
 
@@ -129,7 +133,7 @@ describe("decoded data bounds for text extraction", () => {
   }, 120_000);
 
   it("refuses an oversized stream reached through page resources, not only page contents", async () => {
-    const pdf = pdfWithStreams({ contents: { decoded: 64 }, pageExtra: "/Resources << /XObject << /Fm0 5 0 R >> >>", extra: [{ dict: "/Type /XObject /Subtype /Form /BBox [0 0 10 10]", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
+    const pdf = pdfWithStreams({ contents: { raw: deflateSync(Buffer.from("q /Fm0 Do Q", "latin1")) }, pageExtra: "/Resources << /XObject << /Fm0 5 0 R >> >>", extra: [{ dict: "/Type /XObject /Subtype /Form /BBox [0 0 10 10]", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
     const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
     expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
   }, 60_000);
@@ -268,4 +272,43 @@ describe("process memory backstop", () => {
     expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
     expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
   });
+});
+
+describe("bounded PDF.js worker", () => {
+  const require = createRequire(import.meta.url);
+  const source = readFileSync(require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"), "utf8");
+
+  it("adds the guard to both decode growth paths of the pinned build", () => {
+    expect((boundedWorkerSource(source).match(/__pdfToolsGuardDecodeGrowth/g) ?? []).length).toBe(2);
+  });
+
+  it("fails closed when the pinned source does not match exactly", () => {
+    expect(() => boundedWorkerSource(source.replace("    let size = this.minBufferLength;", "    let size = this.minBufferLength | 0;"))).toThrow(BoundedPdfjsUnavailable);
+    expect(() => boundedWorkerSource(source + source)).toThrow(BoundedPdfjsUnavailable);
+  });
+
+  it("bounds what PDF.js decodes even when pdf-lib resolves the document differently", async () => {
+    // Object 3 is defined twice. The cross-reference table points to the first
+    // definition, which uses the large stream as contents; pdf-lib keeps the
+    // later definition, which does not.
+    const big = deflateSync(Buffer.alloc(MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024, 0x20), { level: 9 });
+    const small = deflateSync(Buffer.from("BT ET", "latin1"));
+    const parts = [];
+    const offsets = [];
+    let position = 0;
+    const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+    push("%PDF-1.7\n");
+    offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n");
+    offsets[4] = position; push(`4 0 obj\n<< /Filter /FlateDecode /Length ${big.length} >>\nstream\n`); push(big); push("\nendstream\nendobj\n");
+    offsets[5] = position; push(`5 0 obj\n<< /Filter /FlateDecode /Length ${small.length} >>\nstream\n`); push(small); push("\nendstream\nendobj\n");
+    push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 5 0 R >>\nendobj\n");
+    const xref = position;
+    let table = "xref\n0 6\n0000000000 65535 f \n";
+    for (let index = 1; index <= 5; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+    push(`${table}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    const result = await callTool("read_pdf_pages", { pdf_base64: Buffer.concat(parts).toString("base64"), start_page: 1, end_page: 1 });
+    expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+  }, 120_000);
 });

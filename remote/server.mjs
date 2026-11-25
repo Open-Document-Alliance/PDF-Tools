@@ -23,7 +23,8 @@ import {
   validateSigningIntent,
 } from "../server/helpers.js";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES } from "./fetch-guard.mjs";
-import { DecodeBudgetExceeded, decodeLimitReached, predecodeForText, withCallBudget } from "./decode-budget.mjs";
+import { DecodeBudgetExceeded, decodeLimitReached, withCallBudget } from "./decode-budget.mjs";
+import { loadBoundedPdfjs } from "./pdfjs-bounded.mjs";
 import { createDocumentTools } from "./document-tools.mjs";
 import { hostedSkills, skillParams, SKILLS_EXTENSION } from "./skills.mjs";
 import { createLuminTools } from "./lumin-tools.mjs";
@@ -269,9 +270,7 @@ const TOOLS = [
     async handler(args) {
       const bytes = await resolveBytes(args);
       const document = await loadDocument(bytes);
-      // PDF.js decodes these again with its own decoders; check them under the cap first.
-      predecodeForText(document);
-      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      const pdfjsLib = await loadBoundedPdfjs();
       const zones = await detectSignatureZones({
         pdfDoc: document,
         pdfBytes: bytes,
