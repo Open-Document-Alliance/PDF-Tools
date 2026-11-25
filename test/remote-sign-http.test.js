@@ -19,9 +19,14 @@ async function mcp(handler, path, message, headers = {}) {
 
 describe("hosted signing HTTP surface", () => {
   it("is unavailable when not configured, whatever the path", async () => {
-    for (const path of ["/mcp/sign", "/oauth/register", "/.well-known/oauth-authorization-server"]) {
+    for (const path of ["/mcp/sign", "/oauth/register", "/oauth/token"]) {
       const response = await handleSignFetch(new Request(`${ORIGIN}${path}`, { method: "POST" }), { env: {} });
       expect(response.status, path).toBe(503);
+    }
+    // Discovery stays "no auth here" so clients of the public /mcp are unaffected.
+    for (const path of ["/.well-known/oauth-authorization-server", "/.well-known/oauth-protected-resource/mcp/sign"]) {
+      const response = await handleSignFetch(new Request(`${ORIGIN}${path}`), { env: {} });
+      expect(response.status, path).toBe(404);
     }
   });
 

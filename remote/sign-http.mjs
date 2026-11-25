@@ -39,7 +39,13 @@ export async function handleSignFetch(request, { env = process.env, now = Math.f
   const config = signingConfig(env);
   const { pathname } = new URL(request.url);
   const method = request.method;
-  if (!config) return unavailable();
+  if (!config) {
+    // Some MCP clients probe the root authorization-server metadata for any
+    // server, including the account-free /mcp. While signing is off, these
+    // discovery paths keep answering 404 ("no auth here"), as before this
+    // surface existed; only the signing paths themselves answer 503.
+    return pathname.startsWith("/.well-known/") ? notFound() : unavailable();
+  }
   switch (pathname) {
     case "/.well-known/oauth-protected-resource/mcp/sign":
       return method === "GET" ? protectedResourceMetadata(request) : methodNotAllowed("GET");
