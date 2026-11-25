@@ -162,7 +162,7 @@ proposal. No signup tracking or analytics reporting is enabled by this work.
 - Split PDFs by exact page ranges or regular intervals
 - Rotate and reorder pages
 - Apply a full page plan in one pass to reorder, rotate, and delete pages while preserving the original
-- Bookmarks and page labels follow their pages through every reorder, delete, split, and merge; any bookmark that cannot follow is named in the reply
+- Bookmarks follow their pages through every reorder, delete, split, and merge, and any bookmark that cannot follow is named in the reply. Page labels keep the document's numbering by position after a reorder or delete, and the reply says when a moved page shows a different label (`page_labels: "follow_pages"` keeps each page's own label instead); split parts and merged documents keep the labels their pages had
 - Change the document title, author, subject, or keywords with Info and XMP metadata kept in step, appended as an incremental update so the original bytes and any signature stay intact
 
 ### Extraction and Analysis
