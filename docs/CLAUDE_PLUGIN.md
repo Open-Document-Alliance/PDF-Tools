@@ -1,6 +1,6 @@
 # Claude plugin
 
-`node scripts/build-claude-plugin.mjs` builds `dist-claude-plugin/pdf-tools/`: one Claude plugin that gives each Claude surface the right PDF Tools.
+`node scripts/build-claude-plugin.mjs` builds `dist-plugin/claude-pdf-tools/`: one Claude plugin that gives each Claude surface the right PDF Tools.
 
 | Surface | What loads |
 | --- | --- |
@@ -27,7 +27,7 @@ The SessionStart hook runs `start.mjs --prepare`, which starts the install in a 
 ## Checks
 
 - `node scripts/build-claude-plugin.mjs` fails on any directory-checklist block it can see (junk files, Windows-invalid names, files over 5 MiB, a top-level `bin/`, a README under 40 words). It lists the items a reviewer will hold, then smoke-tests a first-run install and `tools/list` against an empty data folder.
-- `claude plugin validate dist-claude-plugin/pdf-tools` must print `✔ Validation passed` with no plugin directory warnings.
+- `claude plugin validate dist-plugin/claude-pdf-tools` must print `✔ Validation passed` with no plugin directory warnings.
 - `test/claude-plugin.test.js` pins the generated config and exercises the launcher's install, reuse, upgrade and tamper paths offline.
 
 Items the directory holds for a reviewer, all expected: `server/index.js`, `server/layout-extraction.js` and `dist-ui/index.html` exceed 256 KiB, `vendor/qpdf-wasm/runtime/qpdf.wasm` is a binary, and dependencies install from a lockfile.

@@ -51,6 +51,5 @@ pdf-toolkit-mcp.zip
 *.db
 windows-render-probe.json
 dist-plugin/
-dist-claude-plugin/
 .vercel
 .env*

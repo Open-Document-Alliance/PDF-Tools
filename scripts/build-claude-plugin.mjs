@@ -15,7 +15,7 @@
 // what makes Windows and Linux arm64 work without shipping every platform.
 //
 // Usage: node scripts/build-claude-plugin.mjs [output-dir] [--no-smoke]
-//   default output: dist-claude-plugin/pdf-tools
+//   default output: dist-plugin/claude-pdf-tools
 
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
@@ -214,7 +214,7 @@ function smoke(pluginDir) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const outputDir = path.resolve(args.find(arg => !arg.startsWith("--")) || path.join(REPO_ROOT, "dist-claude-plugin", PLUGIN_NAME));
+  const outputDir = path.resolve(args.find(arg => !arg.startsWith("--")) || path.join(REPO_ROOT, "dist-plugin", `claude-${PLUGIN_NAME}`));
   const version = derivePluginVersion(PACKAGE_JSON.version, { cwd: REPO_ROOT }).version;
   console.error(`[claude-plugin] building ${PLUGIN_NAME}@${version} -> ${outputDir}`);
 
