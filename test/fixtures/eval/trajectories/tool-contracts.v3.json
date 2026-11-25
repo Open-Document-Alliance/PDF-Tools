@@ -5,7 +5,7 @@
     "name": "pdf-tools",
     "version": "0.15.0"
   },
-  "tools_sha256": "3b753575839389cf01f25736c4723fb5ac020709e569e1f5274daefbf87caf93",
+  "tools_sha256": "7c4420faded087bd11d19e3e618bf9725a713ef15be9543b446b095cb920a5a9",
   "tools": [
     {
       "name": "add_signature_field",
@@ -2120,6 +2120,88 @@
         },
         "required": [
           "pdf_path"
+        ]
+      }
+    },
+    {
+      "name": "set_pdf_metadata",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "pdf_path": {
+            "type": "string",
+            "description": "Path to the source PDF file"
+          },
+          "output_path": {
+            "type": "string",
+            "description": "Where to save the result; may equal pdf_path to update in place"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New document title, or null to remove it. Omit to leave it unchanged."
+          },
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New author, or null to remove it. Omit to leave it unchanged."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New subject (description), or null to remove it. Omit to leave it unchanged."
+          },
+          "keywords": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New keywords as one string, or null to remove them. Omit to leave them unchanged."
+          },
+          "save_mode": {
+            "type": "string",
+            "enum": [
+              "incremental",
+              "rewrite"
+            ],
+            "description": "incremental (default) appends the change and keeps the original bytes and any signatures intact; rewrite writes a new file without the earlier revision"
+          },
+          "expected_output_identity": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Exact current identity returned by get_pdf_identity. Required when replacing a distinct existing output_path, optional for the separately guarded same-document backup workflow, and omitted for a new destination.",
+            "properties": {
+              "canonical_path": {
+                "type": "string",
+                "description": "Exact canonical_path returned by get_pdf_identity for the existing destination."
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Exact size_bytes returned by get_pdf_identity for the existing destination."
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "Exact SHA-256 returned by get_pdf_identity for the existing destination."
+              }
+            },
+            "required": [
+              "canonical_path",
+              "size_bytes",
+              "sha256"
+            ]
+          }
+        },
+        "required": [
+          "pdf_path",
+          "output_path"
         ]
       }
     },

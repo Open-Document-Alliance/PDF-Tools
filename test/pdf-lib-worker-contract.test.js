@@ -1814,6 +1814,11 @@ describe("existing-signature resign guard coverage", () => {
   const BASE_OPTIONS = new Map([
     ["fill_pdf", { field_data: { Name: "Bob" } }],
     ["fill_with_profile", { field_data: { Name: "Bob" } }],
+    ["set_pdf_metadata", {
+      edits: { title: "Retitled" },
+      modification_at: "2026-11-25T08:00:00.000Z",
+      save_mode: "incremental",
+    }],
     ["bulk_fill_from_csv", { records: [{ Name: "Bob" }] }],
     ["merge_pdfs", {}],
     ["split_pdf", { page_ranges: "1" }],

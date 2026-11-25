@@ -70,6 +70,10 @@
       "description": "Fill a PDF form; may save in place with automatic backup"
     },
     {
+      "name": "set_pdf_metadata",
+      "description": "Change a PDF's title, author, subject or keywords, keeping Info and XMP in step"
+    },
+    {
       "name": "bulk_fill_from_csv",
       "description": "Fill multiple PDFs using data from a CSV file"
     },

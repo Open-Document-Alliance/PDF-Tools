@@ -23,7 +23,7 @@ if (!process.argv[2] || !process.argv[3]) {
 //
 const EXPECTED_SOURCE_SHA256 = "6e4e3411984f3edf99dbfe8b941cb5e8a321379ff0cae6ae5c1f592ad8882ca8";
 const EXPECTED_MARKDOWN_SHA256 = "b9bd7ca7db26fe807f294565c39de8d4fe9337908afa74cd7e2896a800c92991";
-const EXPECTED_TOOL_CONTRACT_SHA256 = "cb76b2154dfb650c47f2026be644f83c032203ff8d06676390e5e2e3dd14c0cf";
+const EXPECTED_TOOL_CONTRACT_SHA256 = "a541bd30be3bbf20ece76dc76c70f72bdbf21bbe6983dbc959a22a5257973378";
 const EXPECTED_PAGE_COUNT = 55;
 const EXPECTED_GAP_COUNT = 26;
 const EXPECTED_REPLACEMENT_CHARACTER_COUNT = 6;
@@ -69,7 +69,7 @@ const chunks = [];
 try {
   await client.connect(transport);
   const tools = await client.listTools();
-  assert(tools.tools.length === 64, `Expected 64 installed tools, received ${tools.tools.length}`);
+  assert(tools.tools.length === 65, `Expected 65 installed tools, received ${tools.tools.length}`);
   assert(
     sha256(Buffer.from(JSON.stringify(tools.tools))) === EXPECTED_TOOL_CONTRACT_SHA256,
     "Installed tool contract differs from the reviewed build",

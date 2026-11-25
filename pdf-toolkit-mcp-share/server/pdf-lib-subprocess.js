@@ -40,6 +40,7 @@ export const PDF_LIB_MUTATION_TOOL_NAMES = new Set([
   "prepare_signing_packet",
   "reorder_pdf_pages",
   "rotate_pdf_pages",
+  "set_pdf_metadata",
   "split_pdf",
 ]);
 export { PDF_LIB_READ_ONLY_OPERATIONS };
@@ -82,6 +83,7 @@ let gracefulShutdownPromise = null;
 const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
   ["fill_with_profile", ["field_data"]],
+  ["set_pdf_metadata", ["edits", "modification_at", "save_mode"]],
   ["bulk_fill_from_csv", ["records"]],
   ["merge_pdfs", []],
   ["split_pdf", ["page_ranges"]],

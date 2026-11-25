@@ -1463,6 +1463,17 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
   }),
   read_pdf_fields: activeDocument(),
   fill_pdf: activeDocument({ filled_fields: stringArray, fill_errors: stringArray }),
+  set_pdf_metadata: activeDocument({
+    save_mode: enumString(["incremental", "rewrite"]),
+    appended_objects: integer,
+    changes: arrayOf(object({
+      field: enumString(["title", "author", "subject", "keywords"]),
+      before: nullable(string),
+      after: nullable(string),
+    })),
+    xmp: enumString(["updated", "absent"]),
+    signatures_kept: integer,
+  }),
   bulk_fill_from_csv: object({
     row_count: integer,
     results: arrayOf(object({
@@ -2176,6 +2187,7 @@ for (const toolName of [
   "prepare_signing_packet",
   "reorder_pdf_pages",
   "rotate_pdf_pages",
+  "set_pdf_metadata",
   "split_pdf",
 ]) {
   specialErrorSchemas[toolName] = [

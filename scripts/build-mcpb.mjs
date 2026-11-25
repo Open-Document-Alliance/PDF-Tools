@@ -85,6 +85,7 @@ export const SERVER_FILES = [
   "extraction-review.js",
   "helpers.js",
   "host-pdf-import.js",
+  "incremental-update.js",
   "index.js",
   "layout-extraction.js",
   "local-ocr-jobs.js",
@@ -111,6 +112,7 @@ export const SERVER_FILES = [
   "qpdf-decrypt-worker.js",
   "qpdf-decrypt.js",
   "resource-uri.js",
+  "signature-state.js",
   "skill-files.js",
   "skills.js",
   "stderr-suppression.js",
@@ -118,6 +120,7 @@ export const SERVER_FILES = [
   "type3-cm-pk-reference.js",
   "type3-cm-reference.js",
   "verified-extraction-tools.js",
+  "xmp-metadata.js",
 ];
 export { VERIFIED_EXTRACTION_RUNTIME_FILES } from "./mcpb-packaging-policy.mjs";
 const FIRST_PARTY_TEXT_FILES = [
