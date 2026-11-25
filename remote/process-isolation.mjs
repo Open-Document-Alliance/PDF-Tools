@@ -18,7 +18,11 @@
  *   (reported as MEMORY_LIMIT by the tool) and V8 heap exhaustion aborts the
  *   child (SIGABRT, reported as MEMORY_LIMIT by the dispatcher).
  * - V8 reserves part of the data limit at startup (about 0.5 GiB on Node 26),
- *   so usable memory is roughly the limit minus that reservation. A boot check
+ *   so usable memory is roughly the limit minus that reservation. It reserves
+ *   more when the limit allows it (about 1 GiB more under 2 GiB), so measure
+ *   VmData under the real limit, on the real host, before changing it. On the
+ *   Vercel host the heaviest call the decode budgets allow peaks near 1 GB of
+ *   VmData under this limit, and budget refusals arrive first. A boot check
  *   proves a child starts under the limit and that the kernel applied it. If it
  *   fails, calls fall back to per-call worker threads with the in-process hooks
  *   and the RSS watchdog, and an error-level log line says so.
