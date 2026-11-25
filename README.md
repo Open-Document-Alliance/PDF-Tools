@@ -162,6 +162,8 @@ proposal. No signup tracking or analytics reporting is enabled by this work.
 - Split PDFs by exact page ranges or regular intervals
 - Rotate and reorder pages
 - Apply a full page plan in one pass to reorder, rotate, and delete pages while preserving the original
+- Bookmarks and page labels follow their pages through every reorder, delete, split, and merge; any bookmark that cannot follow is named in the reply
+- Change the document title, author, subject, or keywords with Info and XMP metadata kept in step, appended as an incremental update so the original bytes and any signature stay intact
 
 ### Extraction and Analysis
 
@@ -308,6 +310,7 @@ the `.mcpb` manifest that ordinary model workflows discover.
 - `rotate_pdf_pages`
 - `reorder_pdf_pages`
 - `apply_page_plan`
+- `set_pdf_metadata`
 
 ### Extraction and Analysis
 

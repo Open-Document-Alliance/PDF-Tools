@@ -85,8 +85,8 @@
     {
       "role": "output_schemas_module",
       "path": "server/output-schemas.js",
-      "bytes": 86930,
-      "sha256": "0b4c406106077d8902b00225ad3343666af0e6790dfb452e96eeda208306541e"
+      "bytes": 87326,
+      "sha256": "536c012412e88eaa2b0667bbccc41cec199ab50ef553ac9d8e2b5fd0899bf97d"
     },
     {
       "role": "package_json",
@@ -131,7 +131,7 @@
       "sha256": "ef40501b2afbe4cd2adfa80480344783bbec1a00e8e9850086a5d044231d1f53"
     }
   ],
-  "validator_source_set_sha256": "21f2548df3bff5832f58efd22bfe62bfc8ef455651342ee724abcfc975a28b92",
+  "validator_source_set_sha256": "3f2f77023c4f4c526a46a6892575e7e724bdd6ca73742947d8e621e45ddaf0f2",
   "pdfjs_version": "5.4.624",
   "generation_contract": {
     "source_path": "source.pdf",

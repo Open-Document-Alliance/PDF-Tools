@@ -366,6 +366,10 @@ export const ENCRYPTED_WRITE_OPERATIONS = Object.freeze({
     capabilities: Object.freeze(["modify"]),
     activity: "stamp text onto a page",
   }),
+  set_pdf_metadata: Object.freeze({
+    capabilities: Object.freeze(["modify"]),
+    activity: "change its title, author, subject or keywords",
+  }),
   prepare_signing_packet: Object.freeze({
     capabilities: Object.freeze(["modify", "modifyforms"]),
     activity: "fill in its form fields and draw signature placeholders onto its pages",

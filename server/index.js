@@ -3562,6 +3562,57 @@ async function listTools(request) {
         }
       },
       {
+        name: "set_pdf_metadata",
+        description: "Change a PDF's document title, author, subject or keywords. Updates the Info dictionary and the XMP metadata together, so viewers that read either see the same values. By default the change is appended as an incremental update: the original bytes, including any existing signature, stay exactly as they were, and the earlier values remain in the file's revision history (use save_mode \"rewrite\" to drop that history; it is refused for signed files). output_path may be the same as pdf_path to update the file in place; the original is backed up on the first same-path change. Refuses certified (DocMDP) PDFs and XMP it cannot edit safely, changing nothing. All paths must be absolute paths on the user's local machine.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            pdf_path: {
+              type: "string",
+              description: "Path to the source PDF file"
+            },
+            output_path: {
+              type: "string",
+              description: "Where to save the result; may equal pdf_path to update in place"
+            },
+            title: {
+              type: ["string", "null"],
+              description: "New document title, or null to remove it. Omit to leave it unchanged."
+            },
+            author: {
+              type: ["string", "null"],
+              description: "New author, or null to remove it. Omit to leave it unchanged."
+            },
+            subject: {
+              type: ["string", "null"],
+              description: "New subject (description), or null to remove it. Omit to leave it unchanged."
+            },
+            keywords: {
+              type: ["string", "null"],
+              description: "New keywords as one string, or null to remove them. Omit to leave them unchanged."
+            },
+            save_mode: {
+              type: "string",
+              enum: ["incremental", "rewrite"],
+              description: "incremental (default) appends the change and keeps the original bytes and any signatures intact; rewrite writes a new file without the earlier revision"
+            },
+            password: {
+              type: "string",
+              description: PDF_REPROTECTING_PASSWORD_DESCRIPTION,
+            },
+            expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
+          },
+          required: ["pdf_path", "output_path"]
+        },
+        annotations: {
+          title: "Set PDF Metadata",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false
+        }
+      },
+      {
         name: "bulk_fill_from_csv",
         description: "Fill multiple PDFs using data from a CSV file. Output filenames must be unique. New outputs need no identity; every existing destination requires one exact entry in expected_output_identities. Any missing, stale, unrelated, or duplicate identity or any row failure aborts the whole batch.",
         inputSchema: {
@@ -5175,6 +5226,81 @@ async function handleToolCall(request) {
             type: "text",
             text: message
           }],
+          structuredContent: payload,
+        };
+      }
+
+      case "set_pdf_metadata": {
+        const {
+          pdf_path,
+          output_path,
+          save_mode = "incremental",
+          password,
+          expected_output_identity,
+        } = args;
+        const edits = {};
+        for (const field of ["title", "author", "subject", "keywords"]) {
+          if (!Object.hasOwn(args, field)) continue;
+          const value = args[field];
+          if (value !== null && typeof value !== "string") {
+            throw new Error(`${field} must be a string, or null to remove it.`);
+          }
+          edits[field] = value;
+        }
+        if (Object.keys(edits).length === 0) {
+          throw new Error("Name at least one of title, author, subject or keywords to change.");
+        }
+        if (!["incremental", "rewrite"].includes(save_mode)) {
+          throw new Error("save_mode must be \"incremental\" or \"rewrite\".");
+        }
+        const resolvedPdfPath = resolvePath(pdf_path);
+        const resolvedOutputPath = resolvePath(output_path);
+        const recoveredInput = await readPdfInputWithRecovery(resolvedPdfPath);
+        const { pdfBytes: rawPdfBytes, inputRecoveryBinding } = recoveredInput;
+        const { payload, backupPath, workerResult } = await runPdfLibMutation({
+          operation: "set_pdf_metadata",
+          sources: [bindRecoveredMutationSource(recoveredInput)],
+          password,
+          options: { edits, save_mode, modification_at: new Date().toISOString() },
+        }, async ({ result, outputs, atomicTransition }) => {
+          const committed = await persistPdfMutation({
+            mutationOutput: { ...outputs[0], atomicTransition },
+            formInfo: result.form_info,
+            inputPath: resolvedPdfPath,
+            outputPath: resolvedOutputPath,
+            toolName: "set_pdf_metadata",
+            expectedInputSha256: sha256Bytes(rawPdfBytes),
+            expectedOutputIdentity: normalizeExpectedOutputIdentity(expected_output_identity),
+            inputRecoveryBinding,
+            extraPayload: {
+              save_mode: result.save_mode,
+              appended_objects: result.appended_objects,
+              changes: result.changes,
+              xmp: result.xmp,
+              signatures_kept: result.signatures_kept,
+            },
+          });
+          return { ...committed, workerResult: result };
+        });
+        const describe = value => (value === null ? "(none)" : JSON.stringify(value));
+        const lines = [`Saved to: ${output_path}`];
+        for (const change of workerResult.changes) {
+          lines.push(`${change.field}: ${describe(change.before)} -> ${describe(change.after)}`);
+        }
+        lines.push(workerResult.xmp === "updated"
+          ? "Info and XMP metadata were both updated."
+          : "The PDF has no XMP metadata; the Info dictionary was updated.");
+        if (workerResult.save_mode === "incremental") {
+          lines.push(`Appended as an incremental update (${workerResult.appended_objects} object(s)); the original bytes are unchanged, and the previous values remain in the file's revision history.`);
+          if (workerResult.signatures_kept > 0) {
+            lines.push(`${workerResult.signatures_kept} existing signature(s) still cover their original bytes; a validator will report that the document changed after signing.`);
+          }
+        } else {
+          lines.push("The file was rewritten; it does not keep the earlier revision.");
+        }
+        if (backupPath) lines.push(`Original backed up to: ${backupPath}`);
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
           structuredContent: payload,
         };
       }

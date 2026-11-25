@@ -39,6 +39,7 @@ an `isError` result is never forced through a success schema.
 | `extract_to_csv` | CSV counts, headers, and bounded row preview |
 | `fetch_pdf_from_url` | active document and download provenance |
 | `fill_pdf` | active document and field-fill outcome |
+| `set_pdf_metadata` | active document, save mode, appended object count, per-field before and after, XMP status, and signatures kept |
 | `fill_with_profile` | active document and profile-fill outcome |
 | `get_active_document` | empty or populated active-document state |
 | `get_allowed_directories` | resolved directory list, whether any were configured, which configuration layer supplied them, and the stored configuration path |

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -31,6 +31,7 @@ import {
   copyPdfDocumentMetadata,
   copyPdfPagesPreservingForms,
   detectExistingSignatures,
+  detectXfaFormInDocument,
   drawSignatureFieldOnPage,
   getPageBoxGeometry,
   parsePageRanges,
@@ -67,6 +68,20 @@ import {
   writeCarriedOutline,
 } from "./outline-carry.js";
 import { carryPageLabels, readSourcePageLabels } from "./page-label-carry.js";
+import {
+  IncrementalUpdateRefusal,
+  buildIncrementalUpdate,
+  keepsPrefix,
+  snapshotIndirectObjects,
+} from "./incremental-update.js";
+import { inspectSignatureState } from "./signature-state.js";
+import {
+  XmpUnsupported,
+  decodeXmpPacket,
+  editXmpDocumentFields,
+  readXmpDocumentFields,
+  xmpPacketFromInfo,
+} from "./xmp-metadata.js";
 
 const PROTOCOL_VERSION = 1;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
@@ -172,11 +187,15 @@ const OPERATIONS = new Set([
   "prepare_signing_packet",
   "reorder_pdf_pages",
   "rotate_pdf_pages",
+  "set_pdf_metadata",
   "split_pdf",
 ]);
+const METADATA_EDIT_FIELDS = Object.freeze(["title", "author", "subject", "keywords"]);
+const MAX_METADATA_VALUE_LENGTH = 32_768;
 const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
   ["fill_with_profile", ["field_data"]],
+  ["set_pdf_metadata", ["edits", "modification_at", "save_mode"]],
   ["inspect_pdf_accessibility", []],
   ["inspect_pdf_form", []],
   ["inspect_import_pdf", []],
@@ -479,6 +498,25 @@ function validateRequest(request) {
   }
   if (Object.hasOwn(options, "draw_audit_line") && typeof options.draw_audit_line !== "boolean") {
     throw new TypeError("draw_audit_line must be boolean.");
+  }
+  if (request.operation === "set_pdf_metadata") {
+    objectValue(options.edits, "edits");
+    const keys = Object.keys(options.edits);
+    if (keys.length < 1 || keys.some(key => !METADATA_EDIT_FIELDS.includes(key))) {
+      throw new TypeError("edits must name at least one of title, author, subject, keywords.");
+    }
+    for (const key of keys) {
+      const value = options.edits[key];
+      if (value !== null && (typeof value !== "string" || value.length > MAX_METADATA_VALUE_LENGTH)) {
+        throw new TypeError(`edits.${key} must be a string of at most ${MAX_METADATA_VALUE_LENGTH} characters, or null.`);
+      }
+    }
+    if (!["incremental", "rewrite"].includes(options.save_mode)) {
+      throw new TypeError("save_mode must be incremental or rewrite.");
+    }
+    if (typeof options.modification_at !== "string" || Number.isNaN(Date.parse(options.modification_at))) {
+      throw new TypeError("modification_at is invalid.");
+    }
   }
   if (typeof request.stage_directory !== "string" || !path.isAbsolute(request.stage_directory)) {
     throw new TypeError("stage_directory must be absolute.");
@@ -1904,6 +1942,29 @@ function copyPdfDocumentMetadataForRebuiltOutput(
       captureRebuiltSpecNullAuthority(targetDoc, state);
     },
   });
+  regenerateXmpFromInfo(targetDoc, sourceDoc);
+}
+
+/**
+ * A rebuilt output keeps the source's Info entries but not its XMP packet,
+ * which may carry claims the rebuilt file does not meet (see
+ * docs/METADATA_PROVENANCE.md). When the source had XMP, write a fresh packet
+ * stating only the four document fields the output's Info already asserts, so
+ * a viewer that prefers XMP shows the same title and author instead of none.
+ * A source without XMP gets none.
+ */
+function regenerateXmpFromInfo(targetDoc, sourceDoc) {
+  if (sourceDoc.catalog.get(PDFName.of("Metadata")) === undefined) return;
+  const fields = Object.fromEntries(Object.keys(INFO_ACCESSORS).map(field => [field, readInfoField(targetDoc, field)]));
+  if (Object.values(fields).every(value => value === null)) return;
+  const packet = xmpPacketFromInfo(fields);
+  targetDoc.catalog.set(
+    PDFName.of("Metadata"),
+    targetDoc.context.register(targetDoc.context.stream(new TextEncoder().encode(packet), {
+      Type: "Metadata",
+      Subtype: "XML",
+    })),
+  );
 }
 
 async function copyPdfPagesForRebuiltOutput(
@@ -2035,12 +2096,90 @@ export async function savePdfDocumentSafely(document, options = {}) {
   return bytes;
 }
 
-export async function loadPdfForMutation(bytes, password, { forceXfa = false, guardXfa = false } = {}) {
+/**
+ * Save by appending an incremental update instead of rewriting, after the
+ * same integrity checks savePdfDocumentSafely makes. The result must keep the
+ * original bytes as an exact prefix; it is then re-parsed and held to the same
+ * page-count and rotation postconditions. Refusals from the writer (encrypted,
+ * damaged cross-reference, nothing changed) surface with their reason.
+ */
+export async function savePdfDocumentIncrementally(document, originalBytes, snapshot, {
+  expectedPageCount,
+  expectedPageRotations,
+}) {
+  try {
+    await document.flush();
+  } catch {
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "PDF failed to materialize deferred objects before verification",
+    );
+  }
+  assertSafeParsedPdfDecodeChains(document);
+  assertSafeParsedPdfComplexity(document);
+  const initialAuthority = inputSpecNullReferenceAuthorities.get(document)?.graph_authority;
+  const graphBeforeSave = enforceSafeParsedPdfGraph(document);
+  if (!initialAuthority
+      || !sameSpecNullReferenceAuthority(specNullReferenceAuthority(graphBeforeSave), initialAuthority)) {
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "Mutation introduced or altered a standards-defined null reference",
+    );
+  }
+  let built;
+  try {
+    built = buildIncrementalUpdate(document, originalBytes, snapshot);
+  } catch (error) {
+    if (error instanceof IncrementalUpdateRefusal) {
+      const refusal = new Error(`The change could not be appended to this PDF: ${error.message}`);
+      refusal.reason = error.reason;
+      throw refusal;
+    }
+    throw error;
+  }
+  const { bytes } = built;
+  if (!keepsPrefix(bytes, originalBytes)) {
+    throw resourceError("unsafe_pdf_integrity", "Incremental update did not keep the original bytes as its prefix");
+  }
+  let verified;
+  try {
+    await assertBoundedPdfStreamDecodes(bytes);
+    verified = await PDFDocument.load(bytes, { updateMetadata: false });
+    enforceSafeParsedPdfGraph(verified, { pruneUnreachableInvalid: false });
+    validatePageTree(verified);
+  } catch (error) {
+    if (error?.code === RESOURCE_CODE) throw error;
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "Incrementally updated PDF failed isolated object-graph verification",
+    );
+  }
+  if (verified.getPageCount() !== expectedPageCount
+      || JSON.stringify(normalizedPageRotations(verified)) !== JSON.stringify(expectedPageRotations)) {
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "Incrementally updated PDF changed its pages",
+    );
+  }
+  return { bytes, summary: built.summary, verified };
+}
+
+export async function loadPdfForMutation(bytes, password, {
+  forceXfa = false,
+  guardXfa = false,
+  updateMetadata = true,
+} = {}) {
   assertBoundedPdfStructure(bytes);
   await assertBoundedPdfStreamDecodes(bytes);
   let document;
   try {
-    document = await PDFDocument.load(bytes, password ? { password } : {});
+    // updateMetadata false keeps pdf-lib from rewriting Producer, Creator and
+    // ModDate at load. An incremental update must start from the document as
+    // it is on disk, or the rewrite would ride along as an unrequested change.
+    document = await PDFDocument.load(bytes, {
+      ...(password ? { password } : {}),
+      ...(updateMetadata ? {} : { updateMetadata: false }),
+    });
   } catch (error) {
     if (error.message?.includes("password") || error.message?.includes("encrypt")) {
       throw new Error(PDF_LIB_ENCRYPTED_MESSAGE);
@@ -2315,8 +2454,8 @@ function createProtection(request) {
  * is entered only after pdf-lib has said the document is encrypted, which is
  * the same detection the read path uses.
  */
-async function loadMutationSource(protection, bytes) {
-  const xfa = { forceXfa: protection.forceXfa, guardXfa: protection.guardXfa };
+async function loadMutationSource(protection, bytes, { updateMetadata = true } = {}) {
+  const xfa = { forceXfa: protection.forceXfa, guardXfa: protection.guardXfa, updateMetadata };
   if (!ENCRYPTED_WRITE_OPERATIONS[protection.operation]) {
     // Not a mutation that may decrypt; behave exactly as before.
     return loadPdfForMutation(bytes, protection.password, xfa);
@@ -2597,6 +2736,10 @@ async function execute(request, protection) {
       page_labels: pageLabels,
       form_info: formInfo(target),
     };
+  } else if (request.operation === "set_pdf_metadata") {
+    const edited = await setDocumentMetadata(protection, sourceBytes[0], options);
+    outputs = [edited.bytes];
+    result = edited.result;
   } else {
     const document = await loadMutationSource(protection, sourceBytes[0]);
     const expectedPageCount = document.getPageCount();
@@ -2688,6 +2831,167 @@ async function execute(request, protection) {
     throw new TypeError("Mutation operations must stage at least one output.");
   }
   return { outputs, result };
+}
+
+const INFO_ACCESSORS = Object.freeze({
+  title: { key: "Title", read: document => document.getTitle(), write: (document, value) => document.setTitle(value) },
+  author: { key: "Author", read: document => document.getAuthor(), write: (document, value) => document.setAuthor(value) },
+  subject: { key: "Subject", read: document => document.getSubject(), write: (document, value) => document.setSubject(value) },
+  keywords: { key: "Keywords", read: document => document.getKeywords(), write: (document, value) => document.setKeywords([value]) },
+});
+
+function readInfoField(document, field) {
+  try {
+    return INFO_ACCESSORS[field].read(document) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The catalog XMP stream as { ref, text }, null when there is none, or a
+ * refusal when there is one this cannot read: editing Info alone would then
+ * leave the two records disagreeing, which is the defect this tool exists to
+ * prevent.
+ */
+function readCatalogXmp(document) {
+  const raw = document.catalog.get(PDFName.of("Metadata"));
+  if (raw === undefined) return null;
+  const stream = raw instanceof PDFRef ? document.context.lookup(raw) : null;
+  if (!(stream instanceof PDFRawStream)) {
+    throw new XmpUnsupported("xmp_unreadable", "The PDF has an XMP metadata entry that is not a readable stream.");
+  }
+  let decoded;
+  try {
+    decoded = decodePDFRawStream(stream).decode();
+  } catch {
+    throw new XmpUnsupported("xmp_unreadable", "The PDF's XMP metadata stream uses an encoding PDF Tools cannot decode.");
+  }
+  return { ref: raw, text: decodeXmpPacket(decoded) };
+}
+
+async function setDocumentMetadata(protection, sourceBytes, options) {
+  const incremental = options.save_mode === "incremental";
+  const document = await loadMutationSource(protection, sourceBytes, { updateMetadata: !incremental });
+  const encrypted = (protection.sources.get(sourceBytes) ?? null) !== null;
+  if (incremental && encrypted) {
+    throw new Error(
+      "This PDF is encrypted, so its metadata cannot be appended as an update here: the appended objects would need the "
+      + "document's own encryption keys. Pass save_mode \"rewrite\" to rewrite the file with its protection restored.",
+    );
+  }
+  const signatures = inspectSignatureState(document);
+  if (signatures.certification !== null) {
+    throw new Error(
+      `This PDF is certified (DocMDP level ${signatures.certification}). Changing its metadata is not among the changes `
+      + "the certification permits, so any edit would void it. Nothing was changed.",
+    );
+  }
+  if (signatures.signed.length > 0 && !incremental) {
+    throw new Error(
+      `This PDF has ${signatures.signed.length} signature(s). Rewriting the file would invalidate them; use the default `
+      + "save_mode \"incremental\", which appends the change and leaves the signed bytes untouched.",
+    );
+  }
+  if (!incremental && detectXfaFormInDocument(document).present) {
+    throw new Error(
+      "This PDF carries an XFA form, which rewriting the file would drop. Use the default save_mode \"incremental\", "
+      + "which leaves the XFA layer as it is.",
+    );
+  }
+  const snapshot = incremental ? snapshotIndirectObjects(document, sourceBytes) : null;
+  const expectedPageCount = document.getPageCount();
+  const expectedPageRotations = normalizedPageRotations(document);
+
+  let xmp;
+  try {
+    xmp = readCatalogXmp(document);
+  } catch (error) {
+    if (error instanceof XmpUnsupported) {
+      throw new Error(`${error.message} Nothing was changed, so Info and XMP still agree. (${error.reason})`);
+    }
+    throw error;
+  }
+  const modifiedAt = new Date(options.modification_at);
+  let editedXmp = null;
+  if (xmp) {
+    try {
+      editedXmp = editXmpDocumentFields(xmp.text, options.edits, {
+        modifiedAt: modifiedAt.toISOString(),
+        instanceId: `uuid:${randomUUID()}`,
+      });
+    } catch (error) {
+      if (error instanceof XmpUnsupported) {
+        throw new Error(
+          `${error.message} PDF Tools will not change Info alone and leave the two records disagreeing, so nothing was changed. (${error.reason})`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  const changes = [];
+  for (const [field, value] of Object.entries(options.edits)) {
+    const before = readInfoField(document, field);
+    if (value === null) {
+      const info = document.getInfoDict();
+      info.delete(PDFName.of(INFO_ACCESSORS[field].key));
+    } else {
+      INFO_ACCESSORS[field].write(document, value);
+    }
+    changes.push({ field, before, after: value });
+  }
+  document.setModificationDate(modifiedAt);
+  if (editedXmp !== null) {
+    // pdf-lib turns a string into one byte per UTF-16 code unit, which is not
+    // UTF-8: the packet's BOM and any non-ASCII value would be corrupted.
+    const stream = document.context.stream(new TextEncoder().encode(editedXmp), { Type: "Metadata", Subtype: "XML" });
+    document.context.assign(xmp.ref, stream);
+  }
+
+  let bytes;
+  let saveSummary;
+  let verified;
+  if (incremental) {
+    const saved = await savePdfDocumentIncrementally(document, sourceBytes, snapshot, {
+      expectedPageCount,
+      expectedPageRotations,
+    });
+    bytes = saved.bytes;
+    saveSummary = saved.summary;
+    verified = saved.verified;
+  } else {
+    bytes = await savePdfDocumentSafely(document, { expectedPageCount, expectedPageRotations });
+    verified = await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: false }).catch(() => null);
+    saveSummary = { appended_objects: 0, original_bytes: sourceBytes.length, cross_reference: "rewritten" };
+  }
+  // Read the result back and hold it to what was asked, Info and XMP both.
+  if (verified) {
+    for (const { field, after } of changes) {
+      if (readInfoField(verified, field) !== after) {
+        throw resourceError("unsafe_pdf_integrity", `The saved PDF does not carry the requested ${field}.`);
+      }
+    }
+    if (editedXmp !== null) {
+      const readBack = readXmpDocumentFields(readCatalogXmp(verified).text);
+      for (const { field, after } of changes) {
+        const observed = readBack[field];
+        const ok = after === null ? observed.state === "absent" : observed.state === "value" && observed.value === after;
+        if (!ok) throw resourceError("unsafe_pdf_integrity", `The saved XMP does not carry the requested ${field}.`);
+      }
+    }
+  }
+  return {
+    bytes,
+    result: {
+      save_mode: incremental ? "incremental" : "rewrite",
+      appended_objects: saveSummary.appended_objects,
+      changes,
+      xmp: editedXmp !== null ? "updated" : "absent",
+      signatures_kept: incremental ? signatures.signed.length : 0,
+      form_info: formInfo(document),
+    },
+  };
 }
 
 /**

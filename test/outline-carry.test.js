@@ -31,6 +31,7 @@ import {
   writeCarriedOutline,
 } from "../server/outline-carry.js";
 import { readSourcePageLabels } from "../server/page-label-carry.js";
+import { readXmpDocumentFields } from "../server/xmp-metadata.js";
 import { createTestTempDirectory, removeTestTempDirectory } from "./helpers/temp-directory.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -390,11 +391,14 @@ describe("rebuilt outputs keep bookmarks and page labels (stdio)", () => {
     ]);
     // Labels follow their pages: the page printed "3" is still "3" up front.
     // Source XMP is deliberately not copied into a rebuilt output
-    // (docs/METADATA_PROVENANCE.md).
+    // (docs/METADATA_PROVENANCE.md); a fresh packet states only what the
+    // output's Info already asserts.
     expect(read.labels).toEqual(["3", "i", "ii", "1", "2"]);
     expect(structured.page_labels).toBe("carried");
     const reloaded = await PDFDocument.load(bytes);
-    expect(reloaded.catalog.get(PDFName.of("Metadata"))).toBeUndefined();
+    const packet = new TextDecoder().decode(reloaded.catalog.lookup(PDFName.of("Metadata")).getContents());
+    expect(readXmpDocumentFields(packet).title).toEqual({ state: "value", value: "Synthetic Outline Report" });
+    expect(packet).not.toContain("xmpMM:");
     expect(reloaded.catalog.get(PDFName.of("PageMode"))).toBe(PDFName.of("UseOutlines"));
     // The closed entry stays closed.
     const appendix = readSourceOutline(reloaded).entries.find(entry => entry.titleText === "Appendix");
