@@ -631,7 +631,9 @@ describe("aggregate test-runner contract", () => {
     expect(Object.isFrozen(SERIAL_RESOURCE_TEST_SUITES)).toBe(true);
     expect(Object.isFrozen(SERIAL_RESOURCE_TEST_FILES)).toBe(true);
     expect(SERIAL_RESOURCE_TEST_FILES).toEqual([
+      "test/bounded-decode.test.js",
       "test/compare-pdfs.test.js",
+      "test/decode-corpus.test.js",
       "test/eval/comparison-product-baseline.test.js",
       "test/eval/extraction-phase0.test.js",
       "test/eval/extraction-phase1-publisher.test.js",

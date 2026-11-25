@@ -614,6 +614,15 @@ function fillSaveNotice(result) {
     + "document was changed after signing (a form fill, which the signature permits).";
 }
 
+// A rendered page can be incomplete: an image over the decode limits is not
+// drawn (server/decode-budget.js). Say so, so the picture is not taken
+// for the whole page.
+function skippedImagesNotice(count) {
+  if (!count) return "";
+  return `\nIncomplete render: ${count} image(s) on this page exceed the image size limit and were not drawn `
+    + "(images_skipped_at_limit). The rest of the page is shown.";
+}
+
 // One reply line about bookmarks, so a rebuilt output never loses one silently.
 function outlineNotice(report) {
   const line = describeOutlineReport(report);
@@ -6482,6 +6491,7 @@ async function handleToolCall(request) {
             pngSha256: createHash("sha256").update(imageBuffer).digest("hex"),
             rawPixelSha256: renderedImage.raw_pixel_sha256,
             rawPixelStatus: renderedImage.raw_pixel_status,
+            imagesSkippedAtLimit: renderedImage.images_skipped_at_limit ?? 0,
           });
 
           return {
@@ -6492,7 +6502,8 @@ async function handleToolCall(request) {
                 `Document pages: ${totalPages}\n` +
                 `Rendered size: ${renderedWidth} x ${renderedHeight} px\n` +
                 `Renderer: ${renderedImage.renderer}\n` +
-                `Scale: ${scale.toFixed(2)}x`
+                `Scale: ${scale.toFixed(2)}x` +
+                skippedImagesNotice(renderedImage.images_skipped_at_limit)
             }, {
               type: "image",
               data: imageBuffer.toString("base64"),
@@ -6571,6 +6582,7 @@ async function handleToolCall(request) {
             pngSha256: createHash("sha256").update(imageBuffer).digest("hex"),
             rawPixelSha256: renderedImage.raw_pixel_sha256,
             rawPixelStatus: renderedImage.raw_pixel_status,
+            imagesSkippedAtLimit: renderedImage.images_skipped_at_limit ?? 0,
           });
 
           return {
@@ -6581,7 +6593,8 @@ async function handleToolCall(request) {
                 `Region (pt): (${region.x}, ${region.y}, ${region.width} x ${region.height})\n` +
                 `Rendered crop: ${crop.width} x ${crop.height} px\n` +
                 `Renderer: ${renderedImage.renderer}\n` +
-                `Scale: ${scale.toFixed(2)}x`
+                `Scale: ${scale.toFixed(2)}x` +
+                skippedImagesNotice(renderedImage.images_skipped_at_limit)
             }, {
               type: "image",
               data: imageBuffer.toString("base64"),

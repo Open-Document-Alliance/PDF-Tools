@@ -563,6 +563,20 @@ ${outputStatement}
     });
   });
 
+  it("stops a child that never reports its memory instead of running it unwatched", async () => {
+    const workerPath = await fixtureWorker(`
+await new Promise(resolve => process.stdin.on("end", resolve).resume());
+setInterval(() => {}, 1000);
+`);
+    await expect(runPdfjsSubprocess(request(), {
+      timeoutMs: 20_000,
+      workerPath,
+    })).rejects.toMatchObject({
+      code: PDF_RESOURCE_LIMIT_CODE,
+      reason: "worker_memory_monitor_failed",
+    });
+  }, 30_000);
+
   it("classifies a wall timeout as a typed resource failure", async () => {
     const workerPath = await fixtureWorker(`
 process.on("SIGTERM", () => {});

@@ -92,6 +92,8 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
   "test/signed-fill.test.js",
   "test/signature-field.test.js",
   "test/apply-text-keywords.test.js",
+  "test/bounded-decode.test.js",
+  "test/decode-corpus.test.js",
   "test/path-handler-toctou.test.js",
   "test/pdfjs-worker-contract.test.js",
   "test/plugin-data-config.test.js",
@@ -107,6 +109,18 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
 ]);
 
 export const REVIEWED_COMPUTED_MODULE_LOADS = Object.freeze([
+  Object.freeze({
+    // The byte-identical share mirror of server/pdfjs-bounded.js below.
+    file: "pdf-toolkit-mcp-share/server/pdfjs-bounded.js",
+    count: 2,
+    kinds: Object.freeze(["dynamic-import", "dynamic-import"]),
+    fingerprints: Object.freeze([
+      "3ef3605c95487070884e7efa6d6e5872ec4a19cf2b8d0a2c3c53cccc223a2475",
+      "49ea2a4c75eea36e13ac9eeb361b35d5e909e755cd06a0aa72d07cf6a5621683",
+    ]),
+    reason: "Share-tree mirror of server/pdfjs-bounded.js, which evaluates the pinned PDF.js "
+      + "worker with its decode guards added.",
+  }),
   Object.freeze({
     // The byte-identical share mirror of server/qpdf-decrypt-worker.js below.
     // Same load, same fingerprint; the two entries must not diverge.
@@ -214,6 +228,19 @@ export const REVIEWED_COMPUTED_MODULE_LOADS = Object.freeze([
     reason: "Loads a packaged share artifact from an isolated build root.",
   }),
   Object.freeze({
+    file: "server/pdfjs-bounded.js",
+    count: 2,
+    kinds: Object.freeze(["dynamic-import", "dynamic-import"]),
+    fingerprints: Object.freeze([
+      "3ef3605c95487070884e7efa6d6e5872ec4a19cf2b8d0a2c3c53cccc223a2475",
+      "49ea2a4c75eea36e13ac9eeb361b35d5e909e755cd06a0aa72d07cf6a5621683",
+    ]),
+    reason: "Evaluates the pinned pdfjs-dist worker module with decode guards added, so it "
+      + "registers as PDF.js's in-thread worker: first as a data: URL, and only if the host refuses "
+      + "that, from a private temporary file holding the same text. The source is the installed "
+      + "pdfjs-dist file, patched at fixed spans that must match exactly once or loading fails.",
+  }),
+  Object.freeze({
     file: "server/qpdf-decrypt-worker.js",
     count: 1,
     kinds: Object.freeze(["dynamic-import"]),
@@ -234,6 +261,16 @@ export const REVIEWED_COMPUTED_MODULE_LOADS = Object.freeze([
       "bfb22ac97868fe7bb9a1d7da4651099c672c2ac8fec83b6b51340bbeb36dd305",
     ]),
     reason: "Loads a verified generated controller outside the checkout.",
+  }),
+  Object.freeze({
+    file: "test/helpers/decode-corpus.js",
+    count: 1,
+    kinds: Object.freeze(["dynamic-import"]),
+    fingerprints: Object.freeze([
+      "15f35a3cb718057ac0e4f9c086e3a3073129790539949a000bce22cd1bb04531",
+    ]),
+    reason: "Loads a decode-corpus case builder named in the corpus manifest, which lives "
+      + "outside the repository and is supplied only through PDF_TOOLS_DECODE_CORPUS.",
   }),
   Object.freeze({
     file: "test/pdf-read-permission-consistency.test.js",
@@ -333,10 +370,20 @@ export const SOURCE_IDENTITY_TEST_FILES = Object.freeze(
 
 export const SERIAL_RESOURCE_TEST_SUITES = Object.freeze([
   Object.freeze({
+    file: "test/bounded-decode.test.js",
+    reason: "Decodes streams up to the decode limits and measures the peak "
+      + "resident memory of child processes, which sibling suites would distort.",
+  }),
+  Object.freeze({
     file: "test/compare-pdfs.test.js",
     reason: "Exercises multiple PDF.js comparison renders that exceeded their "
       + "existing per-test budgets only under sibling-suite contention and "
       + "passed unchanged with an exclusive worker.",
+  }),
+  Object.freeze({
+    file: "test/decode-corpus.test.js",
+    reason: "When the private decode corpus is configured, runs each case to its decode "
+      + "limits and measures child-process peak memory, which sibling suites would distort.",
   }),
   Object.freeze({
     file: "test/eval/comparison-product-baseline.test.js",

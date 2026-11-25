@@ -1,3 +1,8 @@
+import {
+  MEMORY_CEILING_BYTES,
+  MEMORY_GROWTH_BYTES,
+  createSubprocessMemoryWatch,
+} from "./decode-memory-guard.js";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -176,6 +181,10 @@ function validateRequest(request) {
   }
   return encoded;
 }
+
+// A real PDF.js child reports within milliseconds; this only stops a child whose
+// memory monitor never started, so the work is not left unwatched.
+const MEMORY_MONITOR_STARTUP_TIMEOUT_MS = 10_000;
 
 function resourceLimitError(reason, cause = null) {
   const error = new Error(
@@ -450,6 +459,8 @@ async function acquireOperationSlot(deadlineAt, signal) {
 async function runSpawnedWorker({
   environment,
   executable,
+  memoryCeilingBytes,
+  memoryGrowthBytes,
   maxBinaryBytes,
   maxOldSpaceMb,
   maxResultBytes,
@@ -491,6 +502,19 @@ async function runSpawnedWorker({
     const stdout = boundedCollector(maxResultBytes, () => terminate("stdout"));
     const stderr = boundedCollector(maxStderrBytes, () => terminate("stderr"));
     const binary = boundedCollector(maxBinaryBytes, () => terminate("binary"));
+    // The child's monitor thread reports its memory; past the limit, or if
+    // the reports cannot be trusted, the child is stopped.
+    let memoryBreach = null;
+    const memory = createSubprocessMemoryWatch({
+      ceilingBytes: memoryCeilingBytes,
+      growthBytes: memoryGrowthBytes,
+      onReady: () => clearTimeout(memoryStartupTimer),
+      onBreach: reason => {
+        memoryBreach = reason;
+        terminate("memory");
+      },
+    });
+    let memoryStartupTimer = null;
 
     const finish = async () => {
       if (settled) return;
@@ -513,6 +537,10 @@ async function runSpawnedWorker({
       }
       if (timedOut) {
         reject(resourceLimitError("wall_timeout"));
+        return;
+      }
+      if (memoryBreach !== null) {
+        reject(resourceLimitError(memoryBreach === "memory_limit" ? "worker_memory_limit" : "worker_memory_monitor_failed"));
         return;
       }
       if (stdoutResult.overflowed || stderrResult.overflowed || binaryResult.overflowed) {
@@ -556,7 +584,7 @@ async function runSpawnedWorker({
           detached: false,
           env: childEnvironment(environment, platform, operationDirectory),
           shell: false,
-          stdio: ["pipe", "pipe", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
           windowsHide: true,
         },
       );
@@ -580,9 +608,20 @@ async function runSpawnedWorker({
     } else {
       child.stdio[3].on("data", chunk => binary.add(chunk));
     }
+    if (!child.stdio[4]) {
+      memory.fail("memory_monitor_failed");
+    } else {
+      child.stdio[4].on("data", chunk => memory.add(chunk));
+      child.stdio[4].on("error", () => memory.fail("memory_monitor_failed"));
+      memoryStartupTimer = setTimeout(() => {
+        if (!memory.ready) memory.fail("memory_monitor_failed");
+      }, MEMORY_MONITOR_STARTUP_TIMEOUT_MS);
+      memoryStartupTimer.unref();
+    }
     child.once("close", (code, signalName) => {
       exitCode = code;
       exitSignal = signalName;
+      clearTimeout(memoryStartupTimer);
       void finish();
     });
     child.stdin.on("error", error => {
@@ -1405,6 +1444,8 @@ export async function runPdfjsSubprocess(request, {
   maxBinaryBytes = DEFAULT_MAX_BINARY_BYTES,
   maxStderrBytes = DEFAULT_MAX_STDERR_BYTES,
   maxOldSpaceMb = DEFAULT_MAX_OLD_SPACE_MB,
+  memoryGrowthBytes = MEMORY_GROWTH_BYTES,
+  memoryCeilingBytes = MEMORY_CEILING_BYTES,
   workerPath = fileURLToPath(new URL("./pdfjs-worker.js", import.meta.url)),
   executable = process.execPath,
   environment = process.env,
@@ -1482,6 +1523,8 @@ export async function runPdfjsSubprocess(request, {
       : await runSpawnedWorker({
           environment,
           executable,
+          memoryCeilingBytes,
+          memoryGrowthBytes,
           maxBinaryBytes,
           maxOldSpaceMb,
           maxResultBytes,

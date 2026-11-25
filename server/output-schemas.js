@@ -27,6 +27,8 @@ const object = (properties, required = Object.keys(properties), additionalProper
   required,
   additionalProperties,
 });
+// The same object with some properties no longer required.
+const optionalKeys = (schema, keys) => ({ ...schema, required: schema.required.filter(key => !keys.includes(key)) });
 const arrayOf = items => ({ type: "array", items });
 const enumString = values => ({ type: "string", enum: values });
 
@@ -1630,7 +1632,7 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     ],
   ),
   verify_table_proposal: tableProposalVerification,
-  render_pdf_page: object({
+  render_pdf_page: optionalKeys(object({
     pdf_path: string,
     file_name: string,
     page: integer,
@@ -1659,9 +1661,10 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     png_sha256: sha256Digest,
     raw_pixel_sha256: nullable(sha256Digest),
     raw_pixel_status: enumString(["available", "unavailable"]),
+    images_skipped_at_limit: { type: "integer", minimum: 1 },
     observation_sha256: sha256Digest,
-  }),
-  render_pdf_region: object({
+  }), ["images_skipped_at_limit"]),
+  render_pdf_region: optionalKeys(object({
     pdf_path: string,
     file_name: string,
     page: integer,
@@ -1689,8 +1692,9 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     png_sha256: sha256Digest,
     raw_pixel_sha256: nullable(sha256Digest),
     raw_pixel_status: enumString(["available", "unavailable"]),
+    images_skipped_at_limit: { type: "integer", minimum: 1 },
     observation_sha256: sha256Digest,
-  }),
+  }), ["images_skipped_at_limit"]),
   search_pdf_text: object({
     pdf_path: string,
     file_name: string,

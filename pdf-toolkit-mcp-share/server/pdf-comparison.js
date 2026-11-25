@@ -50,6 +50,7 @@ const PDF_COMPARISON_OWN_COVERAGE_REASONS = Object.freeze([
   "VISUAL_NOT_REQUESTED",
   "VISUAL_RENDERER_UNAVAILABLE",
   "VISUAL_ALIGNED_PAGE_COMPARISON_SKIPPED",
+  "VISUAL_IMAGES_SKIPPED_AT_LIMIT",
   "REPEATED_PAGE_AMBIGUITY",
 ]);
 const PDF_COMPARISON_OWN_SIDED_COVERAGE_REASONS = Object.freeze([
@@ -357,6 +358,10 @@ export function derivePdfComparisonCoverage(documents, includeVisual, alignments
     result.visual = coverage("unavailable", ["VISUAL_NOT_REQUESTED"]);
   } else if (documents.some(document => document.renders.some(render => !render?.binary))) {
     result.visual = coverage("unavailable", ["VISUAL_RENDERER_UNAVAILABLE"]);
+  } else if (documents.some(document => document.renders.some(render => render.images_skipped_at_limit > 0))) {
+    // An image over the decode limits was not drawn, so a visual difference
+    // inside it would not show.
+    raiseCoverage(result.visual, "partial", "VISUAL_IMAGES_SKIPPED_AT_LIMIT");
   }
   for (const channel of PDF_COMPARISON_CHANNELS) {
     result[channel].reason_codes = [...new Set(result[channel].reason_codes)].sort(compareCodePoints);

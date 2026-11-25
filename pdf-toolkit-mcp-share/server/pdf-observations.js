@@ -39,6 +39,7 @@ export const PDF_OBSERVATION_COVERAGE_REASONS = Object.freeze({
   metadata: Object.freeze([
     "METADATA_LIMIT_REACHED",
     "METADATA_PARSE_UNAVAILABLE",
+    "METADATA_STREAM_UNBOUNDED",
     "OUTPUT_LIMIT_METADATA_OMITTED",
     "XMP_PARSE_UNAVAILABLE",
   ]),
@@ -738,6 +739,7 @@ export function buildRenderObservation({
   pngSha256,
   rawPixelSha256,
   rawPixelStatus,
+  imagesSkippedAtLimit = 0,
 }) {
   const observed = {
     observation_schema_version: PDF_OBSERVATION_SCHEMA_VERSION,
@@ -757,6 +759,9 @@ export function buildRenderObservation({
     png_sha256: pngSha256,
     raw_pixel_sha256: rawPixelSha256,
     raw_pixel_status: rawPixelStatus,
+    // Only when an image exceeded the image limits and was not drawn, so an
+    // ordinary render's observation is unchanged.
+    ...(imagesSkippedAtLimit > 0 ? { images_skipped_at_limit: imagesSkippedAtLimit } : {}),
   };
   return {
     ...existing,
@@ -1074,6 +1079,9 @@ export function validatePdfObservationSemantics(payload) {
 }
 
 export function validateRenderObservationSemantics(payload) {
+  semanticAssertion(payload.images_skipped_at_limit === undefined
+    || (Number.isSafeInteger(payload.images_skipped_at_limit) && payload.images_skipped_at_limit >= 1),
+  "skipped image count is invalid");
   semanticAssertion(path.isAbsolute(payload.source.canonical_path),
     "render source path is not absolute");
   semanticAssertion(payload.source.file_name === payload.file_name,
@@ -1124,6 +1132,7 @@ export function validateRenderObservationSemantics(payload) {
     png_sha256: payload.png_sha256,
     raw_pixel_sha256: payload.raw_pixel_sha256,
     raw_pixel_status: payload.raw_pixel_status,
+    ...(payload.images_skipped_at_limit !== undefined ? { images_skipped_at_limit: payload.images_skipped_at_limit } : {}),
   };
   const expectedDigest = observationSha256({
     source_sha256: payload.source.sha256,
