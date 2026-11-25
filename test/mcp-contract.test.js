@@ -252,7 +252,10 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // keywords in Info and XMP together and appends the change as an incremental
 // update by default. 65 tools; no existing tool's inputs, annotations or
 // descriptions change. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
-const TOOL_CONTRACT_SHA256 = "c97b8652634e316f85745d14c98e9e6a8cdbddc9ef6509ed9ce111b7dade66d9";
+// 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
+// page_labels ("positional" by default, or "follow_pages") and report
+// page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+const TOOL_CONTRACT_SHA256 = "f8951febb6f6123ced9fc3b5dfff83ca624a7bc96ae123dab046ff963aa87d05";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

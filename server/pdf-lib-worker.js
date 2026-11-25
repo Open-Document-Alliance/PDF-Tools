@@ -67,7 +67,7 @@ import {
   readSourceOutline,
   writeCarriedOutline,
 } from "./outline-carry.js";
-import { carryPageLabels, readSourcePageLabels } from "./page-label-carry.js";
+import { carryPageLabels, carryReorderedPageLabels, readSourcePageLabels } from "./page-label-carry.js";
 import {
   IncrementalUpdateRefusal,
   buildIncrementalUpdate,
@@ -208,8 +208,8 @@ const OPTION_KEYS = new Map([
   ["merge_pdfs", []],
   ["split_pdf", ["page_ranges"]],
   ["rotate_pdf_pages", ["degrees", "pages"]],
-  ["reorder_pdf_pages", ["page_order", "rotations"]],
-  ["apply_page_plan", ["page_order", "rotations"]],
+  ["reorder_pdf_pages", ["page_labels", "page_order", "rotations"]],
+  ["apply_page_plan", ["page_labels", "page_order", "rotations"]],
   ["add_signature_field", ["allow_resign", "placement"]],
   ["apply_signature", [
     "allow_resign", "audit_line", "audit_text", "draw_audit_line",
@@ -340,6 +340,10 @@ function validateRequest(request) {
   if (request.operation === "bulk_fill_from_csv") {
     boundedArray(options.records, "records");
     options.records.forEach((record, index) => objectValue(record, `records[${index}]`));
+  }
+  if (["reorder_pdf_pages", "apply_page_plan"].includes(request.operation)
+      && !["positional", "follow_pages"].includes(options.page_labels)) {
+    throw new TypeError("page_labels must be positional or follow_pages.");
   }
   if (request.operation === "split_pdf"
       && (typeof options.page_ranges !== "string" || options.page_ranges.length < 1 || options.page_ranges.length > 16_384)) {
@@ -2738,10 +2742,12 @@ async function execute(request, protection) {
         outputPosition.has(sourcePage) ? copied[outputPosition.get(sourcePage)].ref : null
       ),
     }], { pageModeFrom: source });
-    const pageLabels = carryPageLabels(target, [{
-      labels: readSourcePageLabels(source),
-      sourcePages: order.map(page => page - 1),
-    }]);
+    const labelCarry = carryReorderedPageLabels(
+      target,
+      readSourcePageLabels(source),
+      order.map(page => page - 1),
+      options.page_labels === "follow_pages" ? "follow" : "positional",
+    );
     outputs = [await savePdfDocumentSafely(target, {
       expectedPageCount: order.length,
       expectedPageRotations,
@@ -2751,7 +2757,9 @@ async function execute(request, protection) {
       deleted_pages: total - order.length,
       rotated_pages: Object.keys(options.rotations ?? {}).filter(key => seen.has(Number(key))).length,
       outline: publicOutlineReport(outline),
-      page_labels: pageLabels,
+      page_labels: labelCarry.status,
+      page_labels_changed: labelCarry.changed,
+      page_label_example: labelCarry.example,
       form_info: formInfo(target),
     };
   } else if (request.operation === "set_pdf_metadata") {
