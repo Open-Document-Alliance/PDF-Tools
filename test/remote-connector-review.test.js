@@ -60,12 +60,16 @@ describe("hosted inline-size boundary over HTTP", () => {
     expect(MAX_HANDLER_BODY_BYTES).toBeGreaterThan(largestInlineBody);
   });
 
-  it("accepts an inline document at the documented limit", async () => {
-    const bytes = await paddedPdf(MAX_INLINE_PDF_BYTES, "AT LIMIT");
+  it("accepts an inline document of exactly the documented limit", async () => {
+    // Exactly 3 MiB: base64 alone is then 4 MiB, so the SDK's default ceiling
+    // refused this request before the handler limit was raised.
+    const padded = await paddedPdf(MAX_INLINE_PDF_BYTES, "AT LIMIT");
+    const bytes = Buffer.concat([Buffer.from(padded), Buffer.from(`\n%${" ".repeat(MAX_INLINE_PDF_BYTES - padded.length - 2)}`)]);
+    expect(bytes.length).toBe(MAX_INLINE_PDF_BYTES);
     const { status, message } = await rpc(1, "tools/call", { name: "get_pdf_info", arguments: { pdf_base64: Buffer.from(bytes).toString("base64") } });
     expect(status).toBe(200);
     expect(message.result.isError).toBeFalsy();
-    expect(message.result.structuredContent.source.size_bytes).toBe(bytes.length);
+    expect(message.result.structuredContent.source.size_bytes).toBe(MAX_INLINE_PDF_BYTES);
   }, 60_000);
 
   it("answers just above the limit with this service's own guidance, not a bare 413", async () => {
