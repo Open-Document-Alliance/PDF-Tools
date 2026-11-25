@@ -59,6 +59,19 @@ function hasOpenssl() {
   }
 }
 
+function hasQpdf() {
+  try {
+    execFileSync("qpdf", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Checks that need an outside tool are skipped, visibly, without it.
+const OPENSSL = hasOpenssl();
+const QPDF = hasQpdf();
+
 /** Verify the first signature in the file over its own byte range. */
 async function signatureVerifies(file, directory) {
   const bytes = await fs.readFile(file);
@@ -187,6 +200,16 @@ describe("XMP document fields", () => {
     expect(edited).toContain("&lt;rev 2&gt; &amp; more");
     expect(edited).toContain("<rdf:Bag><rdf:li>gamma</rdf:li><rdf:li>delta</rdf:li></rdf:Bag>");
     expect(edited).toContain("xmp:ModifyDate=\"2026-11-25T00:00:00.000Z\"");
+  });
+
+  it("changes only the default title, keeping the other languages of an rdf:Alt", () => {
+    const xml = packet(`<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Annual Report</rdf:li><rdf:li xml:lang="fr-FR">Rapport annuel</rdf:li></rdf:Alt></dc:title>
+</rdf:Description>`);
+    const edited = editXmpDocumentFields(xml, { title: "Annual Report 2026" });
+    expect(readXmpDocumentFields(edited).title).toEqual({ state: "value", value: "Annual Report 2026" });
+    expect(edited).toContain('<rdf:li xml:lang="fr-FR">Rapport annuel</rdf:li>');
+    expect(edited).not.toContain(">Annual Report<");
   });
 
   it("adds a property the packet lacks, and removes one on null", () => {
@@ -378,13 +401,32 @@ describe("set_pdf_metadata (stdio)", () => {
     expect(keepsPrefix(new Uint8Array(bytes), original)).toBe(true);
     expect(await pdfjsMetadata(bytes)).toMatchObject({
       title,
-      xmpTitle: title,
+      // PDF.js joins every rdf:Alt entry into one string; the French title
+      // is kept, so it follows the new default one.
+      xmpTitle: `${title}Ancien titre`,
       author: "Example Corp Records",
       xmpCreator: ["Example Corp Records"],
       subject: "Quarterly report",
       keywords: "alpha, beta",
       pages: 1,
     });
+    const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+    const xmp = new TextDecoder().decode(doc.context.lookup(doc.catalog.get(PDFName.of("Metadata"))).getContents());
+    expect(readXmpDocumentFields(xmp).title).toEqual({ state: "value", value: title });
+    expect(xmp).toContain('<rdf:li xml:lang="fr">Ancien titre</rdf:li>');
+  });
+
+  it("stores an author list the way it reads back, in Info and XMP alike", async () => {
+    for (const [index, [author, stored, creators]] of [
+      ["Alice Example;Bob Example", "Alice Example; Bob Example", ["Alice Example", "Bob Example"]],
+      ["Smith, J. ", "Smith, J.", ["Smith, J."]],
+    ].entries()) {
+      const file = path.join(directory, `authors-${index}.pdf`);
+      await fs.writeFile(file, await buildDocument());
+      const { structured } = await succeed({ pdf_path: file, output_path: file, author });
+      expect(structured.changes).toEqual([{ field: "author", before: "Example Corp Records", after: stored }]);
+      expect(await pdfjsMetadata(await fs.readFile(file))).toMatchObject({ author: stored, xmpCreator: creators });
+    }
   });
 
   it("removes a field from both records on null, and rewrite mode drops the earlier revision", async () => {
@@ -405,7 +447,7 @@ describe("set_pdf_metadata (stdio)", () => {
     expect(xmp).not.toContain("<rdf:Bag>");
   });
 
-  it("keeps an existing signature verifying, and refuses to rewrite a signed file", async () => {
+  it.skipIf(!OPENSSL)("keeps an existing signature verifying, and refuses to rewrite a signed file", async () => {
     const file = path.join(directory, "signed.pdf");
     await fs.copyFile(SIGNED_FIXTURE, file);
     const original = await fs.readFile(file);
@@ -419,7 +461,7 @@ describe("set_pdf_metadata (stdio)", () => {
     const bytes = await fs.readFile(file);
     expect(keepsPrefix(new Uint8Array(bytes), new Uint8Array(original))).toBe(true);
     expect((await pdfjsMetadata(bytes)).title).toBe("Signed and retitled");
-    if (hasOpenssl()) expect(await signatureVerifies(file, directory)).toBe(true);
+    expect(await signatureVerifies(file, directory)).toBe(true);
   });
 
   it("refuses a certified document and changes nothing", async () => {
@@ -456,14 +498,9 @@ describe("set_pdf_metadata (stdio)", () => {
     expect((await fs.readFile(file)).equals(Buffer.from(original))).toBe(true);
   });
 
-  it("keeps the document Info of a linearized file with cross-reference streams", async () => {
+  it.skipIf(!QPDF)("keeps the document Info of a linearized file with cross-reference streams", async () => {
     // pdf-lib keeps the first-page trailer of such a file, which has no /Info;
     // the edit must not mistake that for a document without metadata.
-    try {
-      execFileSync("qpdf", ["--version"], { stdio: "ignore" });
-    } catch {
-      return;
-    }
     const plain = path.join(directory, "plain-for-linearize.pdf");
     const file = path.join(directory, "linearized.pdf");
     await fs.writeFile(plain, await buildDocument({ xmp: null }));

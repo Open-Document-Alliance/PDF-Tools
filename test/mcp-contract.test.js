@@ -255,7 +255,9 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
 // page_labels ("positional" by default, or "follow_pages") and report
 // page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
-const TOOL_CONTRACT_SHA256 = "f8951febb6f6123ced9fc3b5dfff83ca624a7bc96ae123dab046ff963aa87d05";
+// 2026-11-25: set_pdf_metadata is not idempotent (each call appends a
+// revision), so idempotentHint is false. Replaces f8951febb6f6123ced9fc3b5dfff83ca624a7bc96ae123dab046ff963aa87d05.
+const TOOL_CONTRACT_SHA256 = "a541bd30be3bbf20ece76dc76c70f72bdbf21bbe6983dbc959a22a5257973378";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -322,7 +324,7 @@ const TOOL_EFFECT_ANNOTATIONS = {
   list_pdfs: CLOSED_READ,
   read_pdf_fields: CLOSED_SESSION_ACTION,
   fill_pdf: CLOSED_IDEMPOTENT_OVERWRITE,
-  set_pdf_metadata: CLOSED_IDEMPOTENT_OVERWRITE,
+  set_pdf_metadata: CLOSED_NON_IDEMPOTENT_OVERWRITE,
   bulk_fill_from_csv: CLOSED_IDEMPOTENT_OVERWRITE,
   compare_pdfs: CLOSED_READ,
   inspect_pdf_accessibility: CLOSED_READ,

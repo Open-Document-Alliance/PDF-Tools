@@ -342,12 +342,29 @@ export function readXmpDocumentFields(xml) {
   return out;
 }
 
-function propertyElement(qname, rdf, shape, value) {
+function seqItems(value) {
+  return String(value).split(";").map(item => item.trim()).filter(Boolean);
+}
+
+/**
+ * The value a field reads back as once written. An author list is stored as
+ * separate creators, so "A;B" and "A; B " both become "A; B"; writing that
+ * form to Info as well keeps the two records identical. Other fields are kept
+ * exactly as given.
+ */
+export function normalizeDocumentFieldValue(field, value) {
+  if (value === null || FIELDS[field]?.shape !== "seq") return value;
+  return seqItems(value).join("; ");
+}
+
+function propertyElement(qname, rdf, shape, value, { keepAlternatives = "" } = {}) {
   const text = escapeXml(value);
-  if (shape === "alt") return `<${qname}><${rdf}:Alt><${rdf}:li xml:lang="x-default">${text}</${rdf}:li></${rdf}:Alt></${qname}>`;
+  if (shape === "alt") {
+    return `<${qname}><${rdf}:Alt><${rdf}:li xml:lang="x-default">${text}</${rdf}:li>${keepAlternatives}</${rdf}:Alt></${qname}>`;
+  }
   if (shape === "seq") {
     // An Info author list "A; B" is two creators, which is how it reads back.
-    const items = String(value).split(";").map(item => item.trim()).filter(Boolean);
+    const items = seqItems(value);
     return `<${qname}><${rdf}:Seq>${(items.length > 0 ? items : [""]).map(item => `<${rdf}:li>${escapeXml(item)}</${rdf}:li>`).join("")}</${rdf}:Seq></${qname}>`;
   }
   if (shape === "bag") {
@@ -355,6 +372,15 @@ function propertyElement(qname, rdf, shape, value) {
     return `<${qname}><${rdf}:Bag>${terms.map(term => `<${rdf}:li>${escapeXml(term)}</${rdf}:li>`).join("")}</${rdf}:Bag></${qname}>`;
   }
   return `<${qname}>${text}</${qname}>`;
+}
+
+/** The rdf:li entries of an rdf:Alt other than x-default, as written. */
+function alternativeEntries(inner, rdf) {
+  const li = new RegExp(`<${escapeRegExp(rdf)}:li(\\s[^>]*)?(?:/>|>[\\s\\S]*?</${escapeRegExp(rdf)}:li\\s*>)`, "g");
+  return [...(inner ?? "").matchAll(li)]
+    .filter(match => !/xml:lang\s*=\s*["']x-default["']/.test(match[1] ?? ""))
+    .map(match => match[0])
+    .join("");
 }
 
 function setProperty(xml, prefixes, rdf, { ns, local, shape }, value, { insertIfAbsent }) {
@@ -372,7 +398,10 @@ function setProperty(xml, prefixes, rdf, { ns, local, shape }, value, { insertIf
   }
   if (elements.length === 1) {
     const found = elements[0];
-    const replacement = value === null ? "" : propertyElement(qname, rdf, shape, value);
+    // A title or description in other languages is kept: only the default
+    // entry changes, as Acrobat does, instead of the whole rdf:Alt.
+    const keepAlternatives = shape === "alt" && value !== null ? alternativeEntries(found.inner, rdf) : "";
+    const replacement = value === null ? "" : propertyElement(qname, rdf, shape, value, { keepAlternatives });
     return xml.slice(0, found.start) + replacement + xml.slice(found.end);
   }
   if (value === null || !insertIfAbsent) return xml;

@@ -3629,7 +3629,7 @@ async function listTools(request) {
           title: "Set PDF Metadata",
           readOnlyHint: false,
           destructiveHint: true,
-          idempotentHint: true,
+          idempotentHint: false,
           openWorldHint: false
         }
       },
