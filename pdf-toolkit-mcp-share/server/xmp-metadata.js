@@ -19,7 +19,7 @@
 // returned to the caller, who stops before writing anything, so Info and XMP
 // are never left disagreeing because of this module.
 
-import { constants as zlibConstants, inflateSync } from "node:zlib";
+import { inflateSync } from "node:zlib";
 import { PDFArray, PDFName, PDFNull, PDFRawStream } from "pdf-lib";
 
 export const XMP_NAMESPACES = Object.freeze({
@@ -82,12 +82,10 @@ export function readXmpStreamBytes(stream, lookup = value => value) {
     throw new XmpUnsupported("xmp_unreadable", "The PDF's XMP metadata stream uses an encoding PDF Tools cannot decode.");
   }
   try {
-    // finishFlush tolerates a stream that ends without its final block, as
-    // pdf-lib's decoder does; maxOutputLength stops inflation at the cap.
-    return new Uint8Array(inflateSync(contents, {
-      finishFlush: zlibConstants.Z_SYNC_FLUSH,
-      maxOutputLength: XMP_MAX_BYTES,
-    }));
+    // maxOutputLength stops inflation at the cap. A stream that ends before
+    // its final block is refused rather than read as a shorter packet: an
+    // edit written back from a truncated packet would lose the rest of it.
+    return new Uint8Array(inflateSync(contents, { maxOutputLength: XMP_MAX_BYTES }));
   } catch (error) {
     if (error?.code === "ERR_BUFFER_TOO_LARGE" || error instanceof RangeError) {
       throw new XmpUnsupported("xmp_too_large", "The XMP packet is larger than PDF Tools will edit.");
