@@ -87,11 +87,11 @@ function pdfWithPageContent(decodedBytes) {
 
 
 /** One page plus extra stream objects (dict text, decoded size or raw bytes), unreferenced or referenced by the page. */
-function pdfWithStreams({ contents = null, extra = [] }) {
+function pdfWithStreams({ contents = null, extra = [], pageExtra = "" }) {
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]${contents ? " /Contents 4 0 R" : ""} >>`,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]${contents ? " /Contents 4 0 R" : ""} ${pageExtra} >>`,
   ];
   const streams = [];
   if (contents) streams.push(contents);
@@ -128,14 +128,22 @@ describe("decoded data bounds for text extraction", () => {
     expect(zones.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
   }, 120_000);
 
-  it("refuses an oversized stream wherever it sits in the document, not only in page contents", async () => {
-    const pdf = pdfWithStreams({ contents: { decoded: 64 }, extra: [{ dict: "/Type /XObject /Subtype /Form /BBox [0 0 10 10]", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
+  it("refuses an oversized stream reached through page resources, not only page contents", async () => {
+    const pdf = pdfWithStreams({ contents: { decoded: 64 }, pageExtra: "/Resources << /XObject << /Fm0 5 0 R >> >>", extra: [{ dict: "/Type /XObject /Subtype /Form /BBox [0 0 10 10]", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
     const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
     expect(result.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
   }, 60_000);
 
-  it("does not decode image streams for text extraction", async () => {
-    const pdf = pdfWithStreams({ contents: { decoded: 64 }, extra: [{ dict: "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
+  it("checks a stream by how it is used, not by its own label", async () => {
+    for (const label of ["/Subtype /Image", "/Type /Metadata /Subtype /XML", "/Type /EmbeddedFile"]) {
+      const pdf = pdfWithStreams({ contents: { dict: label, decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 } });
+      const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
+      expect(result.content[0].text, label).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+    }
+  }, 120_000);
+
+  it("does not decode streams used only as images for text extraction", async () => {
+    const pdf = pdfWithStreams({ contents: { decoded: 64 }, pageExtra: "/Resources << /XObject << /Im0 5 0 R >> >>", extra: [{ dict: "/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", decoded: MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024 }] });
     const result = await callTool("read_pdf_pages", { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1 });
     expect(result.isError).toBeFalsy();
   }, 60_000);
