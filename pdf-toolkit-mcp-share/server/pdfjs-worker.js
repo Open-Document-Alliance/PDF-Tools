@@ -12,6 +12,17 @@ import {
   workerData,
 } from "node:worker_threads";
 import { PDFDocument, PDFName, PDFRawStream, PDFRef } from "pdf-lib";
+import {
+  DecodeBudgetExceeded,
+  MAX_DECODED_CALL_BYTES,
+  MAX_DECODED_STREAM_BYTES,
+  decodeLimitReached,
+  imagesSkippedAtLimit,
+  withCallBudget,
+} from "./decode-budget.js";
+import { MEMORY_SAMPLE_MS } from "./decode-memory-guard.js";
+import { installBoundedPdfjsWorker } from "./pdfjs-bounded.js";
+import { startPdfLibRssMonitor } from "./pdf-lib-rss-monitor.js";
 import { decodeXmpPacket, readXmpDocumentFields, readXmpStreamBytes } from "./xmp-metadata.js";
 import {
   analyzePdfPages,
@@ -46,6 +57,9 @@ const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const MAX_BINARY_BYTES = 16 * 1024 * 1024;
 const MAX_CANVAS_AXIS_PX = 8192;
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
+// A render draws every image onto a canvas, so an image the canvas could not
+// hold is skipped (and reported) rather than failing the whole render.
+const RENDER_OPERATIONS = new Set(["render_page", "render_region", "render_comparison_page"]);
 const MAX_PASSWORD_CHARACTERS = 4096;
 const SYSTEM_COMMAND_TIMEOUT_MS = 15_000;
 const PDF_RESOURCE_LIMIT_CODE = "PDF_RESOURCE_LIMIT_EXCEEDED";
@@ -344,6 +358,20 @@ function sourceChangedError() {
   return error;
 }
 
+// A decode limit is a resource limit like the others, with its own wording:
+// the document itself holds more decoded data than PDF Tools processes.
+function decodeLimitError() {
+  const error = new Error(
+    "This PDF contains compressed data that decodes to more than PDF Tools processes "
+    + `(${MAX_DECODED_STREAM_BYTES / (1024 * 1024)} MiB per stream, ${MAX_DECODED_CALL_BYTES / (1024 * 1024)} MiB per operation), `
+    + "so it was not processed. The PDF Tools server remains available.",
+  );
+  error.name = "PdfResourceLimitError";
+  error.code = PDF_RESOURCE_LIMIT_CODE;
+  error.reason = "decode_limit";
+  return error;
+}
+
 function resourceLimitError(reason) {
   const error = new Error(
     "PDF processing exceeded its isolated resource budget. Try a narrower page range, "
@@ -516,6 +544,9 @@ async function importPdfjsForNodeCompatibleElectronHost() {
 async function loadPdfjs() {
   if (pdfjsLib) return pdfjsLib;
   installBrowserPolyfills();
+  // PDF.js's decoders run bounded (server/pdfjs-bounded.js): the patched worker
+  // must be registered before pdf.mjs sets up its in-thread worker.
+  await installBoundedPdfjsWorker();
   const imported = await importPdfjsForNodeCompatibleElectronHost();
   pdfjsLib = imported.default || imported;
   pdfjsLib.GlobalWorkerOptions.workerSrc = pathToFileURL(
@@ -1088,8 +1119,16 @@ async function observeDocument(bytes, source, password, options) {
     let info = {};
     let xmp = {};
     let metadataReadFailed = false;
+    let metadataDecodeLimited = false;
     try {
-      const rawMetadata = await document.getMetadata();
+      // getMetadata decodes the XMP stream in full. Its decoders are bounded,
+      // and PDF.js drops a metadata stream whose decode fails, so a fresh
+      // budget tells a stream cut off at the limit from one that is absent.
+      const { rawMetadata, limited } = await withCallBudget(async () => ({
+        rawMetadata: await document.getMetadata(),
+        limited: decodeLimitReached(),
+      }));
+      metadataDecodeLimited = limited;
       info = rawMetadata?.info ?? {};
       // PDF.js 5.4 exposes parsed XMP as an iterable of [name, value]; it has
       // no getAll(). Reading getAll() returned nothing for every document, so
@@ -1099,6 +1138,11 @@ async function observeDocument(bytes, source, password, options) {
     } catch {
       metadataReadFailed = true;
       addCoverageReason("metadata", "METADATA_PARSE_UNAVAILABLE");
+    }
+    if (metadataDecodeLimited) {
+      xmp = {};
+      ownXmpFields = null;
+      addCoverageReason("metadata", "METADATA_STREAM_UNBOUNDED");
     }
     if (ownXmpFields) {
       const names = { title: "dc:title", author: "dc:creator", subject: "dc:description", keywords: "pdf:keywords" };
@@ -1116,7 +1160,7 @@ async function observeDocument(bytes, source, password, options) {
     // and neither could PDF Tools' reader) is a coverage gap, not proof the
     // document has no XMP metadata. When getMetadata itself failed, that
     // reason already says so.
-    if (hasXmpStream && !metadataReadFailed && Object.keys(xmp).length === 0) {
+    if (hasXmpStream && !metadataReadFailed && !metadataDecodeLimited && Object.keys(xmp).length === 0) {
       addCoverageReason("metadata", "XMP_PARSE_UNAVAILABLE");
     }
     const metadata = buildMetadataObservation(
@@ -1866,6 +1910,9 @@ async function nativeRenderPage(bytes, password, options) {
         raw_pixel_status: "available",
         renderer: "native-canvas",
         scale,
+        // Present only when an image on the page exceeded the image limits
+        // and was not drawn (server/decode-budget.js).
+        ...(imagesSkippedAtLimit() > 0 ? { images_skipped_at_limit: imagesSkippedAtLimit() } : {}),
         total_pages: document.numPages,
         width: pixels.width,
         width_points: geometry.width,
@@ -2056,6 +2103,9 @@ async function nativeRenderRegion(bytes, password, options) {
         raw_pixel_status: "available",
         renderer: "native-canvas",
         scale,
+        // Present only when an image on the page exceeded the image limits
+        // and was not drawn (server/decode-budget.js).
+        ...(imagesSkippedAtLimit() > 0 ? { images_skipped_at_limit: imagesSkippedAtLimit() } : {}),
         total_pages: document.numPages,
         width: cropPixels.width,
       });
@@ -2342,7 +2392,16 @@ export async function executePdfjsWorkerRequest(inputRequest) {
     },
     async actualSource => {
       if (!sameSourceBinding(actualSource, request.source)) throw sourceChangedError();
-      return await performOperation(request, actualSource.bytes);
+      // Every operation gets its own decode budget (server/decode-budget.js).
+      return await withCallBudget(async () => {
+        try {
+          return await performOperation(request, actualSource.bytes);
+        } catch (error) {
+          // PDF.js re-wraps errors thrown inside its worker, so the class does
+          // not survive; the call's budget records that a limit was reached.
+          throw error instanceof DecodeBudgetExceeded || decodeLimitReached() ? decodeLimitError() : error;
+        }
+      }, RENDER_OPERATIONS.has(request.operation) ? { maxImagePixels: MAX_CANVAS_PIXELS } : {});
     },
   );
 }
@@ -2425,6 +2484,9 @@ async function threadMain() {
 }
 
 async function main() {
+  // A monitor thread reports this process's memory on fd 4, so the parent can
+  // stop the child past the limit (server/decode-memory-guard.js).
+  const monitor = startPdfLibRssMonitor({ fd: 4, sampleIntervalMs: MEMORY_SAMPLE_MS });
   let operation = "unknown";
   try {
     const request = await readRequest();
@@ -2432,6 +2494,8 @@ async function main() {
     await writeSuccess(operation, await executePdfjsWorkerRequest(request));
   } catch (error) {
     await writeError(operation, error);
+  } finally {
+    await monitor.stop().catch(() => {});
   }
 }
 

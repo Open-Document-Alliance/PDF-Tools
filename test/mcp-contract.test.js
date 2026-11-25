@@ -270,7 +270,10 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // Inputs, outputs and annotations unchanged. Replaces bc056a750057bae630f7afe6538ba693246366264766402afb2470aef5a68aff.
 // 2026-11-25: set_pdf_metadata is not idempotent (each call appends a
 // revision), so idempotentHint is false. Replaces 6d6259aabe43bf7760c8ef1fe5a156dfcaab7aa2032b00f4e4b9b2d9043c1bf7.
-const TOOL_CONTRACT_SHA256 = "ecdc9b1be2eee776e2aaf40f8802674f1721593d5f3eae393abaf1218845c06a";
+// 2026-11-25: render_pdf_page and render_pdf_region may report
+// images_skipped_at_limit (present only when an image exceeded the decode
+// limits and was not drawn). Inputs and annotations unchanged. Replaces ecdc9b1be2eee776e2aaf40f8802674f1721593d5f3eae393abaf1218845c06a.
+const TOOL_CONTRACT_SHA256 = "18917ebfe7b4345126e6039a6d4b6dcf8f8342bea8e26bec53ee6ee26dd36cc9";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -552,6 +555,9 @@ describe("MCPB static declarations", () => {
       "incremental-update.js",
       "signature-state.js",
       "xmp-metadata.js",
+      "decode-budget.js",
+      "decode-memory-guard.js",
+      "pdfjs-bounded.js",
       "layout-extraction.js",
       "type3-cm-reference.js",
       "type3-cm-pk-reference.js",
@@ -587,7 +593,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(44);
+    expect(mirrored).toHaveLength(47);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",

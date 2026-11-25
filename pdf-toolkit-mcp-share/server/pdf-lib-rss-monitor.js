@@ -49,6 +49,97 @@ export function writePdfLibRssFrameCompletely(
   }
 }
 
+export class PdfLibRssFrameParser {
+  constructor({ maximumRssBytes, onReady = () => {}, onFrame = () => {} }) {
+    if (!Number.isSafeInteger(maximumRssBytes) || maximumRssBytes < 1
+        || typeof onReady !== "function" || typeof onFrame !== "function") {
+      throw new TypeError("Invalid PDF RSS parser configuration.");
+    }
+    this.maximumRssBytes = maximumRssBytes;
+    this.onReady = onReady;
+    this.onFrame = onFrame;
+    this.pending = Buffer.alloc(0);
+    this.frames = 0;
+    this.lastSequence = -1;
+    this.ready = false;
+    this.terminal = false;
+    this.maximumObservedRss = 0;
+  }
+
+  add(chunk) {
+    const bytes = Buffer.from(chunk);
+    if (bytes.length === 0) return;
+    if (bytes.length > PDF_LIB_RSS_FRAME_BYTES * 0x10000) {
+      throw new Error("PDF RSS monitor chunk exceeds its frame ceiling.");
+    }
+    const available = this.pending.length
+      ? Buffer.concat([this.pending, bytes])
+      : bytes;
+    let offset = 0;
+    while (available.length - offset >= PDF_LIB_RSS_FRAME_BYTES) {
+      const frame = available.subarray(offset, offset + PDF_LIB_RSS_FRAME_BYTES);
+      this.#frame(frame);
+      offset += PDF_LIB_RSS_FRAME_BYTES;
+    }
+    this.pending = Buffer.from(available.subarray(offset));
+  }
+
+  #frame(frame) {
+    if (!frame.subarray(0, 4).equals(PDF_LIB_RSS_MAGIC)
+        || frame[4] !== PDF_LIB_RSS_PROTOCOL_VERSION) {
+      throw new Error("PDF RSS monitor frame header is invalid.");
+    }
+    const type = frame[5];
+    const sequence = frame.readUInt16BE(6);
+    const rssBig = frame.readBigUInt64BE(8);
+    if (rssBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error("PDF RSS monitor value is not safely representable.");
+    }
+    const rssBytes = Number(rssBig);
+    if (rssBytes === 0) {
+      throw new Error("PDF RSS monitor value must be positive.");
+    }
+    if (this.frames >= 0x10000 || sequence !== this.lastSequence + 1) {
+      throw new Error("PDF RSS monitor sequence is invalid.");
+    }
+    if (!this.ready) {
+      if (type !== PDF_LIB_RSS_READY || sequence !== 0) {
+        throw new Error("PDF RSS monitor did not begin with READY.");
+      }
+      this.ready = true;
+    } else if (this.terminal || type === PDF_LIB_RSS_READY
+        || ![PDF_LIB_RSS_SAMPLE, PDF_LIB_RSS_TERMINAL].includes(type)) {
+      throw new Error("PDF RSS monitor frame type is invalid.");
+    } else if (type === PDF_LIB_RSS_TERMINAL) {
+      this.terminal = true;
+    }
+    this.frames += 1;
+    this.lastSequence = sequence;
+    this.maximumObservedRss = Math.max(this.maximumObservedRss, rssBytes);
+    if (rssBytes > this.maximumRssBytes) {
+      const error = new Error("PDF RSS monitor observed a limit breach.");
+      error.code = "PDF_LIB_RSS_LIMIT";
+      throw error;
+    }
+    this.onFrame({ type, sequence, rssBytes });
+    if (type === PDF_LIB_RSS_READY) this.onReady();
+  }
+
+  finish() {
+    if (this.pending.length !== 0) {
+      throw new Error("PDF RSS monitor ended with a partial frame.");
+    }
+    if (!this.ready || !this.terminal || this.frames < 2) {
+      throw new Error("PDF RSS monitor lifecycle is incomplete.");
+    }
+    return {
+      frames: this.frames,
+      lastSequence: this.lastSequence,
+      maximumObservedRss: this.maximumObservedRss,
+    };
+  }
+}
+
 function monitorThread() {
   const fd = workerData?.fd;
   const intervalMs = workerData?.interval_ms;
