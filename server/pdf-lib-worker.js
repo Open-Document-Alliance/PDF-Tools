@@ -82,6 +82,7 @@ import {
   hasXmlIllegalCharacters,
   editXmpDocumentFields,
   readXmpDocumentFields,
+  readXmpStreamBytes,
   xmpPacketFromInfo,
 } from "./xmp-metadata.js";
 
@@ -3033,15 +3034,7 @@ function readCatalogXmp(document) {
   const raw = document.catalog.get(PDFName.of("Metadata"));
   if (raw === undefined) return null;
   const stream = raw instanceof PDFRef ? document.context.lookup(raw) : null;
-  if (!(stream instanceof PDFRawStream)) {
-    throw new XmpUnsupported("xmp_unreadable", "The PDF has an XMP metadata entry that is not a readable stream.");
-  }
-  let decoded;
-  try {
-    decoded = decodePDFRawStream(stream).decode();
-  } catch {
-    throw new XmpUnsupported("xmp_unreadable", "The PDF's XMP metadata stream uses an encoding PDF Tools cannot decode.");
-  }
+  const decoded = readXmpStreamBytes(stream, value => document.context.lookup(value));
   return { ref: raw, text: decodeXmpPacket(decoded) };
 }
 

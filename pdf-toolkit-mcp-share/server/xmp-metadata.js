@@ -19,6 +19,9 @@
 // returned to the caller, who stops before writing anything, so Info and XMP
 // are never left disagreeing because of this module.
 
+import { constants as zlibConstants, inflateSync } from "node:zlib";
+import { PDFArray, PDFName, PDFNull, PDFRawStream } from "pdf-lib";
+
 export const XMP_NAMESPACES = Object.freeze({
   rdf: "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
   dc: "http://purl.org/dc/elements/1.1/",
@@ -34,6 +37,62 @@ export class XmpUnsupported extends Error {
     super(message);
     this.name = "XmpUnsupported";
     this.reason = reason;
+  }
+}
+
+function isName(value, text) {
+  return value instanceof PDFName && value.decodeText() === text;
+}
+
+/**
+ * The bytes of a catalog /Metadata stream, decoded under a hard output cap.
+ *
+ * pdf-lib's stream decoder inflates a whole stream before anything can look
+ * at its size, so a small file carrying gigabytes of compressed spaces as its
+ * "XMP" could exhaust memory before XMP_MAX_BYTES applied. This reads only a
+ * stream marked as XMP (/Type /Metadata and /Subtype /XML, the same test
+ * PDF.js applies), only unfiltered or plain FlateDecode data, and stops
+ * inflating as soon as the output passes the cap. lookup resolves indirect
+ * values in the stream dictionary.
+ */
+export function readXmpStreamBytes(stream, lookup = value => value) {
+  if (!(stream instanceof PDFRawStream)) {
+    throw new XmpUnsupported("xmp_unreadable", "The PDF has an XMP metadata entry that is not a readable stream.");
+  }
+  const dict = stream.dict;
+  if (!isName(lookup(dict.get(PDFName.of("Type"))), "Metadata") || !isName(lookup(dict.get(PDFName.of("Subtype"))), "XML")) {
+    throw new XmpUnsupported("xmp_unreadable", "The PDF's metadata entry is not marked as an XMP stream (/Type /Metadata, /Subtype /XML).");
+  }
+  let filter = lookup(dict.get(PDFName.of("Filter")));
+  if (filter instanceof PDFArray) {
+    if (filter.size() > 1) {
+      throw new XmpUnsupported("xmp_unreadable", "The PDF's XMP metadata stream uses an encoding PDF Tools cannot decode.");
+    }
+    filter = filter.size() === 1 ? lookup(filter.get(0)) : undefined;
+  }
+  const parms = lookup(dict.get(PDFName.of("DecodeParms")));
+  const contents = stream.getContents();
+  if (filter === undefined || filter === PDFNull) {
+    if (contents.length > XMP_MAX_BYTES) {
+      throw new XmpUnsupported("xmp_too_large", "The XMP packet is larger than PDF Tools will edit.");
+    }
+    return contents;
+  }
+  if (!isName(filter, "FlateDecode") || (parms !== undefined && parms !== PDFNull && !(parms instanceof PDFArray && parms.size() === 0))) {
+    throw new XmpUnsupported("xmp_unreadable", "The PDF's XMP metadata stream uses an encoding PDF Tools cannot decode.");
+  }
+  try {
+    // finishFlush tolerates a stream that ends without its final block, as
+    // pdf-lib's decoder does; maxOutputLength stops inflation at the cap.
+    return new Uint8Array(inflateSync(contents, {
+      finishFlush: zlibConstants.Z_SYNC_FLUSH,
+      maxOutputLength: XMP_MAX_BYTES,
+    }));
+  } catch (error) {
+    if (error?.code === "ERR_BUFFER_TOO_LARGE" || error instanceof RangeError) {
+      throw new XmpUnsupported("xmp_too_large", "The XMP packet is larger than PDF Tools will edit.");
+    }
+    throw new XmpUnsupported("xmp_unreadable", "The PDF's XMP metadata stream uses an encoding PDF Tools cannot decode.");
   }
 }
 
