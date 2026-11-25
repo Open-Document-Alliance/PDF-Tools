@@ -434,9 +434,12 @@ describe("a dependency cannot change without the licence evidence following", ()
       "@modelcontextprotocol/server",
       shareLock.packages["node_modules/@modelcontextprotocol/server"].version,
     );
-    expect(shareLock.packages["node_modules/@modelcontextprotocol/server"].license).toBeTruthy();
+    const recorded = shareLock.packages["node_modules/@modelcontextprotocol/server"].license;
+    expect(recorded).toBeTruthy();
+    // A fixed replacement goes stale the day upstream relicenses to it, as the
+    // server SDK did from MIT to Apache-2.0 in 2.4.0; pick one that differs.
     const tampered = structuredClone(provenance);
-    tampered.packages[sdkKey].declared = "Apache-2.0";
+    tampered.packages[sdkKey].declared = recorded === "MIT" ? "Apache-2.0" : "MIT";
     expect(() => verifyNpmLicenseProvenanceCoverage(shareLock, tampered))
       .toThrow(/disagrees with the licence the lock itself records/);
   });

@@ -354,13 +354,13 @@ describe("canonical MCPB archive", () => {
       "package.json",
     );
     writeFileSync(fflatePackage, JSON.stringify({ version: "0.8.3" }));
-    writeFileSync(mcpCorePackage, JSON.stringify({ version: "2.0.0" }));
-    writeFileSync(mcpServerPackage, JSON.stringify({ version: "2.0.0" }));
+    writeFileSync(mcpCorePackage, JSON.stringify({ version: "2.4.0" }));
+    writeFileSync(mcpServerPackage, JSON.stringify({ version: "2.4.0" }));
     expect(() => verifyLockedTooling(root)).not.toThrow();
     writeFileSync(fflatePackage, JSON.stringify({ version: "0.8.4" }));
     expect(() => verifyLockedTooling(root)).toThrow(/fflate@0\.8\.3/);
     writeFileSync(fflatePackage, JSON.stringify({ version: "0.8.3" }));
-    writeFileSync(mcpCorePackage, JSON.stringify({ version: "2.0.1" }));
-    expect(() => verifyLockedTooling(root)).toThrow(/server@2\.0\.0.*core@2\.0\.0/);
+    writeFileSync(mcpCorePackage, JSON.stringify({ version: "2.4.1" }));
+    expect(() => verifyLockedTooling(root)).toThrow(/server@2\.4\.0.*core@2\.4\.0/);
   });
 });

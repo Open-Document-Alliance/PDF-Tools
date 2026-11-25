@@ -4,11 +4,11 @@
   "generated_by": "scripts/vendor-npm-license-provenance.mjs",
   "evidence_basis": "Declared in the package.json inside the registry tarball that package-lock.json pins, after the tarball bytes were verified against the locked integrity digest.",
   "packages": {
-    "@modelcontextprotocol/core@2.0.0": {
-      "integrity": "sha512-pJCEwGG7Lfr/+PQp9ZTwKXNeO5wzbfKL7H3MYpCorM4oFBoQrdjnBgEoqG+RjhsvS1FKrDbKux+M1HhlnGWqcA==",
-      "tarball": "https://registry.npmjs.org/@modelcontextprotocol/core/-/core-2.0.0.tgz",
+    "@modelcontextprotocol/core@2.4.0": {
+      "integrity": "sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q==",
+      "tarball": "https://registry.npmjs.org/@modelcontextprotocol/core/-/core-2.4.0.tgz",
       "declaration": "license-string",
-      "declared": "MIT",
+      "declared": "Apache-2.0",
       "license_files": [
         {
           "path": "LICENSE",
@@ -16,11 +16,11 @@
         }
       ]
     },
-    "@modelcontextprotocol/server@2.0.0": {
-      "integrity": "sha512-YhHWdHfpFMQfd0prsEnxKeS3Qz3ytIGmsS0sth4KDjnacIT7hxk6hXHkJ9KysxlkvTM+WZAtQbbcUhdoP4Hvtw==",
-      "tarball": "https://registry.npmjs.org/@modelcontextprotocol/server/-/server-2.0.0.tgz",
+    "@modelcontextprotocol/server@2.4.0": {
+      "integrity": "sha512-rgR9yxSaAJ+bcsi/XroT/S2AfPiIWloXAnrdfYSCms9ivVju0ishu/wW0J21Ho6+ZOR1r7RyeRbjiRuF87ix5Q==",
+      "tarball": "https://registry.npmjs.org/@modelcontextprotocol/server/-/server-2.4.0.tgz",
       "declaration": "license-string",
-      "declared": "MIT",
+      "declared": "Apache-2.0",
       "license_files": [
         {
           "path": "LICENSE",
@@ -213,9 +213,9 @@
         }
       ]
     },
-    "zod@4.4.3": {
-      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
-      "tarball": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+    "zod@4.6.7": {
+      "integrity": "sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==",
+      "tarball": "https://registry.npmjs.org/zod/-/zod-4.6.7.tgz",
       "declaration": "license-string",
       "declared": "MIT",
       "license_files": [
