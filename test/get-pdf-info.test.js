@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { deflateSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -158,14 +159,14 @@ describe("get_pdf_info source-bound observations", () => {
   });
 
   it("does not inflate a huge metadata stream before checking its size", async () => {
-    // 64 MiB of spaces compresses to about 64 KB. The stream is not marked as
-    // XMP, so PDF.js skips it; PDF Tools' own reader used to inflate all of
-    // it before its size cap applied.
+    // 8 MiB of spaces, past the 4 MiB XMP cap, compresses to a few KB. The
+    // stream is not marked as XMP, so PDF.js skips it; PDF Tools' own reader
+    // used to inflate all of it before its size cap applied.
     const doc = await PDFDocument.create();
     doc.addPage([200, 200]);
     doc.setTitle("Info Title");
     doc.catalog.set(PDFName.of("Metadata"), doc.context.register(
-      doc.context.flateStream(new Uint8Array(64 * 1024 * 1024).fill(0x20)),
+      doc.context.stream(deflateSync(Buffer.alloc(8 * 1024 * 1024, 0x20)), { Filter: "FlateDecode" }),
     ));
     const file = path.join(tempDirectory, "xmp-bomb.pdf");
     await fs.writeFile(file, await doc.save());
