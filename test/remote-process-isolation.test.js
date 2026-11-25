@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
@@ -53,6 +54,22 @@ describe("hosted child-process isolation", () => {
   it("reports a failed boot when a child cannot start", async () => {
     const result = await checkChildIsolation({ spawnImpl: () => { throw new Error("no shell"); } });
     expect(result).toEqual({ ok: false, reason: "spawn_failed" });
+  });
+
+  it("settles and frees the slot when a child never starts and emits only an error", async () => {
+    const neverStarted = () => {
+      const child = new EventEmitter();
+      Object.assign(child, { pid: undefined, exitCode: null, signalCode: null, stdout: null, stderr: null, kill: () => false,
+        send: () => { throw Object.assign(new Error("channel closed"), { code: "ERR_IPC_CHANNEL_CLOSED" }); } });
+      setImmediate(() => child.emit("error", Object.assign(new Error("spawn /bin/sh EAGAIN"), { code: "EAGAIN" })));
+      return child;
+    };
+    const dispatch = createIsolatedDispatcher({ maxWorkers: 1, workerFactory: createChildToolFactory({ spawnImpl: neverStarted }), readRss: () => 0 });
+    expect(code(await dispatch("get_pdf_info", {}))).toBe("PROCESSING_FAILED");
+    // The single slot is free again: a second call is attempted, not refused as busy.
+    expect(code(await dispatch("get_pdf_info", {}))).toBe("PROCESSING_FAILED");
+    const sensitive = createIsolatedDispatcher({ maxWorkers: 1, workerFactory: createChildToolFactory({ spawnImpl: neverStarted }), readRss: () => 0 });
+    expect(code(await sensitive("send_lumin_request", {}, { lumin: { accessToken: "t" } }))).toBe("LUMIN_CREATE_OUTCOME_UNKNOWN");
   });
 
   it.runIf(linux)("boots a child under the limit on this Node, with the limit applied by the kernel", async () => {

@@ -38,6 +38,7 @@ export const CHILD_DATA_LIMIT_BYTES = 1536 * 1024 * 1024;
 export const CHILD_OLD_SPACE_MB = 256;
 export const CHILD_SEMI_SPACE_MB = 16;
 const BOOT_CHECK_TIMEOUT_MS = 10_000;
+const TERMINATION_CONFIRM_MS = 5_000;
 const ULIMIT_FAILED_EXIT = 97;
 const CHILD_ENTRY = fileURLToPath(new URL("./tool-child.mjs", import.meta.url));
 
@@ -102,15 +103,26 @@ class ChildToolProcess extends EventEmitter {
         resolve();
         this.emit("exit", code);
       });
+      // A child that never started (no shell, EAGAIN, ENOMEM) emits "error"
+      // and may never emit "exit"; nothing is running, so it has exited.
+      child.once("error", error => {
+        if (!child.pid) resolve();
+        this.emit("error", error);
+      });
     });
     if (child.pid) live.add(child.pid);
     child.once("message", message => this.emit("message", message));
-    child.once("error", error => this.emit("error", error));
   }
 
+  /** Resolves once the child is gone; throws if that cannot be confirmed, so the dispatcher keeps the slot. */
   async terminate() {
-    if (this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGKILL");
-    await this.exited;
+    if (this.child.pid && this.child.exitCode === null && this.child.signalCode === null) this.child.kill("SIGKILL");
+    let timer;
+    try {
+      await Promise.race([this.exited, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("child termination unconfirmed")), TERMINATION_CONFIRM_MS); })]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 
@@ -120,7 +132,9 @@ export function createChildToolFactory({ dataLimitBytes = CHILD_DATA_LIMIT_BYTES
     const child = spawnLimited("tool", { dataLimitBytes, env: childEnvironment({ signing }), spawnImpl });
     const wrapped = new ChildToolProcess(child);
     // The request crosses as an IPC message, never as an argument or variable.
-    child.send(workerData, error => { if (error) wrapped.terminate(); });
+    // A failed send leaves the child without work, so stop it; its exit settles the call.
+    const stop = () => { wrapped.terminate().catch(() => {}); };
+    try { child.send(workerData, error => { if (error) stop(); }); } catch { stop(); }
     return wrapped;
   };
 }

@@ -17,7 +17,30 @@ if (mode === "probe") {
   process.once("disconnect", () => process.exit(1));
   process.once("message", async ({ name, args, context }) => {
     const { callTool } = await import("./server.mjs");
-    const result = await callTool(name, args, context);
-    process.send(result, () => process.exit(0));
+    const { isAllocationFailure, MEMORY_LIMIT_CODE, MEMORY_LIMIT_MESSAGE } = await import("./decode-budget.mjs");
+    // A send whose interruption leaves an unknown outcome never gets a
+    // substitute answer: the child exits and the parent reports it as unknown.
+    const sensitive = name === "send_lumin_request";
+    const substitute = error => (isAllocationFailure(error)
+      ? { isError: true, content: [{ type: "text", text: `${MEMORY_LIMIT_CODE}: ${MEMORY_LIMIT_MESSAGE}` }] }
+      : { isError: true, content: [{ type: "text", text: "PROCESSING_FAILED: That document could not be processed." }] });
+    let result;
+    try {
+      result = await callTool(name, args, context);
+    } catch (error) {
+      if (sensitive) process.exit(1);
+      result = substitute(error);
+    }
+    try {
+      process.send(result, error => {
+        if (!error) return process.exit(0);
+        if (sensitive) return process.exit(1);
+        // The result itself could not cross (for example, too large to serialize); send a small typed failure instead.
+        try { process.send(substitute(error), () => process.exit(0)); } catch { process.exit(1); }
+      });
+    } catch (error) {
+      if (sensitive) process.exit(1);
+      try { process.send(substitute(error), () => process.exit(0)); } catch { process.exit(1); }
+    }
   });
 }

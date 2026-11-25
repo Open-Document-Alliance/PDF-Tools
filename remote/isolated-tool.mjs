@@ -168,7 +168,11 @@ export function createIsolatedDispatcher({
  * keep today's per-call worker threads, and the failure is logged at error
  * level and reported by isolationMode() for the deploy gate.
  */
-const processDispatcher = createIsolatedDispatcher({ workerFactory: createChildToolFactory(), readRss: instanceRss });
+// A child returns all of its memory when it exits, so nothing a finished call
+// held is retained in the parent. The growth allowance, which exists for that
+// retained memory, is therefore not needed here: the absolute ceiling over
+// parent plus children is the guard, so two concurrent in-budget calls fit.
+const processDispatcher = createIsolatedDispatcher({ workerFactory: createChildToolFactory(), readRss: instanceRss, memoryGrowthBytes: PROCESS_MEMORY_CEILING_BYTES });
 const threadDispatcher = createIsolatedDispatcher();
 
 /** Decides once per instance; never throws. A failed check is logged at error level. */
