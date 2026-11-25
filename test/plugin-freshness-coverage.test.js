@@ -126,7 +126,7 @@ describe("plugin freshness coverage", () => {
   });
 
   it("declares every literal source path copyRuntimeSource stages, shipped or stage-only", () => {
-    const body = functionBody(read("scripts/build-mcpb.mjs"), "function copyRuntimeSource(stagingDir) {");
+    const body = functionBody(read("scripts/build-mcpb.mjs"), "function copyRuntimeSource(stagingDir, { includeMcpbManifest = true } = {}) {");
 
     // Read the *arguments*, not every quoted literal in the body. The first
     // draft of this test collected all literals and reported manifest.json,

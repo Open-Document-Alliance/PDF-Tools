@@ -82,6 +82,7 @@ import {
   decodeXmpPacket,
   hasXmlIllegalCharacters,
   editXmpDocumentFields,
+  normalizeDocumentFieldValue,
   readXmpDocumentFields,
   readXmpStreamBytes,
   xmpPacketFromInfo,
@@ -3150,10 +3151,15 @@ async function setDocumentMetadata(protection, sourceBytes, options) {
     throw error;
   }
   const modifiedAt = new Date(options.modification_at);
+  // Write each field in the form it reads back as (an author list becomes
+  // "A; B"), to Info and XMP alike, so the read-back below compares like
+  // with like.
+  const edits = Object.fromEntries(Object.entries(options.edits)
+    .map(([field, value]) => [field, normalizeDocumentFieldValue(field, value)]));
   let editedXmp = null;
   if (xmp) {
     try {
-      editedXmp = editXmpDocumentFields(xmp.text, options.edits, {
+      editedXmp = editXmpDocumentFields(xmp.text, edits, {
         modifiedAt: modifiedAt.toISOString(),
         instanceId: `uuid:${randomUUID()}`,
       });
@@ -3168,7 +3174,7 @@ async function setDocumentMetadata(protection, sourceBytes, options) {
   }
 
   const changes = [];
-  for (const [field, value] of Object.entries(options.edits)) {
+  for (const [field, value] of Object.entries(edits)) {
     const before = readInfoField(document, field);
     if (value === null) {
       const info = document.getInfoDict();
@@ -3203,18 +3209,22 @@ async function setDocumentMetadata(protection, sourceBytes, options) {
     saveSummary = { appended_objects: 0, original_bytes: sourceBytes.length, cross_reference: "rewritten" };
   }
   // Read the result back and hold it to what was asked, Info and XMP both.
+  // A mismatch is a failed check of this edit, not a resource limit, and is
+  // reported as one.
+  const notCarried = (record, field) => new Error(
+    `The edited PDF did not read back with the requested ${field} in its ${record}, so nothing was written. `
+    + "Info and XMP are unchanged.",
+  );
   if (verified) {
     for (const { field, after } of changes) {
-      if (readInfoField(verified, field) !== after) {
-        throw resourceError("unsafe_pdf_integrity", `The saved PDF does not carry the requested ${field}.`);
-      }
+      if (readInfoField(verified, field) !== after) throw notCarried("Info dictionary", field);
     }
     if (editedXmp !== null) {
       const readBack = readXmpDocumentFields(readCatalogXmp(verified).text);
       for (const { field, after } of changes) {
         const observed = readBack[field];
         const ok = after === null ? observed.state === "absent" : observed.state === "value" && observed.value === after;
-        if (!ok) throw resourceError("unsafe_pdf_integrity", `The saved XMP does not carry the requested ${field}.`);
+        if (!ok) throw notCarried("XMP packet", field);
       }
     }
   }
