@@ -8,7 +8,7 @@ PDF Tools is maintained by Open Document Alliance. Source: [Open-Document-Allian
 
 | Surface | What runs | Where your PDF is processed |
 | --- | --- | --- |
-| Claude Code, and Cowork sessions on your computer | The full local PDF Tools server (about 40 tools, including profiles, bulk CSV fill, layout extraction, document comparison and the interactive viewer) plus the hosted connector | Local tools: on your machine. Hosted tools: only when used, see below |
+| Claude Code, and Cowork sessions on your computer | The full local PDF Tools server (more than 60 tools, including profiles, bulk CSV fill, layout extraction, document comparison and the interactive viewer) plus the hosted connector | Local tools: on your machine. Hosted tools: only when used, see below |
 | claude.ai and the Claude apps (chat) | The hosted PDF Tools connector | On the PDF Tools service, per request, without storing documents |
 | Everywhere | The `pdf-tools` and `pdf-tools-workflow` skills | Instructions only; they run nothing |
 
