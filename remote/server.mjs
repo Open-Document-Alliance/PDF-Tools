@@ -23,7 +23,7 @@ import {
   validateSigningIntent,
 } from "../server/helpers.js";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES } from "./fetch-guard.mjs";
-import { beginCall, DecodeBudgetExceeded, decodeLimitReached } from "./decode-budget.mjs";
+import { DecodeBudgetExceeded, decodeLimitReached, predecodeForText, withCallBudget } from "./decode-budget.mjs";
 import { createDocumentTools } from "./document-tools.mjs";
 import { hostedSkills, skillParams, SKILLS_EXTENSION } from "./skills.mjs";
 import { createLuminTools } from "./lumin-tools.mjs";
@@ -269,6 +269,8 @@ const TOOLS = [
     async handler(args) {
       const bytes = await resolveBytes(args);
       const document = await loadDocument(bytes);
+      // PDF.js decodes these again with its own decoders; check them under the cap first.
+      predecodeForText(document, document.getPageIndices().map(index => index + 1));
       const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
       const zones = await detectSignatureZones({
         pdfDoc: document,
@@ -389,8 +391,12 @@ export const INSTRUCTIONS =
 const DECODE_LIMIT_CODE = "DOCUMENT_TOO_LARGE_DECODED";
 const DECODE_LIMIT_MESSAGE = "This document's decompressed content exceeds what the hosted service processes. Use local PDF Tools for it: https://github.com/Open-Document-Alliance/PDF-Tools";
 
-export async function callTool(name, args = {}, context = {}) {
-  beginCall();
+/** Each call gets its own decode budget, including overlapping in-process calls. */
+export function callTool(name, args = {}, context = {}) {
+  return withCallBudget(() => callToolWithinBudget(name, args, context));
+}
+
+async function callToolWithinBudget(name, args, context) {
   const tool = TOOLS.find((candidate) => candidate.name === name)
     ?? (context?.lumin ? SIGNING_TOOLS.find((candidate) => candidate.name === name) : undefined);
   if (!tool) return refusal("UNKNOWN_TOOL", `There is no tool named ${name}.`);

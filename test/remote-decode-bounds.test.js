@@ -63,31 +63,112 @@ describe("decoded data bounds", () => {
   });
 });
 
+/** One page whose content stream decodes to the given size. */
+function pdfWithPageContent(decodedBytes) {
+  const body = Buffer.alloc(decodedBytes, 0x20);
+  body.write("BT ET", decodedBytes - 6, "latin1");
+  const compressed = deflateSync(body, { level: 9 });
+  const parts = [];
+  const offsets = [];
+  let position = 0;
+  const push = value => { const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, "latin1"); parts.push(bytes); position += bytes.length; };
+  push("%PDF-1.7\n");
+  offsets[1] = position; push("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+  offsets[2] = position; push("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+  offsets[3] = position; push("3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n");
+  offsets[4] = position; push(`4 0 obj\n<< /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`);
+  push(compressed); push("\nendstream\nendobj\n");
+  const xref = position;
+  let table = "xref\n0 5\n0000000000 65535 f \n";
+  for (let index = 1; index <= 4; index++) table += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  push(`${table}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return Buffer.concat(parts);
+}
+
+describe("decoded data bounds for text extraction", () => {
+  it("checks page content under the cap before PDF.js reads it", async () => {
+    const pdf = pdfWithPageContent(MAX_DECODED_STREAM_BYTES + 8 * 1024 * 1024);
+    for (const name of ["read_pdf_pages", "search_pdf_text", "convert_pdf_to_markdown"]) {
+      const result = await callTool(name, { pdf_base64: pdf.toString("base64"), start_page: 1, end_page: 1, ...(name === "search_pdf_text" ? { query: "x" } : {}) });
+      expect(result.content[0].text, name).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+    }
+    const zones = await callTool("detect_signature_zones", { pdf_base64: pdf.toString("base64") });
+    expect(zones.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED: /);
+  }, 120_000);
+
+  it("keeps budgets separate for overlapping calls", async () => {
+    const large = pdfWithObjectStream(MAX_DECODED_STREAM_BYTES + 4 * 1024 * 1024).toString("base64");
+    const small = pdfWithObjectStream(1024 * 1024).toString("base64");
+    const [refused, fine] = await Promise.all([callTool("get_pdf_info", { pdf_base64: large }), callTool("get_pdf_info", { pdf_base64: small })]);
+    expect(refused.content[0].text).toMatch(/^DOCUMENT_TOO_LARGE_DECODED/);
+    expect(fine.isError).toBeFalsy();
+  }, 60_000);
+});
+
 describe("process memory backstop", () => {
   const silentWorker = () => Object.assign(new EventEmitter(), { terminate: async () => {}, stdout: null, stderr: null });
+  const replying = (delay = 30) => () => {
+    const worker = Object.assign(new EventEmitter(), { terminate: async () => {}, stdout: null, stderr: null });
+    setTimeout(() => worker.emit("message", { content: [{ type: "text", text: "done" }] }), delay);
+    return worker;
+  };
+  const limits = { memoryCeilingBytes: 10_000, memoryGrowthBytes: 1_000, sampleMs: 5, deadlineMs: 5_000 };
 
-  it("stops running work once process memory passes the limit", async () => {
+  it("stops a call whose memory grows past the limit", async () => {
     let rss = 100;
-    const dispatch = createIsolatedDispatcher({ workerFactory: silentWorker, deadlineMs: 5_000, memoryLimitBytes: 1_000, sampleMs: 5, readRss: () => rss });
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss });
     const pending = dispatch("read_pdf_pages", {});
-    setTimeout(() => { rss = 2_000; }, 20);
-    const result = await pending;
-    expect(result.content[0].text).toMatch(/^MEMORY_LIMIT: /);
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await pending).content[0].text).toMatch(/^MEMORY_LIMIT: /);
   });
 
-  it("reports an interrupted send as an unknown outcome rather than a memory refusal", async () => {
-    const dispatch = createIsolatedDispatcher({ workerFactory: silentWorker, deadlineMs: 5_000, memoryLimitBytes: 1_000, sampleMs: 5, readRss: () => 2_000 });
-    const result = await dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } });
-    expect(result.content[0].text).toMatch(/^LUMIN_CREATE_OUTCOME_UNKNOWN: /);
+  it("does not lock out the next call when memory stays raised after a stop", async () => {
+    let rss = 100;
+    let calls = 0;
+    const factory = () => (calls++ === 0 ? silentWorker() : replying()());
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: factory, readRss: () => rss, recycle: () => {} });
+    const first = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await first).content[0].text).toMatch(/^MEMORY_LIMIT/);
+    // The stopped worker's memory is not returned to the OS: still raised,
+    // above the old growth limit but below the ceiling. The next call runs.
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
   });
 
-  it("leaves work alone below the limit and frees its slot afterwards", async () => {
-    const replying = () => {
-      const worker = Object.assign(new EventEmitter(), { terminate: async () => {}, stdout: null, stderr: null });
-      setTimeout(() => worker.emit("message", { content: [{ type: "text", text: "done" }] }), 30);
-      return worker;
-    };
-    const dispatch = createIsolatedDispatcher({ workerFactory: replying, deadlineMs: 5_000, memoryLimitBytes: 1_000, sampleMs: 5, readRss: () => 500, maxWorkers: 1 });
+  it("refuses new work above the ceiling before starting it, and says a send was not made", async () => {
+    let started = 0;
+    const factory = () => { started++; return silentWorker(); };
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: factory, readRss: () => 20_000 });
+    expect((await dispatch("read_pdf_pages", {})).content[0].text).toMatch(/^SERVICE_BUSY: .*No document work was started/);
+    expect((await dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } })).content[0].text).toMatch(/^SEND_NOT_STARTED: .*nothing was sent/);
+    expect(started).toBe(0);
+  });
+
+  it("stops ordinary calls before an outcome-sensitive one", async () => {
+    let rss = 100;
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 2, workerFactory: silentWorker, readRss: () => rss });
+    const send = dispatch("send_lumin_request", {}, { lumin: { accessToken: "t" } });
+    const read = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 1_200; }, 20);
+    expect((await read).content[0].text).toMatch(/^MEMORY_LIMIT/);
+    setTimeout(() => { rss = 200; }, 0);
+    const outcome = await Promise.race([send.then(result => result.content[0].text), new Promise(resolve => setTimeout(() => resolve("still running"), 150))]);
+    expect(outcome).toBe("still running");
+  });
+
+  it("asks the platform to replace an idle process left above the ceiling", async () => {
+    let rss = 100;
+    let recycled = 0;
+    const dispatch = createIsolatedDispatcher({ ...limits, workerFactory: silentWorker, readRss: () => rss, recycle: () => { recycled++; } });
+    const pending = dispatch("read_pdf_pages", {});
+    setTimeout(() => { rss = 12_000; }, 20);
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 1_200));
+    expect(recycled).toBe(1);
+  });
+
+  it("leaves work alone below the limits and frees its slot afterwards", async () => {
+    const dispatch = createIsolatedDispatcher({ ...limits, maxWorkers: 1, workerFactory: replying(), readRss: () => 500 });
     expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
     expect((await dispatch("read_pdf_pages", {})).content[0].text).toBe("done");
   });
