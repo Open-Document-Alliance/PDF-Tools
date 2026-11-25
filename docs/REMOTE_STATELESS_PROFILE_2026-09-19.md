@@ -83,12 +83,15 @@ that download budget. Embedded URL credentials and mapped/special address
 forms are refused. No response is returned unless its bytes have a PDF header.
 
 **T2. Hostile documents.** Parsers are the attack surface. Hosted HTTP tool calls
-run in a fresh worker thread, including downloads and PDF parsing, with a
-45-second parent-enforced termination deadline and at most two active workers
-per service instance, without a waiting document queue. V8 worker heap limits
-are 256 MB old/32 MB young generation; these are not total-process or external
-buffer memory limits. This is a wall-clock/heap containment boundary, not an OS
-security sandbox. The layout's 20-second deadline is cooperative inside it.
+run in a fresh child process, including downloads and PDF parsing, with a
+45-second parent-enforced termination deadline and at most two active calls
+per service instance, without a waiting document queue. Each child starts
+under an operating-system data limit (RLIMIT_DATA, 1.5 GiB, of which V8
+reserves part at startup) and a 256 MB V8 old-generation limit, so buffer,
+WebAssembly and heap growth stop inside that one call. If an instance cannot
+start a limited child, it logs an error and falls back to per-call worker
+threads (heap limits only, plus the parent's memory watchdog). This is a
+wall-clock and memory containment boundary, not an OS security sandbox. The layout's 20-second deadline is cooperative inside it.
 Direct `callTool` is the internal in-process adapter used by unit tests; public
 HTTP uses `callToolIsolated`. The configured Vercel invocation maximum is 60
 seconds; deployed worker packaging and termination still require verification.

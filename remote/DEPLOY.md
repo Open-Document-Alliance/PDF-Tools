@@ -20,7 +20,8 @@ allocation, documentation that matches, and a reproducible deploy.
 |---|---|
 | `server.mjs`, `document-tools.mjs` | Twelve tools over existing byte/extraction engines |
 | `fetch-guard.mjs` | Pinned public connection, redirect/whole-body deadline, size cap |
-| `isolated-tool.mjs`, `tool-worker.mjs` | Per-call worker, parent deadline and concurrency admission |
+| `isolated-tool.mjs`, `process-isolation.mjs`, `tool-child.mjs` | Per-call child process under an OS memory limit, parent deadline, concurrency admission and memory watchdog |
+| `tool-worker.mjs` | Per-call worker thread, used only if the child-process boot check fails on an instance |
 | `http.mjs` | `fetch(Request) => Response` handler, one server per request |
 | `../api/mcp.js` | Vercel function that calls that handler |
 

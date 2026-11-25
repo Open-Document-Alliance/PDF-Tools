@@ -102,6 +102,29 @@ jobs:
         env:
           PDF_TOOLS_TIMING_CALIBRATED: skip
 
+  # The hosted service (remote/, api/) runs on the newest Node major Vercel
+  # offers, because the root engines range is open-ended (Node 26 as of
+  # 2026-11-25), and that is not one of the matrix versions above. Its
+  # child-process memory isolation depends on that major: V8 reserves part
+  # of the child's data limit at startup, and the size of that reservation
+  # changes between majors. This job runs the hosted isolation suites on that
+  # major. Update it when Vercel moves on; until then, an instance where the
+  # isolation boot check fails falls back to worker threads and logs an error.
+  hosted-runtime:
+    name: hosted runtime (node 26, as on Vercel)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Hosted isolation suites
+        run: npx vitest run test/remote-process-isolation.test.js test/remote-isolated-tool.test.js test/remote-decode-bounds.test.js
+
   release-checks:
     name: release checks (node ${{ matrix.node }})
     runs-on: ubuntu-latest

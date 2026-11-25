@@ -23,7 +23,7 @@ import {
   validateSigningIntent,
 } from "../server/helpers.js";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES } from "./fetch-guard.mjs";
-import { DecodeBudgetExceeded, decodeLimitReached, withCallBudget } from "./decode-budget.mjs";
+import { DecodeBudgetExceeded, decodeLimitReached, isAllocationFailure, MEMORY_LIMIT_CODE, MEMORY_LIMIT_MESSAGE, withCallBudget } from "./decode-budget.mjs";
 import { loadBoundedPdfjs } from "./pdfjs-bounded.mjs";
 import { createDocumentTools } from "./document-tools.mjs";
 import { hostedSkills, skillParams, SKILLS_EXTENSION } from "./skills.mjs";
@@ -390,6 +390,9 @@ export const INSTRUCTIONS =
 const DECODE_LIMIT_CODE = "DOCUMENT_TOO_LARGE_DECODED";
 const DECODE_LIMIT_MESSAGE = "This document's decompressed content exceeds what the hosted service processes. Use local PDF Tools for it: https://github.com/Open-Document-Alliance/PDF-Tools";
 
+/** A failed allocation in a send can follow the request, so it never reads as a clean memory stop. */
+const OUTCOME_SENSITIVE_TOOL_NAMES = new Set(["send_lumin_request"]);
+
 /** Each call gets its own decode budget, including overlapping in-process calls. */
 export function callTool(name, args = {}, context = {}) {
   return withCallBudget(() => callToolWithinBudget(name, args, context));
@@ -425,6 +428,9 @@ async function callToolWithinBudget(name, args, context) {
   } catch (error) {
     if (error instanceof DecodeBudgetExceeded || decodeLimitReached()) {
       return refusal(DECODE_LIMIT_CODE, DECODE_LIMIT_MESSAGE);
+    }
+    if (isAllocationFailure(error) && !OUTCOME_SENSITIVE_TOOL_NAMES.has(name)) {
+      return refusal(MEMORY_LIMIT_CODE, MEMORY_LIMIT_MESSAGE);
     }
     if (error instanceof ToolRefusal || error instanceof FetchRefused) {
       return refusal(error.code, error.message);

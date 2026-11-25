@@ -14,7 +14,7 @@ import { Readable } from "node:stream";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 
 import { createRemoteServer } from "./server.mjs";
-import { callToolIsolated } from "./isolated-tool.mjs";
+import { callToolIsolated, isolationMode } from "./isolated-tool.mjs";
 import { trackRequest } from "./inflight.mjs";
 
 export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a third
@@ -36,7 +36,23 @@ const handler = createMcpHandler(({ era }) => createRemoteServer({ dispatchTool:
 });
 
 export async function handleMcpFetch(request) {
-  return trackRequest(() => handler.fetch(request));
+  return trackRequest(async () => withIsolationHeader(await handler.fetch(request)));
+}
+
+/**
+ * Says which isolation this instance runs tool calls under ("process" or the
+ * "thread" fallback), so the deploy gate can see a fallback without log access.
+ */
+export async function withIsolationHeader(response) {
+  const mode = await isolationMode();
+  try {
+    response.headers.set("x-pdf-tools-isolation", mode);
+    return response;
+  } catch {
+    const headers = new Headers(response.headers);
+    headers.set("x-pdf-tools-isolation", mode);
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  }
 }
 
 /** Node http request to a Web Request, with the body capped before it is read. */

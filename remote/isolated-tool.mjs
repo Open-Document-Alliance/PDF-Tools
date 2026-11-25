@@ -1,6 +1,8 @@
-/** Wall-clock termination for hosted fetch/parser/mutation work, not an OS sandbox. */
+/** Wall-clock and memory termination for hosted fetch/parser/mutation work. Not a security sandbox. */
 import { Worker } from "node:worker_threads";
 import { requestsInFlight } from "./inflight.mjs";
+import { MEMORY_LIMIT_CODE, MEMORY_LIMIT_MESSAGE } from "./decode-budget.mjs";
+import { checkChildIsolation, createChildToolFactory, instanceRss } from "./process-isolation.mjs";
 
 export const TOOL_DEADLINE_MS = 45_000;
 export const MAX_ACTIVE_TOOL_WORKERS = 2;
@@ -53,7 +55,7 @@ export function createIsolatedDispatcher({
   let baseline = 0;
   let overSamples = 0;
   const safeRss = () => { try { return readRss(); } catch { return 0; } };
-  const memoryFailure = () => failure("MEMORY_LIMIT", "That document needs more memory than the hosted service allows, so the operation was stopped. Use local PDF Tools for it: https://github.com/Open-Document-Alliance/PDF-Tools");
+  const memoryFailure = () => failure(MEMORY_LIMIT_CODE, MEMORY_LIMIT_MESSAGE);
   const over = rss => rss > memoryCeilingBytes || rss - baseline > memoryGrowthBytes;
   const startWatchdog = () => {
     if (watchdog) return;
@@ -138,7 +140,10 @@ export function createIsolatedDispatcher({
           worker.stdout?.resume(); worker.stderr?.resume();
           worker.once("message", result => { void finish(result); });
           worker.once("error", () => { void finish(sensitive ? unknownOutcome() : failure("PROCESSING_FAILED", "That document could not be processed.")); });
-          worker.once("exit", () => { void finish(sensitive ? unknownOutcome() : failure("PROCESSING_FAILED", "The document operation ended without a result.")); });
+          worker.once("exit", () => {
+            // A child process that died at its OS memory limit is a memory stop, not a crash.
+            void finish(sensitive ? unknownOutcome() : worker.memoryLimited ? memoryFailure() : failure("PROCESSING_FAILED", "The document operation ended without a result."));
+          });
           cancel = () => { void finish(sensitive ? unknownOutcome() : failure("CANCELLED", "The document operation was cancelled.")); };
           signal?.addEventListener("abort", cancel, { once: true });
           if (signal?.aborted) cancel();
@@ -156,4 +161,35 @@ export function createIsolatedDispatcher({
   };
 }
 
-export const callToolIsolated = createIsolatedDispatcher();
+/**
+ * Hosted dispatch. Each call runs in a child process under an OS memory limit
+ * (process-isolation.mjs) once the boot check passes on this instance; the
+ * watchdog then counts the children's memory too. If the check fails, calls
+ * keep today's per-call worker threads, and the failure is logged at error
+ * level and reported by isolationMode() for the deploy gate.
+ */
+// A child returns all of its memory when it exits, so nothing a finished call
+// held is retained in the parent. The growth allowance, which exists for that
+// retained memory, is therefore not needed here: the absolute ceiling over
+// parent plus children is the guard, so two concurrent in-budget calls fit.
+const processDispatcher = createIsolatedDispatcher({ workerFactory: createChildToolFactory(), readRss: instanceRss, memoryGrowthBytes: PROCESS_MEMORY_CEILING_BYTES });
+const threadDispatcher = createIsolatedDispatcher();
+
+/** Decides once per instance; never throws. A failed check is logged at error level. */
+export function createIsolationSelector({ check = checkChildIsolation, log = line => process.stderr.write(line) } = {}) {
+  let decision = null;
+  return () => {
+    decision ??= Promise.resolve().then(check).catch(() => ({ ok: false, reason: "boot_check_failed" })).then(result => {
+      if (!result?.ok) log(`ERROR pdf-tools: process isolation unavailable (${result?.reason ?? "unknown"}); using worker threads\n`);
+      return result?.ok ? "process" : "thread";
+    });
+    return decision;
+  };
+}
+
+export const isolationMode = createIsolationSelector();
+
+export async function callToolIsolated(name, args, options) {
+  const dispatch = (await isolationMode()) === "process" ? processDispatcher : threadDispatcher;
+  return dispatch(name, args, options);
+}
