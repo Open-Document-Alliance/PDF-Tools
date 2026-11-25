@@ -39,6 +39,7 @@ export const PDF_OBSERVATION_COVERAGE_REASONS = Object.freeze({
   metadata: Object.freeze([
     "METADATA_LIMIT_REACHED",
     "METADATA_PARSE_UNAVAILABLE",
+    "METADATA_STREAM_UNBOUNDED",
     "OUTPUT_LIMIT_METADATA_OMITTED",
     "XMP_PARSE_UNAVAILABLE",
   ]),
@@ -536,7 +537,7 @@ function coverageStatus(channel, reasonCodes, hasObservation) {
   const unavailableReasons = new Set({
     annotations: ["ANNOTATION_PARSE_UNAVAILABLE"],
     form_fields: ["FORM_FIELD_PARSE_UNAVAILABLE"],
-    metadata: ["METADATA_PARSE_UNAVAILABLE"],
+    metadata: ["METADATA_PARSE_UNAVAILABLE", "METADATA_STREAM_UNBOUNDED"],
     pages: ["PAGE_PARSE_UNAVAILABLE"],
   }[channel] ?? []);
   if (!hasObservation && reasonCodes.some(reason => unavailableReasons.has(reason))) {

@@ -11,7 +11,8 @@ import {
   parentPort,
   workerData,
 } from "node:worker_threads";
-import { PDFDocument, PDFName, PDFRawStream, PDFRef } from "pdf-lib";
+import { PDFDict, PDFDocument, PDFName, PDFRawStream, PDFRef } from "pdf-lib";
+import { metadataStreamsBounded } from "./metadata-stream-bound.js";
 import { decodeXmpPacket, readXmpDocumentFields, readXmpStreamBytes } from "./xmp-metadata.js";
 import {
   analyzePdfPages,
@@ -949,6 +950,11 @@ async function observeDocument(bytes, source, password, options) {
   let rawPages = null;
   let hasXmpStream = null;
   let ownXmpFields = null;
+  let encryptFilterName = null;
+  // PDF.js's getMetadata() decodes the whole metadata stream. It is called
+  // only when every stream PDF.js could decode as XMP is bounded; see
+  // server/metadata-stream-bound.js.
+  const metadataBound = metadataStreamsBounded(bytes);
   const coverageReasons = {};
   const addCoverageReason = (channel, reason) => {
     coverageReasons[channel] = [...(coverageReasons[channel] ?? []), reason];
@@ -958,6 +964,11 @@ async function observeDocument(bytes, source, password, options) {
       ignoreEncryption: true,
       updateMetadata: false,
     });
+    // Read before the page tree, which pdf-lib cannot walk when an encrypted
+    // file keeps its pages in object streams.
+    const encrypt = rawDocument.context.lookup(rawDocument.context.trailerInfo.Encrypt);
+    const filter = encrypt instanceof PDFDict ? encrypt.get(PDFName.of("Filter")) : undefined;
+    if (filter instanceof PDFName) encryptFilterName = filter.decodeText();
     rawPages = rawDocument.getPages();
     const metadataRef = rawDocument.catalog.get(PDFName.of("Metadata"));
     hasXmpStream = metadataRef !== undefined;
@@ -969,7 +980,7 @@ async function observeDocument(bytes, source, password, options) {
     // whole first, so a small file with a huge compressed "XMP" cannot
     // exhaust memory here.
     const stream = metadataRef instanceof PDFRef ? rawDocument.context.lookup(metadataRef) : null;
-    if (!rawDocument.isEncrypted && stream instanceof PDFRawStream) {
+    if (metadataBound.bounded && !rawDocument.isEncrypted && stream instanceof PDFRawStream) {
       try {
         ownXmpFields = readXmpDocumentFields(decodeXmpPacket(
           readXmpStreamBytes(stream, value => rawDocument.context.lookup(value)),
@@ -1088,17 +1099,25 @@ async function observeDocument(bytes, source, password, options) {
     let info = {};
     let xmp = {};
     let metadataReadFailed = false;
-    try {
-      const rawMetadata = await document.getMetadata();
-      info = rawMetadata?.info ?? {};
-      // PDF.js 5.4 exposes parsed XMP as an iterable of [name, value]; it has
-      // no getAll(). Reading getAll() returned nothing for every document, so
-      // XMP was reported as an empty record with no gap.
-      const parsed = rawMetadata?.metadata;
-      xmp = parsed && typeof parsed[Symbol.iterator] === "function" ? Object.fromEntries(parsed) : {};
-    } catch {
+    if (!metadataBound.bounded) {
+      // Info and XMP are unavailable for this file; whether it is encrypted
+      // is still known from the trailer, which compare_pdfs relies on.
       metadataReadFailed = true;
-      addCoverageReason("metadata", "METADATA_PARSE_UNAVAILABLE");
+      addCoverageReason("metadata", "METADATA_STREAM_UNBOUNDED");
+      if (encryptFilterName !== null) info = { EncryptFilterName: encryptFilterName };
+    } else {
+      try {
+        const rawMetadata = await document.getMetadata();
+        info = rawMetadata?.info ?? {};
+        // PDF.js 5.4 exposes parsed XMP as an iterable of [name, value]; it has
+        // no getAll(). Reading getAll() returned nothing for every document, so
+        // XMP was reported as an empty record with no gap.
+        const parsed = rawMetadata?.metadata;
+        xmp = parsed && typeof parsed[Symbol.iterator] === "function" ? Object.fromEntries(parsed) : {};
+      } catch {
+        metadataReadFailed = true;
+        addCoverageReason("metadata", "METADATA_PARSE_UNAVAILABLE");
+      }
     }
     if (ownXmpFields) {
       const names = { title: "dc:title", author: "dc:creator", subject: "dc:description", keywords: "pdf:keywords" };

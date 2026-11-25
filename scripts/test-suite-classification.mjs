@@ -92,6 +92,7 @@ export const CHECKOUT_LOCAL_MUTATING_TEST_SUITES = Object.freeze([
   "test/signed-fill.test.js",
   "test/signature-field.test.js",
   "test/apply-text-keywords.test.js",
+  "test/metadata-stream-bound.test.js",
   "test/path-handler-toctou.test.js",
   "test/pdfjs-worker-contract.test.js",
   "test/plugin-data-config.test.js",
@@ -379,6 +380,12 @@ export const SERIAL_RESOURCE_TEST_SUITES = Object.freeze([
     reason: "Loads and compares both committed runtimes and exercises their MCP "
       + "contracts; sibling-suite contention exhausted an existing five-second "
       + "contract window that passed unchanged with an exclusive worker.",
+  }),
+  Object.freeze({
+    file: "test/metadata-stream-bound.test.js",
+    reason: "Scans a 240 MiB buffer under a timing bound and measures the peak "
+      + "resident memory of child processes, both of which sibling suites "
+      + "would distort.",
   }),
   Object.freeze({
     file: "test/pdfjs-worker-contract.test.js",

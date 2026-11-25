@@ -639,6 +639,7 @@ describe("aggregate test-runner contract", () => {
       "test/fuzz-malformed-pdfs.test.js",
       "test/lumin-sign-v1-transport.test.js",
       "test/mcp-contract.test.js",
+      "test/metadata-stream-bound.test.js",
       "test/pdfjs-worker-contract.test.js",
       "test/read-pdf-layout.test.js",
     ]);

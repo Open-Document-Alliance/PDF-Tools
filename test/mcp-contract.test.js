@@ -552,6 +552,7 @@ describe("MCPB static declarations", () => {
       "incremental-update.js",
       "signature-state.js",
       "xmp-metadata.js",
+      "metadata-stream-bound.js",
       "layout-extraction.js",
       "type3-cm-reference.js",
       "type3-cm-pk-reference.js",
@@ -587,7 +588,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(44);
+    expect(mirrored).toHaveLength(45);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",

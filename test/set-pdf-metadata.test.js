@@ -169,6 +169,10 @@ describe("XMP document fields", () => {
     expect(reason(doc.context.stream(packetBytes, { Type: "Metadata", Subtype: "XML", Filter: "LZWDecode" })))
       .toBe("xmp_unreadable");
     expect(reason(doc.context.obj({}))).toBe("xmp_unreadable");
+    // A stream that ends before its final block is not read as a shorter packet.
+    const truncated = flate.getContents().slice(0, -8);
+    expect(reason(doc.context.stream(truncated, { Type: "Metadata", Subtype: "XML", Filter: "FlateDecode" })))
+      .toBe("xmp_unreadable");
   });
 
   it("reads Alt, Seq and attribute-form properties", () => {
@@ -447,7 +451,7 @@ describe("set_pdf_metadata (stdio)", () => {
     expect(xmp).not.toContain("<rdf:Bag>");
   });
 
-  it.skipIf(!OPENSSL)("keeps an existing signature verifying, and refuses to rewrite a signed file", async () => {
+  it("keeps an existing signature verifying, and refuses to rewrite a signed file", async ({ skip }) => {
     const file = path.join(directory, "signed.pdf");
     await fs.copyFile(SIGNED_FIXTURE, file);
     const original = await fs.readFile(file);
@@ -461,6 +465,13 @@ describe("set_pdf_metadata (stdio)", () => {
     const bytes = await fs.readFile(file);
     expect(keepsPrefix(new Uint8Array(bytes), new Uint8Array(original))).toBe(true);
     expect((await pdfjsMetadata(bytes)).title).toBe("Signed and retitled");
+    // Only the cryptographic check needs openssl; without it the test is
+    // marked skipped after the assertions above have run, and CI requires it.
+    if (!OPENSSL) {
+      if (process.env.CI) throw new Error("openssl is required in CI to verify signatures");
+      skip("openssl is not on PATH, so the signature was not verified");
+      return;
+    }
     expect(await signatureVerifies(file, directory)).toBe(true);
   });
 

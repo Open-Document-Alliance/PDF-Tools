@@ -69,6 +69,8 @@ set, never a document-equivalence claim.
 
 `get_pdf_info` reads XMP through PDF.js's metadata iterator. It used to call a `getAll()` that PDF.js 5.4 does not have, so every document's XMP came back as an empty record with no gap. A catalog `/Metadata` stream that yields nothing is now reported as the metadata coverage reason `XMP_PARSE_UNAVAILABLE` rather than as a document without XMP. Regression guard: `test/get-pdf-info.test.js`.
 
+Metadata decoding in `get_pdf_info` and `compare_pdfs` is bounded. PDF.js's `getMetadata()` decodes the document metadata stream in full, so it is called only when `server/metadata-stream-bound.js` finds every stream in the file that PDF.js could decode as XMP to be unfiltered, or a single FlateDecode with at most 64 KiB of raw data. It decides from the raw bytes, not through a parser's object resolution, because pdf-lib and PDF.js can resolve one object number to different definitions. Otherwise Info and XMP are reported unavailable with `METADATA_STREAM_UNBOUNDED`; `EncryptFilterName` is still read from the trailer. Regression guard: `test/metadata-stream-bound.test.js`.
+
 ## Build, Test, and Development Commands
 - `npm install`: install dependencies with Node.js 20.19+ or 22.12+; this is
   the contributor build/test floor imposed by Vite, not a claim about the

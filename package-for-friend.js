@@ -83,6 +83,7 @@ export const SHARE_FILES = [
   "server/incremental-update.js",
   "server/signature-state.js",
   "server/xmp-metadata.js",
+  "server/metadata-stream-bound.js",
   "server/pdf-lib-rss-monitor.js",
   "server/pdf-lib-subprocess.js",
   "server/pdf-lib-worker.js",

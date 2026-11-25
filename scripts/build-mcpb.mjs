@@ -98,6 +98,7 @@ export const SERVER_FILES = [
   "lumin-signing-tools.js",
   "markdown-conversion.js",
   "markdown-output-transaction.js",
+  "metadata-stream-bound.js",
   "outline-carry.js",
   "output-schemas.js",
   "page-label-carry.js",
