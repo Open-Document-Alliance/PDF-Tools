@@ -32,13 +32,15 @@ A filename or a digest is not the document. Never publish a private document jus
 
 ## Pages
 
-`select_pdf_pages` keeps or reorders pages, `rotate_pdf_pages` rotates exact pages, and `merge_pdfs` combines 2 to 5 attachments in order. Each returns a new copy and leaves the source unchanged. These copy page content, not bookmarks or document-level metadata.
+`select_pdf_pages` keeps or reorders pages, `rotate_pdf_pages` rotates exact pages, and `merge_pdfs` combines 2 to 5 attachments in order. Each returns a new copy and leaves the source unchanged.
+
+`select_pdf_pages` and `merge_pdfs` copy page content only: the result has no fillable form fields, bookmarks or document metadata. Fill and flatten a form before selecting or merging its pages, or keep the filled original. `rotate_pdf_pages` keeps the document as it is apart from the rotation.
 
 ## Signatures
 
 - `detect_signature_zones` finds where a signature, initials, name or date belongs.
 - `apply_signature` draws a visible typed signature. It is a stamp, not a cryptographic or certificate-backed signature. It needs the person's own words stating their intent and the time they gave them. Never write those for them.
-- To send a document for a binding signature through Lumin, the person needs the separate signing connection (`/mcp/sign`). Its tools are not available on this connection.
+- To send a document for a binding signature through Lumin, the person needs the separate signing connection (`/mcp/sign`), which has its own tools.
 
 ## Returning results
 

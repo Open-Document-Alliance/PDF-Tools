@@ -20,6 +20,15 @@ const SKILL_NAME = "pdf-tools-hosted";
 const SKILL_URI = `skill://${SKILL_NAME}/SKILL.md`;
 const SKILL_FILE = new URL(`./skills/${SKILL_NAME}/SKILL.md`, import.meta.url);
 
+/** The cache is shared across requests on a warm instance, so nothing in it may be mutable. */
+function deepFreeze(value) {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
 function load() {
   const bytes = readFileSync(SKILL_FILE);
   const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -31,13 +40,13 @@ function load() {
   if (frontmatter?.name !== SKILL_NAME || typeof frontmatter.description !== "string" || !frontmatter.description.trim()) {
     throw new Error("Hosted skill has an invalid name or description");
   }
-  return Object.freeze({
+  return deepFreeze({
     text,
-    skill: Object.freeze({
+    skill: {
       uri: SKILL_URI,
       frontmatter,
       resources: [{ uri: SKILL_URI, digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`, size: bytes.length }],
-    }),
+    },
   });
 }
 

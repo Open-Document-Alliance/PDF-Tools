@@ -70,3 +70,14 @@ describe("hosted Skills over MCP", () => {
     expect(text).not.toMatch(/desktop extension|list_pdfs|save_profile|fill_pdf\b/);
   });
 });
+
+describe("hosted skill scope", () => {
+  it("is not offered on the signing connection, whose tool set differs", async () => {
+    const { createRemoteServer } = await import("../remote/server.mjs");
+    const publicServer = createRemoteServer({ era: "modern" });
+    const signingServer = createRemoteServer({ era: "modern", signing: { luminAccessToken: "t" } });
+    const capabilities = server => server._capabilities ?? server.getCapabilities?.() ?? {};
+    expect(capabilities(publicServer).extensions).toHaveProperty(["io.modelcontextprotocol/skills"]);
+    expect(capabilities(signingServer).extensions).toBeUndefined();
+  });
+});

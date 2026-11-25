@@ -452,8 +452,14 @@ export const SIGNING_INSTRUCTIONS =
  * /mcp/sign route, with the Lumin access token it opened for this request.
  */
 export function createRemoteServer({ dispatchTool = callTool, signing = null, era = "legacy" } = {}) {
-  // Skills over MCP is a 2026-07-28 extension, so only modern connections see it.
-  const skills = era === "modern" ? hostedSkills() : null;
+  // Skills over MCP is a 2026-07-28 extension, so only modern connections see
+  // it. The skill describes the public tool set, so the signing connection,
+  // which has more tools, does not offer it (P7). A skill that fails to load
+  // drops only the skill, never the rest of the request.
+  let skills = null;
+  if (era === "modern" && !signing) {
+    try { skills = hostedSkills(); } catch (error) { process.stderr.write(`skill unavailable: ${error?.name ?? "Error"}\n`); }
+  }
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { tools: {}, resources: {}, ...(skills ? { extensions: { [SKILLS_EXTENSION]: {} } } : {}) }, instructions: signing ? INSTRUCTIONS + SIGNING_INSTRUCTIONS : INSTRUCTIONS },
