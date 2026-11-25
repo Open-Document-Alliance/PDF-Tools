@@ -18,6 +18,7 @@
 import { PDFArray, PDFDict, PDFName, PDFRef, PDFString, PDFHexString, PDFNumber } from "pdf-lib";
 
 const N = Object.freeze({
+  FieldMDP: PDFName.of("FieldMDP"),
   Action: PDFName.of("Action"),
   All: PDFName.of("All"),
   DocMDP: PDFName.of("DocMDP"),
@@ -71,16 +72,53 @@ function qualifiedName(context, node) {
   return parts.join(".");
 }
 
-function lockOf(context, field) {
-  const lock = lookup(context, field.get(N.Lock));
-  if (!(lock instanceof PDFDict)) return null;
-  const action = lookup(context, lock.get(N.Action));
-  const names = lookup(context, lock.get(N.Fields));
+function lockFromParams(context, params) {
+  if (!(params instanceof PDFDict)) return { action: "all", fields: [] };
+  const action = lookup(context, params.get(N.Action));
+  const names = lookup(context, params.get(N.Fields));
   const listed = names instanceof PDFArray ? names.asArray().map(item => text(lookup(context, item))) : [];
   if (action === N.All) return { action: "all", fields: [] };
   if (action === N.Include) return { action: "include", fields: listed };
   if (action === N.Exclude) return { action: "exclude", fields: listed };
   return { action: "all", fields: [] };
+}
+
+/**
+ * Every field lock a signed field carries: the /Lock on the field, which says
+ * what will be locked once it is signed, and each FieldMDP reference in the
+ * signature value, which is what a validator actually checks the document
+ * against. Either one binds.
+ */
+function locksOf(context, field, signature) {
+  const locks = [];
+  const lock = lookup(context, field.get(N.Lock));
+  if (lock instanceof PDFDict) locks.push(lockFromParams(context, lock));
+  const references = signature instanceof PDFDict ? lookup(context, signature.get(N.Reference)) : undefined;
+  if (references instanceof PDFArray) {
+    for (const item of references.asArray()) {
+      const reference = lookup(context, item);
+      if (reference instanceof PDFDict && lookup(context, reference.get(N.TransformMethod)) === N.FieldMDP) {
+        locks.push(lockFromParams(context, lookup(context, reference.get(N.TransformParams))));
+      }
+    }
+  }
+  return locks;
+}
+
+/** DocMDP level from a signature value's own references, or null. */
+function docMdpFromSignature(context, signature) {
+  const references = signature instanceof PDFDict ? lookup(context, signature.get(N.Reference)) : undefined;
+  if (!(references instanceof PDFArray)) return null;
+  for (const item of references.asArray()) {
+    const reference = lookup(context, item);
+    if (!(reference instanceof PDFDict) || lookup(context, reference.get(N.TransformMethod)) !== N.DocMDP) continue;
+    const params = lookup(context, reference.get(N.TransformParams));
+    const level = params instanceof PDFDict ? lookup(context, params.get(N.P)) : undefined;
+    if (level === undefined) return 2;
+    if (!(level instanceof PDFNumber) || ![1, 2, 3].includes(level.asNumber())) return 1;
+    return level.asNumber();
+  }
+  return null;
 }
 
 /** The DocMDP permission level, 1-3, or null when the document is not certified. */
@@ -121,7 +159,13 @@ export function inspectSignatureState(document) {
   const pending = [...fields.asArray()];
   const seen = new Set();
   while (pending.length > 0) {
-    if (seen.size > MAX_FIELD_NODES) break;
+    if (seen.size > MAX_FIELD_NODES) {
+      // Not knowing whether a signature exists must not read as "unsigned",
+      // or a rewrite would break one.
+      throw new Error(
+        `This PDF has more than ${MAX_FIELD_NODES} form-field nodes, too many to establish whether it is signed. Nothing was changed.`,
+      );
+    }
     const raw = pending.pop();
     const node = lookup(context, raw);
     if (!(node instanceof PDFDict) || seen.has(node)) continue;
@@ -137,8 +181,13 @@ export function inspectSignatureState(document) {
     if (inherited(context, node, N.FT) !== N.Sig) continue;
     const name = qualifiedName(context, node);
     const value = inherited(context, node, N.V);
-    if (value instanceof PDFDict) state.signed.push({ name, lock: lockOf(context, node) });
-    else state.unsigned.push(name);
+    if (value instanceof PDFDict) {
+      state.signed.push({ name, locks: locksOf(context, node, value) });
+      const level = docMdpFromSignature(context, value);
+      if (level !== null && (state.certification === null || level < state.certification)) state.certification = level;
+    } else {
+      state.unsigned.push(name);
+    }
   }
   return state;
 }
@@ -149,10 +198,12 @@ export function inspectSignatureState(document) {
  * every field except the listed ones.
  */
 export function isFieldLocked(state, fieldName) {
-  return state.signed.some(({ lock }) => {
-    if (!lock) return false;
+  // A listed name covers the field itself and everything under it: locking
+  // "grp" locks "grp.company".
+  const covers = listed => listed.some(name => fieldName === name || fieldName.startsWith(`${name}.`));
+  return state.signed.some(({ locks }) => locks.some(lock => {
     if (lock.action === "all") return true;
-    if (lock.action === "include") return lock.fields.includes(fieldName);
-    return !lock.fields.includes(fieldName);
-  });
+    if (lock.action === "include") return covers(lock.fields);
+    return !covers(lock.fields);
+  }));
 }

@@ -5245,6 +5245,9 @@ async function handleToolCall(request) {
           if (value !== null && typeof value !== "string") {
             throw new Error(`${field} must be a string, or null to remove it.`);
           }
+          if (value !== null && /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) {
+            throw new Error(`${field} contains a control character, which document metadata cannot carry.`);
+          }
           edits[field] = value;
         }
         if (Object.keys(edits).length === 0) {

@@ -132,6 +132,64 @@ export function locateLastCrossReference(bytes) {
   );
 }
 
+/** The trailer dictionary text of the cross-reference section at offset. */
+function sectionTrailerText(bytes, offset) {
+  const head = Buffer.from(bytes.subarray(offset, Math.min(bytes.length, offset + 64))).toString("latin1");
+  if (/^xref\b/.test(head)) {
+    const section = Buffer.from(bytes.subarray(offset, Math.min(bytes.length, offset + 4 * 1024 * 1024))).toString("latin1");
+    const trailer = section.indexOf("trailer");
+    const end = section.indexOf("startxref", trailer);
+    return trailer < 0 ? null : section.slice(trailer, end < 0 ? undefined : end);
+  }
+  if (/^\d+\s+\d+\s+obj\b/.test(head)) {
+    const window = Buffer.from(bytes.subarray(offset, Math.min(bytes.length, offset + 4096))).toString("latin1");
+    const end = window.indexOf("stream");
+    return end < 0 ? window : window.slice(0, end);
+  }
+  return null;
+}
+
+/**
+ * Restore trailer entries pdf-lib lost. pdf-lib keeps the trailer of
+ * whichever cross-reference section it parses last in file order; in a
+ * linearized file that is the first-page section, which often carries no
+ * /Info, so pdf-lib reports a document without Info and the next save writes
+ * one with nothing in it. Walk the file's own chain from its last startxref
+ * along /Prev (bounded) and put back /Info and /ID when pdf-lib has none and
+ * the object they name exists. Silent when the file has no readable chain:
+ * then there is nothing truer to restore.
+ */
+export function recoverTrailerReferences(document, bytes) {
+  const trailer = document.context.trailerInfo;
+  if (trailer.Info && trailer.ID) return;
+  let offset;
+  try {
+    offset = locateLastCrossReference(bytes).offset;
+  } catch {
+    return;
+  }
+  const seen = new Set();
+  for (let hop = 0; hop < 32 && offset !== null && !seen.has(offset); hop += 1) {
+    seen.add(offset);
+    const text = sectionTrailerText(bytes, offset);
+    if (!text) return;
+    if (!trailer.Info) {
+      const info = /\/Info\s+(\d+)\s+(\d+)\s+R/.exec(text);
+      if (info) {
+        const ref = PDFRef.of(Number(info[1]), Number(info[2]));
+        if (document.context.lookup(ref) !== undefined) trailer.Info = ref;
+      }
+    }
+    if (!trailer.ID) {
+      const id = /\/ID\s*\[\s*<([0-9A-Fa-f]*)>\s*<([0-9A-Fa-f]*)>\s*\]/.exec(text);
+      if (id) trailer.ID = document.context.obj([PDFHexString.of(id[1]), PDFHexString.of(id[2])]);
+    }
+    if (trailer.Info && trailer.ID) return;
+    const prev = /\/Prev\s+(\d+)/.exec(text);
+    offset = prev && Number(prev[1]) < bytes.length ? Number(prev[1]) : null;
+  }
+}
+
 function changedObjects(document, snapshot) {
   const changed = [];
   for (const [ref, object] of document.context.enumerateIndirectObjects()) {

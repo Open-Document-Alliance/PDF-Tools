@@ -1,8 +1,8 @@
 // set_pdf_metadata changes the document title, author, subject and keywords
 // in the Info dictionary and the XMP packet together, and by default appends
 // the change as an incremental update so the original bytes (and any
-// signature over them) are untouched. Host-fidelity benchmark v1 task E1 found
-// PDF Tools had no way to do this at all.
+// signature over them) are untouched. Before it, PDF Tools had no way
+// to change document metadata at all.
 //
 // Results are read back with PDF.js, an independent parser, and signatures
 // are verified with `openssl cms` over their byte range when openssl exists.
@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { PDFDocument, PDFName, StandardFonts } from "pdf-lib";
+import { PDFDocument, PDFName, PDFString, StandardFonts } from "pdf-lib";
 import { validateStructuredToolResult } from "../server/output-schemas.js";
 import {
   IncrementalUpdateRefusal,
@@ -177,6 +177,32 @@ describe("XMP document fields", () => {
   });
 });
 
+describe("XMP scope and values", () => {
+  it("edits only the document's own properties, not one nested in a pantry ingredient", () => {
+    const xml = packet(`<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:xmpTPg="http://ns.adobe.com/xap/1.0/t/pg/">
+<xmpTPg:Pantry><rdf:Bag><rdf:li><rdf:Description>
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">Placed artwork</rdf:li></rdf:Alt></dc:title>
+</rdf:Description></rdf:li></rdf:Bag></xmpTPg:Pantry>
+</rdf:Description>`);
+    expect(readXmpDocumentFields(xml).title).toEqual({ state: "absent" });
+    const edited = editXmpDocumentFields(xml, { title: "Document title" });
+    expect(edited).toContain("Placed artwork");
+    expect(readXmpDocumentFields(edited).title).toEqual({ state: "value", value: "Document title" });
+  });
+
+  it("refuses a control character instead of writing a packet XML cannot parse", () => {
+    expect(() => editXmpDocumentFields(STANDARD_XMP, { title: "bad\u0001char" }))
+      .toThrow(expect.objectContaining({ reason: "xmp_value_illegal_character" }));
+  });
+
+  it("writes an author list as separate creators, so it reads back the same", () => {
+    const edited = editXmpDocumentFields(STANDARD_XMP, { author: "Alice Example; Bob Example" });
+    expect(edited).toContain("<rdf:Seq><rdf:li>Alice Example</rdf:li><rdf:li>Bob Example</rdf:li></rdf:Seq>");
+    expect(readXmpDocumentFields(edited).author).toEqual({ state: "value", value: "Alice Example; Bob Example" });
+  });
+});
+
 describe("incremental update writer", () => {
   for (const objectStreams of [false, true]) {
     it(`appends to a ${objectStreams ? "cross-reference stream" : "classic table"} original and keeps its bytes`, async () => {
@@ -225,13 +251,36 @@ describe("signature state", () => {
   it("tells signed fields from empty ones, and reads certification", async () => {
     const signed = await PDFDocument.load(await fs.readFile(SIGNED_FIXTURE), { updateMetadata: false });
     expect(inspectSignatureState(signed)).toMatchObject({
-      signed: [{ name: "approver_signature", lock: null }],
+      signed: [{ name: "approver_signature", locks: [] }],
       unsigned: [],
       certification: null,
     });
     expect(isFieldLocked(inspectSignatureState(signed), "full_name")).toBe(false);
     const certified = await PDFDocument.load(await buildDocument({ certified: 2 }), { updateMetadata: false });
     expect(inspectSignatureState(certified).certification).toBe(2);
+  });
+
+  it("reads FieldMDP and DocMDP from the signature's own references, and locks cover child fields", async () => {
+    const doc = await PDFDocument.load(await fs.readFile(SIGNED_FIXTURE), { updateMetadata: false });
+    const fields = doc.context.lookup(doc.catalog.lookup(PDFName.of("AcroForm")).get(PDFName.of("Fields")));
+    const signatureField = fields.asArray().map(ref => doc.context.lookup(ref))
+      .find(field => field.get(PDFName.of("FT")) === PDFName.of("Sig"));
+    const signature = doc.context.lookup(signatureField.get(PDFName.of("V")));
+    signature.set(PDFName.of("Reference"), doc.context.obj([
+      doc.context.obj({
+        Type: "SigRef", TransformMethod: "FieldMDP",
+        TransformParams: doc.context.obj({ Type: "TransformParams", Action: "Include", Fields: [PDFString.of("grp")] }),
+      }),
+      doc.context.obj({
+        Type: "SigRef", TransformMethod: "DocMDP",
+        TransformParams: doc.context.obj({ Type: "TransformParams", P: 1 }),
+      }),
+    ]));
+    const state = inspectSignatureState(doc);
+    expect(state.certification).toBe(1);
+    expect(isFieldLocked(state, "grp.company")).toBe(true);
+    expect(isFieldLocked(state, "grp")).toBe(true);
+    expect(isFieldLocked(state, "group")).toBe(false);
   });
 });
 
@@ -364,6 +413,31 @@ describe("set_pdf_metadata (stdio)", () => {
     const refusal = await refuse({ pdf_path: file, output_path: file, title: "Three" });
     expect(refusal).toMatch(/xmp_property_repeated/);
     expect((await fs.readFile(file)).equals(Buffer.from(original))).toBe(true);
+  });
+
+  it("keeps the document Info of a linearized file with cross-reference streams", async () => {
+    // pdf-lib keeps the first-page trailer of such a file, which has no /Info;
+    // the edit must not mistake that for a document without metadata.
+    try {
+      execFileSync("qpdf", ["--version"], { stdio: "ignore" });
+    } catch {
+      return;
+    }
+    const plain = path.join(directory, "plain-for-linearize.pdf");
+    const file = path.join(directory, "linearized.pdf");
+    await fs.writeFile(plain, await buildDocument({ xmp: null }));
+    execFileSync("qpdf", ["--linearize", "--object-streams=generate", plain, file]);
+    const { structured } = await succeed({ pdf_path: file, output_path: file, subject: "Linearized subject" });
+    expect(structured.changes).toEqual([{ field: "subject", before: "Quarterly report", after: "Linearized subject" }]);
+    expect(await pdfjsMetadata(await fs.readFile(file))).toMatchObject({
+      title: "Old Title", author: "Example Corp Records", subject: "Linearized subject",
+    });
+  });
+
+  it("refuses a control character in a value", async () => {
+    const file = path.join(directory, "control.pdf");
+    await fs.writeFile(file, await buildDocument());
+    expect(await refuse({ pdf_path: file, output_path: file, title: "bad\u0001" })).toMatch(/control character/);
   });
 
   it("asks for at least one field", async () => {

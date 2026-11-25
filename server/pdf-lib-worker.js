@@ -72,12 +72,14 @@ import {
   IncrementalUpdateRefusal,
   buildIncrementalUpdate,
   keepsPrefix,
+  recoverTrailerReferences,
   snapshotIndirectObjects,
 } from "./incremental-update.js";
 import { inspectSignatureState } from "./signature-state.js";
 import {
   XmpUnsupported,
   decodeXmpPacket,
+  hasXmlIllegalCharacters,
   editXmpDocumentFields,
   readXmpDocumentFields,
   xmpPacketFromInfo,
@@ -509,6 +511,9 @@ function validateRequest(request) {
       const value = options.edits[key];
       if (value !== null && (typeof value !== "string" || value.length > MAX_METADATA_VALUE_LENGTH)) {
         throw new TypeError(`edits.${key} must be a string of at most ${MAX_METADATA_VALUE_LENGTH} characters, or null.`);
+      }
+      if (value !== null && hasXmlIllegalCharacters(value)) {
+        throw new TypeError(`edits.${key} contains a control character, which document metadata cannot carry.`);
       }
     }
     if (!["incremental", "rewrite"].includes(options.save_mode)) {
@@ -1957,7 +1962,15 @@ function regenerateXmpFromInfo(targetDoc, sourceDoc) {
   if (sourceDoc.catalog.get(PDFName.of("Metadata")) === undefined) return;
   const fields = Object.fromEntries(Object.keys(INFO_ACCESSORS).map(field => [field, readInfoField(targetDoc, field)]));
   if (Object.values(fields).every(value => value === null)) return;
-  const packet = xmpPacketFromInfo(fields);
+  let packet;
+  try {
+    packet = xmpPacketFromInfo(fields);
+  } catch (error) {
+    // An Info value XML cannot carry (a control character) gets no XMP twin;
+    // the output keeps its Info and simply has no packet, as before.
+    if (error instanceof XmpUnsupported) return;
+    throw error;
+  }
   targetDoc.catalog.set(
     PDFName.of("Metadata"),
     targetDoc.context.register(targetDoc.context.stream(new TextEncoder().encode(packet), {
@@ -2176,9 +2189,12 @@ export async function loadPdfForMutation(bytes, password, {
     // updateMetadata false keeps pdf-lib from rewriting Producer, Creator and
     // ModDate at load. An incremental update must start from the document as
     // it is on disk, or the rewrite would ride along as an unrequested change.
+    // Always load without pdf-lib's Info rewrite: it creates an empty Info
+    // dictionary when the trailer it kept has none, before the real one can be
+    // recovered below. The rewrite is applied afterwards when asked for.
     document = await PDFDocument.load(bytes, {
       ...(password ? { password } : {}),
-      ...(updateMetadata ? {} : { updateMetadata: false }),
+      updateMetadata: false,
     });
   } catch (error) {
     if (error.message?.includes("password") || error.message?.includes("encrypt")) {
@@ -2188,6 +2204,8 @@ export async function loadPdfForMutation(bytes, password, {
   }
   assertSafeParsedPdfDecodeChains(document);
   assertSafeParsedPdfComplexity(document);
+  recoverTrailerReferences(document, bytes);
+  if (updateMetadata) document.updateInfoDict();
   const graphAuthority = enforceSafeParsedPdfGraph(document);
   inputSpecNullReferenceAuthorities.set(document, {
     graph_authority: specNullReferenceAuthority(graphAuthority),
@@ -2872,7 +2890,9 @@ function readCatalogXmp(document) {
 
 async function setDocumentMetadata(protection, sourceBytes, options) {
   const incremental = options.save_mode === "incremental";
-  const document = await loadMutationSource(protection, sourceBytes, { updateMetadata: !incremental });
+  // Never let pdf-lib rewrite Producer here: this tool changes the four
+  // fields it names and the modification date, nothing else.
+  const document = await loadMutationSource(protection, sourceBytes, { updateMetadata: false });
   const encrypted = (protection.sources.get(sourceBytes) ?? null) !== null;
   if (incremental && encrypted) {
     throw new Error(

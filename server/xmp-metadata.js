@@ -48,7 +48,15 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** C0 control characters other than tab, LF and CR are not legal in XML 1.0. */
+export function hasXmlIllegalCharacters(text) {
+  return /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(String(text));
+}
+
 export function escapeXml(text) {
+  if (hasXmlIllegalCharacters(text)) {
+    throw new XmpUnsupported("xmp_value_illegal_character", "The value contains a control character XML cannot carry.");
+  }
   return String(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -108,11 +116,6 @@ function prefixFor(prefixes, ns) {
   return prefixes.get(XMP_NAMESPACES[ns]) ?? null;
 }
 
-function elementPattern(qname) {
-  const name = escapeRegExp(qname);
-  return new RegExp(`<${name}(\\s[^>]*)?(?:/>|>([\\s\\S]*?)</${name}\\s*>)`, "g");
-}
-
 function attributePattern(qname) {
   return new RegExp(`(\\s)${escapeRegExp(qname)}\\s*=\\s*(["'])([\\s\\S]*?)\\2`, "g");
 }
@@ -125,17 +128,92 @@ function liValues(inner, rdf) {
   }));
 }
 
-function locate(xml, prefixes, field) {
-  const spec = FIELDS[field];
-  const prefix = prefixFor(prefixes, spec.ns);
-  if (!prefix) return { prefix: null, elements: [], attributes: [] };
-  const qname = `${prefix}:${spec.local}`;
-  return {
-    prefix,
-    qname,
-    elements: [...xml.matchAll(elementPattern(qname))],
-    attributes: [...xml.matchAll(attributePattern(qname))],
-  };
+/**
+ * The element spans of an XMP packet, from a minimal tag scan: start and end
+ * offsets, qualified name, depth and parent index for each element. Comments,
+ * processing instructions, CDATA and doctype are skipped. Unbalanced markup
+ * is refused rather than guessed at.
+ */
+function elementSpans(xml) {
+  const spans = [];
+  const stack = [];
+  const tag = /<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<\/?([A-Za-z_][\w.:-]*)((?:\s+[^\s=/>]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
+  for (const match of xml.matchAll(tag)) {
+    const [text, name, , selfClosing] = match;
+    if (!name) continue;
+    if (text.startsWith("</")) {
+      const open = stack.pop();
+      if (open === undefined || spans[open].name !== name) {
+        throw new XmpUnsupported("xmp_unbalanced", "The XMP packet's markup is not balanced.");
+      }
+      spans[open].end = match.index + text.length;
+      spans[open].innerEnd = match.index;
+      continue;
+    }
+    const span = {
+      name,
+      start: match.index,
+      tagEnd: match.index + text.length,
+      end: null,
+      innerEnd: null,
+      depth: stack.length,
+      parent: stack.length > 0 ? stack[stack.length - 1] : -1,
+      startTag: text,
+    };
+    spans.push(span);
+    if (selfClosing === "/") {
+      span.end = span.tagEnd;
+      span.innerEnd = span.tagEnd;
+    } else {
+      stack.push(spans.length - 1);
+    }
+  }
+  if (stack.length > 0) throw new XmpUnsupported("xmp_unbalanced", "The XMP packet's markup is not balanced.");
+  return spans;
+}
+
+/**
+ * The top-level rdf:Description elements (direct children of rdf:RDF) and the
+ * property elements directly inside them. Only these describe the document:
+ * a dc:title deeper down belongs to something else, such as an ingredient in
+ * an xmpTPg:Pantry.
+ */
+function documentScope(xml, rdf) {
+  const spans = elementSpans(xml);
+  const rdfRoots = new Set(spans.map((span, index) => (span.name === `${rdf}:RDF` ? index : -1)).filter(index => index >= 0));
+  const descriptions = new Set(spans
+    .map((span, index) => (span.name === `${rdf}:Description` && rdfRoots.has(span.parent) ? index : -1))
+    .filter(index => index >= 0));
+  const properties = spans.filter(span => descriptions.has(span.parent));
+  return { spans, descriptions: [...descriptions].map(index => spans[index]), properties };
+}
+
+/**
+ * Where a document property is stated: as a property element directly inside
+ * a top-level rdf:Description, or as an attribute on one. Returns
+ * { qname, elements: [{ start, end, inner }], attributes: [{ start, end, prefix, value }] }
+ * with absolute offsets into xml.
+ */
+function locateProperty(xml, prefixes, rdf, ns, local) {
+  const prefix = prefixFor(prefixes, ns);
+  if (!prefix || !rdf) return { prefix, qname: prefix ? `${prefix}:${local}` : null, elements: [], attributes: [] };
+  const qname = `${prefix}:${local}`;
+  const scope = documentScope(xml, rdf);
+  const elements = scope.properties
+    .filter(span => span.name === qname)
+    .map(span => ({ start: span.start, end: span.end, inner: xml.slice(span.tagEnd, span.innerEnd) }));
+  const attributes = [];
+  for (const description of scope.descriptions) {
+    for (const match of description.startTag.matchAll(attributePattern(qname))) {
+      attributes.push({
+        start: description.start + match.index,
+        end: description.start + match.index + match[0].length,
+        lead: match[1],
+        value: match[3],
+      });
+    }
+  }
+  return { prefix, qname, elements, attributes };
 }
 
 /**
@@ -152,10 +230,20 @@ export function readXmpDocumentFields(xml) {
     return Object.fromEntries(Object.keys(FIELDS).map(field => [field, { state: "unsupported", reason: error.reason }]));
   }
   const rdf = prefixFor(prefixes, "rdf");
+  if (!rdf) {
+    return Object.fromEntries(Object.keys(FIELDS).map(field => [field, { state: "unsupported", reason: "xmp_rdf_namespace_missing" }]));
+  }
   const out = {};
   for (const field of Object.keys(FIELDS)) {
     const spec = FIELDS[field];
-    const found = locate(xml, prefixes, field);
+    let found;
+    try {
+      found = locateProperty(xml, prefixes, rdf, spec.ns, spec.local);
+    } catch (error) {
+      if (!(error instanceof XmpUnsupported)) throw error;
+      out[field] = { state: "unsupported", reason: error.reason };
+      continue;
+    }
     const count = found.elements.length + found.attributes.length;
     if (count === 0) {
       out[field] = { state: "absent" };
@@ -167,11 +255,11 @@ export function readXmpDocumentFields(xml) {
     }
     if (found.attributes.length === 1) {
       out[field] = spec.shape === "simple"
-        ? { state: "value", value: unescapeXml(found.attributes[0][3]) }
+        ? { state: "value", value: unescapeXml(found.attributes[0].value) }
         : { state: "unsupported", reason: "xmp_property_shape_unexpected" };
       continue;
     }
-    const inner = found.elements[0][2];
+    const inner = found.elements[0].inner;
     if (spec.shape === "simple") {
       out[field] = /</.test(inner ?? "")
         ? { state: "unsupported", reason: "xmp_property_shape_unexpected" }
@@ -198,7 +286,11 @@ export function readXmpDocumentFields(xml) {
 function propertyElement(qname, rdf, shape, value) {
   const text = escapeXml(value);
   if (shape === "alt") return `<${qname}><${rdf}:Alt><${rdf}:li xml:lang="x-default">${text}</${rdf}:li></${rdf}:Alt></${qname}>`;
-  if (shape === "seq") return `<${qname}><${rdf}:Seq><${rdf}:li>${text}</${rdf}:li></${rdf}:Seq></${qname}>`;
+  if (shape === "seq") {
+    // An Info author list "A; B" is two creators, which is how it reads back.
+    const items = String(value).split(";").map(item => item.trim()).filter(Boolean);
+    return `<${qname}><${rdf}:Seq>${(items.length > 0 ? items : [""]).map(item => `<${rdf}:li>${escapeXml(item)}</${rdf}:li>`).join("")}</${rdf}:Seq></${qname}>`;
+  }
   if (shape === "bag") {
     const terms = String(value).split(/[;,]/).map(term => term.trim()).filter(Boolean);
     return `<${qname}><${rdf}:Bag>${terms.map(term => `<${rdf}:li>${escapeXml(term)}</${rdf}:li>`).join("")}</${rdf}:Bag></${qname}>`;
@@ -207,10 +299,7 @@ function propertyElement(qname, rdf, shape, value) {
 }
 
 function setProperty(xml, prefixes, rdf, { ns, local, shape }, value, { insertIfAbsent }) {
-  const prefix = prefixFor(prefixes, ns);
-  const qname = prefix ? `${prefix}:${local}` : null;
-  const elements = qname ? [...xml.matchAll(elementPattern(qname))] : [];
-  const attributes = qname ? [...xml.matchAll(attributePattern(qname))] : [];
+  const { prefix, qname, elements, attributes } = locateProperty(xml, prefixes, rdf, ns, local);
   if (elements.length + attributes.length > 1) {
     throw new XmpUnsupported("xmp_property_repeated", `The XMP packet states ${ns}:${local} more than once.`);
   }
@@ -218,14 +307,14 @@ function setProperty(xml, prefixes, rdf, { ns, local, shape }, value, { insertIf
     if (shape !== "simple") {
       throw new XmpUnsupported("xmp_property_shape_unexpected", `The XMP packet states ${ns}:${local} in a form PDF Tools does not rewrite.`);
     }
-    const match = attributes[0];
-    if (value === null) return xml.slice(0, match.index) + xml.slice(match.index + match[0].length);
-    return xml.slice(0, match.index) + `${match[1]}${qname}="${escapeXml(value)}"` + xml.slice(match.index + match[0].length);
+    const found = attributes[0];
+    if (value === null) return xml.slice(0, found.start) + xml.slice(found.end);
+    return xml.slice(0, found.start) + `${found.lead}${qname}="${escapeXml(value)}"` + xml.slice(found.end);
   }
   if (elements.length === 1) {
-    const match = elements[0];
+    const found = elements[0];
     const replacement = value === null ? "" : propertyElement(qname, rdf, shape, value);
-    return xml.slice(0, match.index) + replacement + xml.slice(match.index + match[0].length);
+    return xml.slice(0, found.start) + replacement + xml.slice(found.end);
   }
   if (value === null || !insertIfAbsent) return xml;
   return insertProperty(xml, rdf, ns, local, shape, value, prefix);
@@ -244,10 +333,10 @@ function insertProperty(xml, rdf, ns, local, shape, value, existingPrefix) {
   return xml.slice(0, at) + description + xml.slice(at);
 }
 
-function refreshDate(xml, prefixes, local, iso) {
+function refreshDate(xml, prefixes, rdf, local, iso) {
   const prefix = prefixFor(prefixes, "xmp");
   if (!prefix) return xml;
-  return setProperty(xml, prefixes, null, { ns: "xmp", local, shape: "simple" }, iso, { insertIfAbsent: false });
+  return setProperty(xml, prefixes, rdf, { ns: "xmp", local, shape: "simple" }, iso, { insertIfAbsent: false });
 }
 
 /**
@@ -272,8 +361,8 @@ export function editXmpDocumentFields(xml, edits, { modifiedAt, instanceId = nul
     }
   }
   if (modifiedAt) {
-    out = refreshDate(out, prefixes, "ModifyDate", modifiedAt);
-    out = refreshDate(out, prefixes, "MetadataDate", modifiedAt);
+    out = refreshDate(out, prefixes, rdf, "ModifyDate", modifiedAt);
+    out = refreshDate(out, prefixes, rdf, "MetadataDate", modifiedAt);
   }
   if (instanceId && prefixFor(prefixes, "xmpMM")) {
     out = setProperty(out, prefixes, rdf, { ns: "xmpMM", local: "InstanceID", shape: "simple" }, instanceId, { insertIfAbsent: false });
