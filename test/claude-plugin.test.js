@@ -194,7 +194,11 @@ describe("Claude plugin launcher", () => {
     expect(first.status, first.stderr).toBe(0);
     const reply = JSON.parse(first.stdout.trim());
     const runtime = path.join(data, "runtime", digest.slice(0, 16));
-    expect(reply).toEqual({ ok: true, data: path.resolve(data), cwd: runtime });
+    // process.cwd() is a real path, so on macOS a temp dir under /var reports
+    // as /private/var. Compare real paths on both sides.
+    expect(reply.ok).toBe(true);
+    expect(realpathOf(reply.data)).toBe(realpathOf(data));
+    expect(realpathOf(reply.cwd)).toBe(realpathOf(runtime));
     expect(first.stderr).toMatch(/First run for this version/);
     expect(existsSync(path.join(runtime, ".pdf-tools-ready"))).toBe(true);
 
