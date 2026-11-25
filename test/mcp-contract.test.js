@@ -268,7 +268,9 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-11-25: the fill descriptions say a signed form's signed bytes are not
 // changed, rather than claiming the signatures verify, which nothing checks.
 // Inputs, outputs and annotations unchanged. Replaces bc056a750057bae630f7afe6538ba693246366264766402afb2470aef5a68aff.
-const TOOL_CONTRACT_SHA256 = "6d6259aabe43bf7760c8ef1fe5a156dfcaab7aa2032b00f4e4b9b2d9043c1bf7";
+// 2026-11-25: set_pdf_metadata is not idempotent (each call appends a
+// revision), so idempotentHint is false. Replaces 6d6259aabe43bf7760c8ef1fe5a156dfcaab7aa2032b00f4e4b9b2d9043c1bf7.
+const TOOL_CONTRACT_SHA256 = "ecdc9b1be2eee776e2aaf40f8802674f1721593d5f3eae393abaf1218845c06a";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -335,7 +337,7 @@ const TOOL_EFFECT_ANNOTATIONS = {
   list_pdfs: CLOSED_READ,
   read_pdf_fields: CLOSED_SESSION_ACTION,
   fill_pdf: CLOSED_IDEMPOTENT_OVERWRITE,
-  set_pdf_metadata: CLOSED_IDEMPOTENT_OVERWRITE,
+  set_pdf_metadata: CLOSED_NON_IDEMPOTENT_OVERWRITE,
   bulk_fill_from_csv: CLOSED_IDEMPOTENT_OVERWRITE,
   compare_pdfs: CLOSED_READ,
   inspect_pdf_accessibility: CLOSED_READ,
