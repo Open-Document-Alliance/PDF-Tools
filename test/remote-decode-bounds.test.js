@@ -383,3 +383,23 @@ describe("bounded PDF.js worker", () => {
     expect(process.memoryUsage().arrayBuffers - before).toBeLessThan(64 * 1024 * 1024);
   }, 60_000);
 });
+
+describe("bounded PDF.js stays tied to the pinned version", () => {
+  // The decoder hooks in remote/pdfjs-bounded.mjs are exact spans of this
+  // build. Changing the pin must fail here until the hooks are re-reviewed
+  // against the new build.
+  const PINNED_PDFJS_VERSION = "5.4.624";
+
+  it("pins pdfjs-dist exactly, and the installed build is that version", () => {
+    const require = createRequire(import.meta.url);
+    const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+    expect(manifest.dependencies["pdfjs-dist"] ?? manifest.devDependencies?.["pdfjs-dist"]).toBe(PINNED_PDFJS_VERSION);
+    expect(require("pdfjs-dist/package.json").version).toBe(PINNED_PDFJS_VERSION);
+  });
+
+  it("applies every decoder hook to the pinned build", () => {
+    const require = createRequire(import.meta.url);
+    const source = readFileSync(require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs"), "utf8");
+    expect(() => boundedWorkerSource(source)).not.toThrow();
+  });
+});
