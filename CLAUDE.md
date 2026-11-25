@@ -276,6 +276,10 @@ until both are updated deliberately: `TOOL_CONTRACT_SHA256` in
 capture at `test/fixtures/eval/trajectories/tool-contracts.v3.json`, which is
 regenerated with `node scripts/eval-capture-tool-contracts.mjs`.
 
+## Rebuilt Outputs: Bookmarks, Page Labels, XMP
+
+`merge_pdfs`, `split_pdf`, `reorder_pdf_pages` and `apply_page_plan` build a new document and copy pages into it, so anything that lives in the source catalog has to be carried deliberately. `server/outline-carry.js` carries the outline: each bookmark is retargeted to its copied page, a bookmark whose page is not in the output is dropped and its children promoted, and every drop is listed in the result's `outline` report and named in the reply text, so a bookmark is never lost silently. Named and GoTo destinations become explicit ones; URI and named-navigation actions are kept; any other action (JavaScript, launch, remote go-to) keeps its title but not the action, and is counted. A cyclic or oversized outline is reported as not carried rather than guessed at. `server/page-label-carry.js` carries page labels: reorder and page plans keep the document's numbering scheme by position, and each split part keeps the labels its pages had. Source XMP is not copied into any rebuilt output, by decision (`docs/METADATA_PROVENANCE.md`): it can carry claims, such as PDF/A conformance, that a rebuilt file does not meet. Regression guard: `test/outline-carry.test.js`, which reads the outputs back with PDF.js.
+
 ## Development Commands
 
 ### Build and Package

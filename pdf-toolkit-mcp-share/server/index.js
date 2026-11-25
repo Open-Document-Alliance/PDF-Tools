@@ -604,6 +604,13 @@ import {
   PDF_LIB_ENCRYPTED_MESSAGE,
   PDF_LIB_GEOMETRY_PASSWORD_DESCRIPTION,
 } from "./helpers.js";
+import { describeOutlineReport } from "./outline-carry.js";
+
+// One reply line about bookmarks, so a rebuilt output never loses one silently.
+function outlineNotice(report) {
+  const line = describeOutlineReport(report);
+  return line ? `\n${line}` : "";
+}
 
 // Helper: validate profile name to prevent path traversal
 function validateProfileName(name) {
@@ -6818,10 +6825,11 @@ async function handleToolCall(request) {
           ...workerResult.form_info,
           total_pages: workerResult.total_pages,
           metadata_fields_omitted: workerResult.omitted_fields,
+          outline: workerResult.outline,
         });
-        const metadataNotice = workerResult.omitted_fields.length > 0
+        const metadataNotice = (workerResult.omitted_fields.length > 0
           ? `\nOmitted unverified metadata: ${workerResult.omitted_fields.join(", ")}`
-          : "";
+          : "") + outlineNotice(workerResult.outline);
 
         return {
           content: [{
@@ -6885,21 +6893,34 @@ async function handleToolCall(request) {
               start_page: entry.start,
               end_page: entry.end,
               page_count: entry.end - entry.start + 1,
+              outline: result.outlines[index],
             })),
+            outline: result.outline,
           };
         });
-        const results = split.files.map(file => `${file.filename} (${file.page_count} pages)`);
+        const results = split.files.map(file => {
+          const bookmarks = file.outline.status === "absent" ? "" : `, ${file.outline.carried_entries} bookmark(s)`;
+          return `${file.filename} (${file.page_count} pages${bookmarks})`;
+        });
+        // Per part, a bookmark for another part's page is expected to be
+        // absent. Only a bookmark no part keeps is a loss worth naming.
+        const splitOutlineNotice = split.outline.status === "absent"
+          ? ""
+          : split.outline.dropped_entries > 0 || split.outline.status === "not_carried"
+            ? outlineNotice(split.outline)
+            : `\nBookmarks: each part keeps the bookmarks for its own pages (${split.outline.source_entries} in the source, none lost).`;
 
         return {
           content: [{
             type: "text",
-            text: `Split ${path.basename(resolvedInputPath)} into ${results.length} files:\n${results.join("\n")}\nSaved to: ${output_directory}`
+            text: `Split ${path.basename(resolvedInputPath)} into ${results.length} files:\n${results.join("\n")}\nSaved to: ${output_directory}${splitOutlineNotice}`
           }],
           structuredContent: {
             input_path: resolvedInputPath,
             output_directory: resolvedOutputDir,
             file_count: split.files.length,
             files: split.files,
+            outline: split.outline,
           },
         };
       }
@@ -7007,12 +7028,13 @@ async function handleToolCall(request) {
         const payload = await buildNewOutputDocumentPayload(committedOutputPath, "reorder_pdf_pages", 1, {
           ...workerResult.form_info,
           page_order,
+          outline: workerResult.outline,
         });
 
         return {
           content: [{
             type: "text",
-            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB`
+            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB${outlineNotice(workerResult.outline)}`
           }],
           structuredContent: payload,
           _meta: {
@@ -7258,8 +7280,10 @@ async function handleToolCall(request) {
         let summary = `Saved ${page_order.length}-page PDF to: ${output_path}\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB`;
         if (deletedCount > 0) summary += `\n${deletedCount} page(s) removed`;
         if (rotatedCount > 0) summary += `\n${rotatedCount} page(s) rotated`;
+        summary += outlineNotice(workerResult.outline);
         const payload = await buildNewOutputDocumentPayload(committedOutputPath, "apply_page_plan", 1, {
           ...workerResult.form_info,
+          outline: workerResult.outline,
           deleted_pages: deletedCount,
           rotated_pages: rotatedCount,
           page_order,

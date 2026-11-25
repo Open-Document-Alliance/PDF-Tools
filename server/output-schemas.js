@@ -130,6 +130,22 @@ const activeDocumentProperties = {
   last_mutation_tool: nullable(string),
   last_mutation_at: nullable(string),
 };
+// What a rebuilt output did with the source's bookmarks. A dropped bookmark is
+// always listed here and named in the reply text; see server/outline-carry.js.
+const outlineReport = object({
+  status: enumString(["absent", "carried", "partial", "not_carried"]),
+  source_entries: integer,
+  carried_entries: integer,
+  dropped_entries: integer,
+  dropped: arrayOf(object({
+    title: string,
+    source_page: nullable(integer),
+    reason: enumString(["page_not_in_output", "all_children_dropped"]),
+  })),
+  unresolved_targets: integer,
+  actions_not_carried: integer,
+  unreadable_reason: nullable(string),
+});
 const activeDocument = (extra = {}) => object({
   ...activeDocumentProperties,
   ...extra,
@@ -1883,6 +1899,7 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
   merge_pdfs: activeDocument({
     total_pages: integer,
     metadata_fields_omitted: stringArray,
+    outline: outlineReport,
   }),
   split_pdf: object({
     input_path: string,
@@ -1894,14 +1911,17 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
       start_page: integer,
       end_page: integer,
       page_count: integer,
+      outline: outlineReport,
     })),
+    outline: outlineReport,
   }),
   rotate_pdf_pages: activeDocument({
     rotated_pages: integer,
     degrees: { type: "number", enum: [90, 180, 270] },
   }),
-  reorder_pdf_pages: activeDocument({ page_order: integerArray }),
+  reorder_pdf_pages: activeDocument({ page_order: integerArray, outline: outlineReport }),
   apply_page_plan: activeDocument({
+    outline: outlineReport,
     deleted_pages: integer,
     rotated_pages: integer,
     page_order: integerArray,
