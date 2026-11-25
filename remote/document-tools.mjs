@@ -76,26 +76,26 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
       pdf_base64: Buffer.from(bytes).toString("base64"),
     });
   }
-  const readTool = (name, description, properties, required, handler) => ({
+  const readTool = (name, title, description, properties, required, handler) => ({
     name, description, inputSchema: { type: "object", properties: { ...PDF_INPUT_PROPERTIES, ...properties }, required },
-    annotations: { readOnlyHint: true }, handler,
+    annotations: { title, readOnlyHint: true }, handler,
   });
   const pagesSchema = { type: "array", minItems: 1, maxItems: MAX_PAGES, uniqueItems: true, items: { type: "integer", minimum: 1 } };
   return [
-    readTool("get_pdf_info", "Use this to inspect an explicitly supplied PDF's page count, page sizes, rotation, form count and exact source identity. Runs remotely without storing the PDF.", {}, [], async args => {
+    readTool("get_pdf_info", "Get PDF Info", "Use this to inspect an explicitly supplied PDF's page count, page sizes, rotation, form count and exact source identity. Runs remotely without storing the PDF.", {}, [], async args => {
       const { document, source } = await input(args);
       return ok(`PDF with ${source.page_count} pages.`, { source,
         pages: document.getPages().map((page, index) => ({ page: index + 1, ...page.getSize(), rotation: page.getRotation().angle })),
         form_field_count: document.getForm().getFields().length,
       });
     }),
-    readTool("read_pdf_pages", "Use this to read text from up to 10 selected PDF pages. Reports exact source, page coverage, extraction errors and truncation. No OCR; empty text is not proof of an empty page.", RANGE_PROPERTIES, [], async args => {
+    readTool("read_pdf_pages", "Read PDF Pages", "Use this to read text from up to 10 selected PDF pages. Reports exact source, page coverage, extraction errors and truncation. No OCR; empty text is not proof of an empty page.", RANGE_PROPERTIES, [], async args => {
       const { extracted, source, coverage } = await layout(args);
       const pages = extracted.pages.map(page => ({ page: page.page, text: page.flow_text, extraction_status: page.extraction_status, truncation: page.truncation, errors: page.errors, limitations: page.limitations }));
       const text = boundedText(pages.map(page => `Page ${page.page}\n${page.text}`).join("\n\n"));
       return ok(text || "No text layer was returned. OCR was not performed.", { source, coverage, pages, extraction_status: extracted.extraction_status, truncation: extracted.truncation, ocr_performed: false });
     }),
-    readTool("search_pdf_text", "Use this to find literal text in up to 10 selected PDF pages, with page numbers and excerpts. A no-match result applies only to the selected extracted text, not unseen or image-only content.", { ...RANGE_PROPERTIES, query: { type: "string", minLength: 1, maxLength: 200 } }, ["query"], async args => {
+    readTool("search_pdf_text", "Search PDF Text", "Use this to find literal text in up to 10 selected PDF pages, with page numbers and excerpts. A no-match result applies only to the selected extracted text, not unseen or image-only content.", { ...RANGE_PROPERTIES, query: { type: "string", minLength: 1, maxLength: 200 } }, ["query"], async args => {
       if (typeof args.query !== "string" || !args.query.trim() || args.query.length > 200) fail("INVALID_QUERY", "Supply nonempty literal text of at most 200 characters.");
       const { extracted, source, coverage } = await layout(args);
       const matches = [];
@@ -115,7 +115,7 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
         extraction_status: extracted.extraction_status, truncation: extracted.truncation, ocr_performed: false,
       });
     }),
-    readTool("convert_pdf_to_markdown", "Use this to convert up to 10 PDF pages to source-backed Markdown with the existing PDF Tools renderer. Reports gaps for ambiguous tables, math, images and absent text. No OCR or completeness claim.", RANGE_PROPERTIES, [], async args => {
+    readTool("convert_pdf_to_markdown", "Convert PDF to Markdown", "Use this to convert up to 10 PDF pages to source-backed Markdown with the existing PDF Tools renderer. Reports gaps for ambiguous tables, math, images and absent text. No OCR or completeness claim.", RANGE_PROPERTIES, [], async args => {
       const { extracted, source, coverage } = await layout(args);
       let conversion;
       try {
@@ -131,7 +131,7 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
     {
       name: "select_pdf_pages", description: "Use this to split or reorder a PDF by listing the exact pages to keep in their desired order. Returns a new copy, never modifies the source. Duplicate pages and signed/XFA documents are refused.",
       inputSchema: { type: "object", properties: { ...PDF_INPUT_PROPERTIES, page_numbers: pagesSchema }, required: ["page_numbers"] },
-      annotations: { readOnlyHint: false }, async handler(args) {
+      annotations: { title: "Select PDF Pages", readOnlyHint: false }, async handler(args) {
         const { document, source } = await input(args);
         mutationAllowed(document);
         const selected = pageSelection(args.page_numbers, source.page_count);
@@ -143,7 +143,7 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
     {
       name: "rotate_pdf_pages", description: "Use this to rotate selected pages clockwise by 90, 180 or 270 degrees and return a new PDF copy. Supply exact page numbers. Signed and XFA documents are refused.",
       inputSchema: { type: "object", properties: { ...PDF_INPUT_PROPERTIES, page_numbers: pagesSchema, rotation: { type: "integer", enum: [90, 180, 270] } }, required: ["page_numbers", "rotation"] },
-      annotations: { readOnlyHint: false }, async handler(args) {
+      annotations: { title: "Rotate PDF Pages", readOnlyHint: false }, async handler(args) {
         const { document, source } = await input(args);
         mutationAllowed(document);
         const selected = pageSelection(args.page_numbers, source.page_count);
@@ -158,7 +158,7 @@ export function createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDo
     {
       name: "merge_pdfs", description: "Use this to combine 2 to 5 explicitly supplied PDF attachments in the listed order. Returns a new copy. Combined input is limited to 25 MB/200 pages and output to 3 MB. Signed or XFA sources are refused.",
       inputSchema: { type: "object", properties: { files: { type: "array", minItems: 2, maxItems: MAX_MERGE_DOCUMENTS, items: PDF_INPUT_PROPERTIES.file } }, required: ["files"] },
-      annotations: { readOnlyHint: false }, async handler(args) {
+      annotations: { title: "Merge PDFs", readOnlyHint: false }, async handler(args) {
         if (!Array.isArray(args.files) || args.files.length < 2 || args.files.length > MAX_MERGE_DOCUMENTS) fail("INVALID_FILES", "Supply 2 to 5 PDF attachments in the desired order.");
         const combined = await PDFDocument.create();
         const sources = [];

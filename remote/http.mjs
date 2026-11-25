@@ -18,8 +18,19 @@ import { callToolIsolated } from "./isolated-tool.mjs";
 
 export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a third
 
+/**
+ * The SDK's own body ceiling. Since 2.1.0 it defaults to 4 MiB, which sits
+ * just under a 3 MiB PDF once base64 and the JSON-RPC envelope are added, so
+ * a document at the documented inline limit, or a little above it, was refused
+ * with a bare 413 before resolveBytes could say "pass a URL instead". 4.5 MiB
+ * leaves the host (Vercel, about 4.5 MB) as the outer limit and lets this
+ * service give its own TOO_LARGE_INLINE answer for everything that reaches it.
+ */
+export const MAX_HANDLER_BODY_BYTES = 4.5 * 1024 * 1024;
+
 /** Errors are reported without request content, per property P4 of the profile. */
 const handler = createMcpHandler(() => createRemoteServer({ dispatchTool: callToolIsolated }), {
+  maxRequestBodySize: MAX_HANDLER_BODY_BYTES,
   onerror: (error) => process.stderr.write(`mcp error: ${error?.name ?? "Error"}\n`),
 });
 
