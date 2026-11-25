@@ -14,7 +14,7 @@
  */
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-export const SEAL_PURPOSES = Object.freeze(["client", "state", "code", "access", "refresh", "prepare"]);
+export const SEAL_PURPOSES = Object.freeze(["client", "state", "code", "access", "refresh", "prepare", "consent"]);
 export const MAX_SEALED_LENGTH = 16384;
 
 const PREFIX = "ods1";

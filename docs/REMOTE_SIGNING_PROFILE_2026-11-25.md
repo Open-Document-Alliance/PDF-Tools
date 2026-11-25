@@ -26,7 +26,7 @@ The public endpoint promises P2, no identity. Sending to Lumin needs a Lumin cre
 
 **S2. Identity is Lumin's, not ours.** The server keeps no user records. It learns who the caller is only by decrypting the token the client presents, and only for that request. It never maps one request to another.
 
-**S3. The document leaves only at a confirmed send.** Reading, filling and preparing work exactly as on `/mcp`. The PDF and signer details go to Lumin only inside `send_lumin_request`, which requires the same exact confirmation values as the local tool, and from 2026-07-28 connections an elicitation confirmation as well. After that, Lumin's terms and privacy policy apply to the document.
+**S3. The document leaves only at a confirmed send.** Reading, filling and preparing work exactly as on `/mcp`. The PDF and signer details go to Lumin only inside `send_lumin_request`, which requires the same exact confirmation values as the local tool. An elicitation confirmation on 2026-07-28 connections is planned, not built. After that, Lumin's terms and privacy policy apply to the document.
 
 **S4. No content or credentials in logs (P4 extended).** Logs never contain Authorization headers, any token or code, OAuth state, Lumin request IDs, signer names or emails, or anything from P4's list.
 
@@ -40,7 +40,7 @@ The server is the OAuth authorization server Claude talks to, and a client of Lu
 
 1. Claude reads `/.well-known/oauth-protected-resource` for `/mcp/sign`, then `/.well-known/oauth-authorization-server`.
 2. Claude registers (dynamic client registration). The returned `client_id` is a sealed value carrying its redirect URIs and an issue time. Nothing is recorded.
-3. Claude sends the person to `/oauth/authorize` with PKCE. The server checks the redirect URI against the sealed client, generates its own PKCE pair for Lumin, and redirects to `https://auth.luminpdf.com/oauth2/auth` with `state` = sealed {Claude redirect URI, Claude state, Claude code challenge, Lumin PKCE verifier, expiry 10 min}.
+3. Claude sends the person to `/oauth/authorize` with PKCE. The server checks the redirect URI against the sealed client and shows its own consent page naming the registered app and its return host. The page sets a `__Host-` cookie (`SameSite=Strict`) whose hash is sealed into the form, so only a POST from the browser that saw the page can continue; a link someone else started cannot skip it. On Continue, the server generates its own PKCE pair for Lumin and redirects to `https://auth.luminpdf.com/oauth2/auth` with `state` = sealed {Claude redirect URI, Claude state, Claude code challenge, Lumin PKCE verifier, expiry 10 min}.
 4. Lumin redirects to `/oauth/lumin/callback`. The server opens the sealed state, exchanges Lumin's code (with the verifier and, if issued, the client secret) for Lumin tokens, and redirects to Claude with `code` = sealed {Lumin tokens, Claude code challenge, client, redirect URI, expiry 60 s}.
 5. Claude calls `/oauth/token` with its verifier. The server checks PKCE and returns `access_token` = sealed {Lumin access token, expiry} and `refresh_token` = sealed {Lumin refresh token}.
 6. On refresh the server refreshes with Lumin and reseals. If Lumin issued no refresh token, the person re-authorizes on expiry.
@@ -50,6 +50,11 @@ The server is the OAuth authorization server Claude talks to, and a client of Lu
 - **Code replay within 60 seconds.** Without a used-code record, an intercepted code is replayable until it expires. PKCE means the attacker also needs Claude's verifier. Accepted, with the 60 s expiry.
 - **No per-person revocation on our side.** The person revokes at Lumin, which kills the inner token. Rotating the server key invalidates every sealed value at once.
 - **Key rotation.** Two keys (current and previous) are accepted during a rotation window so active connections survive it.
+- **Refresh-token replay.** A stolen sealed refresh token, used with the public `client_id` it is bound to, works until it expires (30 days) unless Lumin rotates or revokes the underlying refresh token. Revoking at Lumin ends it.
+- **Repeat sends within the preparation window.** A preparation token is valid for 30 minutes and is not consumed, so a client that calls send twice with valid confirmations creates two requests. The confirmation must be within 10 minutes and not earlier than the preparation, which narrows this; an idempotency key from Lumin would close it (S6).
+- **Keys per environment.** The sealing AAD binds purpose and key ID, not the host. Previews and production must use different sealing keys, or a value sealed on one is accepted by the other. Preview qualification uses a throwaway per-deployment key.
+- **Lumin codes in platform request logs.** Vercel's own request log records the callback URL, including Lumin's one-time code. That code is useless without the PKCE verifier, which exists only inside the sealed state.
+- **Refresh failures.** A failed Lumin refresh, including a network failure, currently answers `invalid_grant`, which makes the client reconnect. Distinguishing transport failures is a follow-up.
 
 ## Tools on `/mcp/sign`
 

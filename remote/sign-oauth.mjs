@@ -172,7 +172,7 @@ export async function register(request, config, now) {
   }
   const clientName = typeof body.client_name === "string" ? body.client_name.slice(0, 100) : undefined;
   const issuedAt = now;
-  const clientId = seal("client", { r: uris }, { keys: config.keys, expiresAt: issuedAt + CLIENT_TTL_SECONDS });
+  const clientId = seal("client", { r: uris, ...(clientName ? { n: clientName } : {}) }, { keys: config.keys, expiresAt: issuedAt + CLIENT_TTL_SECONDS });
   return json(201, {
     client_id: clientId,
     client_id_issued_at: issuedAt,
@@ -224,9 +224,86 @@ export function authorize(request, config, now) {
   const expectedResource = `${originOf(request)}${SIGN_RESOURCE_PATH}`;
   if (resource !== null && resource !== expectedResource) return fail("invalid_target", "Unknown resource.");
 
+  // Our own consent step comes before Lumin's (see the profile: confused deputy).
+  const nonce = b64url(randomBytes(16));
+  const pending = seal("consent", {
+    c: clientDigest(clientId), u: redirectUri, s: state ?? undefined, x: challenge, h: b64url(sha256(`consent:${nonce}`)),
+  }, { keys: config.keys, expiresAt: now + CONSENT_TTL_SECONDS });
+  return consentPage({ pending, nonce, clientName: client.n, redirectUri });
+}
+
+const CONSENT_COOKIE = "__Host-pdftools_consent";
+const CONSENT_TTL_SECONDS = 10 * 60;
+const escapeHtml = value => String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+
+function consentPage({ pending, nonce, clientName, redirectUri }) {
+  const where = new URL(redirectUri);
+  const app = clientName ? escapeHtml(clientName) : "An AI app";
+  const destination = escapeHtml(where.host);
+  const body = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect PDF Tools to Lumin</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.3rem}ul{padding-left:1.2rem}button{font:inherit;padding:.6rem 1.2rem;margin-right:.5rem;border-radius:.4rem;border:1px solid #888;background:#fff;cursor:pointer}button[value=allow]{background:#1a1a1a;color:#fff;border-color:#1a1a1a}small{color:#555}</style>
+<h1>Connect PDF Tools to your Lumin account?</h1>
+<p><strong>${app}</strong> (returning to <strong>${destination}</strong>) is asking to use PDF Tools to send PDFs for signature with Lumin Sign on your behalf.</p>
+<ul><li>You sign in to Lumin next. PDF Tools never sees your password.</li><li>Nothing is sent until you confirm each request in the conversation.</li><li>PDF Tools keeps no copy of your documents or your Lumin access.</li></ul>
+<p>Only continue if you started connecting PDF Tools yourself just now.</p>
+<form method="post" action="/oauth/authorize"><input type="hidden" name="pending" value="${escapeHtml(pending)}">
+<button type="submit" name="decision" value="allow">Continue to Lumin</button><button type="submit" name="decision" value="deny">Cancel</button></form>
+<p><small>Open Document Alliance. <a href="https://www.opendocuments.ai/privacy-policy">Privacy</a></small></p></html>`;
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "no-referrer",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://auth.luminpdf.com https://claude.ai https://claude.com http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'none'",
+      "set-cookie": `${CONSENT_COOKIE}=${nonce}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${CONSENT_TTL_SECONDS}`,
+    },
+  });
+}
+
+function readCookie(request, name) {
+  for (const part of (request.headers.get("cookie") ?? "").split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return null;
+}
+
+const clearConsentCookie = `${CONSENT_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`;
+
+/**
+ * The consent form's POST. It must carry the cookie set with the page, which a
+ * cross-site auto-submitted form does not (SameSite=Strict), so a link someone
+ * else started cannot skip the page.
+ */
+export async function authorizeDecision(request, config, now) {
+  if (!config) return unavailable();
+  const type = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+  const text = type === "application/x-www-form-urlencoded" ? await readBoundedText(request, MAX_FORM_BYTES) : null;
+  const form = new URLSearchParams(text ?? "");
+  let pending;
+  try { pending = open("consent", form.get("pending") ?? "", { keys: config.keys, now }); } catch {
+    return errorPage(400, "This sign-in has expired or is not valid. Start again from Claude.");
+  }
+  const nonce = readCookie(request, CONSENT_COOKIE);
+  if (!nonce || !equalStrings(b64url(sha256(`consent:${nonce}`)), pending.h)) {
+    return errorPage(403, "This sign-in could not be confirmed in this browser. Start again from Claude.");
+  }
+  const back = fields => {
+    const target = new URL(pending.u);
+    for (const [key, value] of Object.entries(fields)) target.searchParams.set(key, value);
+    if (pending.s !== undefined) target.searchParams.set("state", pending.s);
+    target.searchParams.set("iss", originOf(request));
+    return new Response(null, { status: 303, headers: { location: target.href, "cache-control": "no-store", "referrer-policy": "no-referrer", "set-cookie": clearConsentCookie } });
+  };
+  if (form.get("decision") !== "allow") return back({ error: "access_denied", error_description: "The person cancelled." });
+
   const luminVerifier = b64url(randomBytes(32));
   const sealedState = seal("state", {
-    c: clientDigest(clientId), u: redirectUri, s: state ?? undefined, x: challenge, v: luminVerifier,
+    c: pending.c, u: pending.u, s: pending.s, x: pending.x, v: luminVerifier,
   }, { keys: config.keys, expiresAt: now + STATE_TTL_SECONDS });
   const target = new URL(LUMIN_OAUTH_AUTHORIZATION_ENDPOINT);
   target.searchParams.set("client_id", config.luminClientId);
@@ -236,7 +313,7 @@ export function authorize(request, config, now) {
   target.searchParams.set("state", sealedState);
   target.searchParams.set("code_challenge", b64url(sha256(luminVerifier)));
   target.searchParams.set("code_challenge_method", "S256");
-  return redirect(target.href);
+  return new Response(null, { status: 303, headers: { location: target.href, "cache-control": "no-store", "referrer-policy": "no-referrer", "set-cookie": clearConsentCookie } });
 }
 
 function luminForm(config, fields) {
@@ -344,7 +421,7 @@ export async function token(request, config, now, { fetchFn = globalThis.fetch }
  */
 export function authenticate(request, config, now) {
   const challenge = `Bearer resource_metadata="${originOf(request)}/.well-known/oauth-protected-resource${SIGN_RESOURCE_PATH}", scope="${SIGN_SCOPE}"`;
-  const match = /^Bearer ([A-Za-z0-9._-]{1,8192})$/.exec(request.headers.get("authorization") ?? "");
+  const match = /^Bearer ([A-Za-z0-9._-]{1,16384})$/.exec(request.headers.get("authorization") ?? "");
   if (!match) return { response: json(401, { error: "invalid_token", error_description: "Connect PDF Tools to Lumin to use signing." }, { "www-authenticate": challenge }) };
   try {
     return { luminAccessToken: open("access", match[1], { keys: config.keys, now }).a };

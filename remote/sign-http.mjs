@@ -10,7 +10,7 @@ import { callToolIsolated } from "./isolated-tool.mjs";
 import { MAX_HANDLER_BODY_BYTES } from "./http.mjs";
 import { createRemoteServer } from "./server.mjs";
 import {
-  authenticate, authorizationServerMetadata, authorize, luminCallback, protectedResourceMetadata,
+  authenticate, authorizationServerMetadata, authorize, authorizeDecision, luminCallback, protectedResourceMetadata,
   register, signingConfig, token,
 } from "./sign-oauth.mjs";
 
@@ -48,7 +48,8 @@ export async function handleSignFetch(request, { env = process.env, now = Math.f
     case "/oauth/register":
       return method === "POST" ? register(request, config, now) : methodNotAllowed("POST");
     case "/oauth/authorize":
-      return method === "GET" ? authorize(request, config, now) : methodNotAllowed("GET");
+      if (method === "GET") return authorize(request, config, now);
+      return method === "POST" ? authorizeDecision(request, config, now) : methodNotAllowed("GET, POST");
     case "/oauth/lumin/callback":
       return method === "GET" ? luminCallback(request, config, now, fetchFn ? { fetchFn } : {}) : methodNotAllowed("GET");
     case "/oauth/token":

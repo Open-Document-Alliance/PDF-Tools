@@ -144,6 +144,7 @@ describe("send_lumin_request", () => {
     expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { confirmation_statement: "yes, send it" }), lumin.context("t")))).toMatch(/^CONFIRMATION_MISMATCH/);
     expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(Date.now() - 11 * 60_000).toISOString() }), lumin.context("t")))).toMatch(/^CONFIRMATION_STALE/);
     expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(Date.now() + 5 * 60_000).toISOString() }), lumin.context("t")))).toMatch(/^CONFIRMATION_STALE/);
+    expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(Date.now() - 5 * 60_000).toISOString() }), lumin.context("t")))).toMatch(/^CONFIRMATION_STALE/);
     expect(lumin.calls).toHaveLength(0);
   });
 
@@ -165,6 +166,9 @@ describe("send_lumin_request", () => {
       [{ status: 400, body: { error: "bad" } }, "LUMIN_CREATE_REJECTED"],
       [new Error("network down"), "LUMIN_CREATE_OUTCOME_UNKNOWN"],
       [{ status: 201, body: { unexpected: true } }, "LUMIN_CREATE_OUTCOME_UNKNOWN"],
+      [{ status: 502, body: { error: "bad gateway" } }, "LUMIN_CREATE_OUTCOME_UNKNOWN"],
+      [{ status: 500, body: { error: "server" } }, "LUMIN_CREATE_OUTCOME_UNKNOWN"],
+      [{ status: 409, body: { error: "conflict" } }, "LUMIN_CREATE_REJECTED"],
     ]) {
       const { source, token } = await prepared();
       const lumin = fakeLumin([response]);

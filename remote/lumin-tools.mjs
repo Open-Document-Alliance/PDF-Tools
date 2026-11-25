@@ -37,6 +37,14 @@ const LUMIN_API = "https://api.luminpdf.com/v1";
 const PREPARATION_TTL_SECONDS = 30 * 60;
 const CONFIRMATION_WINDOW_MS = 10 * 60 * 1000;
 const LUMIN_TIMEOUT_MS = 30_000;
+/**
+ * The per-call worker is terminated at 45 s (isolated-tool.mjs). A send must
+ * finish, or give up cleanly, before that, so a termination can never land in
+ * the middle of the Lumin upload. If too little time is left after fetching
+ * and preparing the source, nothing is sent.
+ */
+const SEND_BUDGET_MS = 40_000;
+const MIN_SEND_WINDOW_MS = 8_000;
 const MAX_PARTICIPANTS = 10;
 const MAX_LOCATIONS = 40;
 const MAX_PROVIDER_RESPONSE_BYTES = 256 * 1024;
@@ -174,9 +182,9 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
     }
   }
 
-  async function luminJson(fetchImpl, url, init) {
+  async function luminJson(fetchImpl, url, init, timeoutMs = LUMIN_TIMEOUT_MS) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), LUMIN_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetchImpl(url, { ...init, redirect: "error", signal: controller.signal });
       const type = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
@@ -225,7 +233,7 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
         },
         required: ["title", "expires_at", "signers", "signature_locations"],
       },
-      annotations: { title: "Prepare Lumin Signing Request", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      annotations: { title: "Prepare Lumin Signing Request", readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
       async handler(args, context) {
         lumin(context);
         const nowMs = Date.now();
@@ -234,7 +242,7 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
         const bytes = await prepare(source, requestPlan);
         const mapped = mapping(requestPlan, bytes, nowMs);
         const preparationToken = seal("prepare", {
-          s: sha256(source), d: sha256(bytes), n: bytes.length, m: mappingDigest(mapped), p: requestPlan,
+          i: Math.floor(nowMs / 1000), s: sha256(source), d: sha256(bytes), n: bytes.length, m: mappingDigest(mapped), p: requestPlan,
         }, { keys: keys(), expiresAt: Math.floor(nowMs / 1000) + PREPARATION_TTL_SECONDS });
         const recipients = [
           ...requestPlan.signers.map(person => `${person.name} <${person.email_address}> (signer)`),
@@ -274,7 +282,8 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
       annotations: { title: "Send Lumin Signing Request", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
       async handler(args, context) {
         const { token, fetchImpl } = lumin(context);
-        const nowMs = Date.now();
+        const startedMs = Date.now();
+        const nowMs = startedMs;
         let prepared;
         try { prepared = open("prepare", String(args.preparation_token ?? ""), { keys: keys(), now: Math.floor(nowMs / 1000) }); } catch {
           fail("PREPARATION_INVALID", "That preparation is not valid or has expired. Prepare the request again.");
@@ -283,7 +292,8 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
           fail("CONFIRMATION_MISMATCH", "The confirmation must be the person's own words, exactly the required statement.");
         }
         const confirmedAt = Date.parse(args.user_confirmed_at);
-        if (typeof args.user_confirmed_at !== "string" || !Number.isFinite(confirmedAt) || confirmedAt > nowMs + 60_000 || nowMs - confirmedAt > CONFIRMATION_WINDOW_MS) {
+        if (typeof args.user_confirmed_at !== "string" || !Number.isFinite(confirmedAt) || confirmedAt > nowMs + 60_000 || nowMs - confirmedAt > CONFIRMATION_WINDOW_MS
+          || confirmedAt < prepared.i * 1000 - 60_000) {
           fail("CONFIRMATION_STALE", "The confirmation must have been given within the last 10 minutes.");
         }
         const source = await resolveBytes(documentInput(args));
@@ -302,14 +312,21 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
         form.append("use_text_tags", "true");
         form.append("signing_type", "SAME_TIME");
 
+        const remainingMs = SEND_BUDGET_MS - (Date.now() - startedMs);
+        if (remainingMs < MIN_SEND_WINDOW_MS) {
+          fail("SEND_NOT_STARTED", "Preparing the document took too long, so nothing was sent to Lumin. Sending again is safe.");
+        }
         let response;
         try {
-          response = await luminJson(fetchImpl, `${LUMIN_API}/signature_request/send`, { method: "POST", headers: headers(token), body: form });
+          response = await luminJson(fetchImpl, `${LUMIN_API}/signature_request/send`, { method: "POST", headers: headers(token), body: form }, Math.min(LUMIN_TIMEOUT_MS, remainingMs));
         } catch {
           fail("LUMIN_CREATE_OUTCOME_UNKNOWN", "The Lumin request may or may not have been created. It was not retried. Check the Lumin dashboard or the signers' inboxes before sending again.");
         }
+        if (response.status >= 400 && response.status < 500) {
+          fail("LUMIN_CREATE_REJECTED", `Lumin refused the request (HTTP ${response.status}). It was not retried.`);
+        }
         if (response.status !== 201) {
-          fail("LUMIN_CREATE_REJECTED", `Lumin did not accept the request (HTTP ${response.status}). Nothing was created and it was not retried.`);
+          fail("LUMIN_CREATE_OUTCOME_UNKNOWN", `Lumin answered HTTP ${response.status}, so the request may or may not exist. It was not retried. Check the Lumin dashboard or the signers' inboxes before sending again.`);
         }
         const created = response.value?.signature_request;
         if (!created || !ID_PATTERN.test(created.signature_request_id ?? "") || !STATUS_PATTERN.test(created.status ?? "")) {

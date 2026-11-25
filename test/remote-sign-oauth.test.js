@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
-  authenticate, authorizationServerMetadata, authorize, isAllowedRedirectUri, luminCallback,
+  authenticate, authorizationServerMetadata, authorize, authorizeDecision, isAllowedRedirectUri, luminCallback,
   protectedResourceMetadata, register, signingConfig, token,
 } from "../remote/sign-oauth.mjs";
 
@@ -31,9 +31,9 @@ function fakeLumin({ accessToken = "synthetic-lumin-access", refreshToken = "syn
   return { fetchFn, calls };
 }
 
-async function registerClient(redirectUris = [CALLBACK]) {
+async function registerClient(redirectUris = [CALLBACK], clientName = "Claude") {
   const response = await register(new Request(`${ORIGIN}/oauth/register`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ redirect_uris: redirectUris, client_name: "Claude" }),
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ redirect_uris: redirectUris, client_name: clientName }),
   }), config, NOW);
   return { status: response.status, body: await response.json() };
 }
@@ -46,10 +46,27 @@ function authorizeUrl(clientId, overrides = {}) {
   return { url: url.href, verifier };
 }
 
+/** Read the consent page: the sealed pending value and the cookie set with it. */
+async function consent(page) {
+  const html = await page.text();
+  const pending = /name="pending" value="([^"]+)"/.exec(html)[1];
+  const cookie = page.headers.get("set-cookie").split(";")[0];
+  return { html, pending, cookie };
+}
+
+function decide({ pending, cookie, decision = "allow" }) {
+  return authorizeDecision(new Request(`${ORIGIN}/oauth/authorize`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", ...(cookie ? { cookie } : {}) },
+    body: new URLSearchParams({ pending, decision }).toString(),
+  }), config, NOW + 2);
+}
+
 async function fullFlow(lumin = fakeLumin()) {
   const { body: client } = await registerClient();
   const { url, verifier } = authorizeUrl(client.client_id);
-  const toLumin = authorize(new Request(url), config, NOW);
+  const page = authorize(new Request(url), config, NOW);
+  const toLumin = await decide(await consent(page));
   const luminUrl = new URL(toLumin.headers.get("location"));
   const callback = await luminCallback(new Request(`${ORIGIN}/oauth/lumin/callback?code=synthetic-lumin-code&state=${encodeURIComponent(luminUrl.searchParams.get("state"))}`), config, NOW + 5, { fetchFn: lumin.fetchFn });
   const back = new URL(callback.headers.get("location"));
@@ -90,7 +107,7 @@ describe("hosted signing OAuth (stateless proxy to Lumin)", () => {
 
   it("completes register, authorize, Lumin callback and code exchange without storing anything", async () => {
     const { toLumin, luminUrl, back, tokenResponse, lumin } = await fullFlow();
-    expect(toLumin.status).toBe(302);
+    expect(toLumin.status).toBe(303);
     expect(luminUrl.origin + luminUrl.pathname).toBe("https://auth.luminpdf.com/oauth2/auth");
     expect(luminUrl.searchParams.get("client_id")).toBe("synthetic-lumin-client");
     expect(luminUrl.searchParams.get("redirect_uri")).toBe(`${ORIGIN}/oauth/lumin/callback`);
@@ -159,13 +176,40 @@ describe("hosted signing OAuth (stateless proxy to Lumin)", () => {
     expect(new URL(target.headers.get("location")).searchParams.get("error")).toBe("invalid_target");
   });
 
+  it("shows its own consent page before Lumin, bound to the browser that saw it", async () => {
+    const { body: client } = await registerClient([CALLBACK], "<script>alert(1)</script> Claude");
+    const page = authorize(new Request(authorizeUrl(client.client_id).url), config, NOW);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("x-frame-options")).toBe("DENY");
+    expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("set-cookie")).toMatch(/^__Host-pdftools_consent=[A-Za-z0-9_-]+; Path=\/; Secure; HttpOnly; SameSite=Strict/);
+    const seen = await consent(page);
+    expect(seen.html).not.toContain("<script>");
+    expect(seen.html).toContain("&lt;script&gt;");
+    expect(seen.html).toContain("claude.ai");
+
+    const withoutCookie = await decide({ pending: seen.pending, cookie: null });
+    expect(withoutCookie.status).toBe(403);
+    expect(withoutCookie.headers.get("location")).toBeNull();
+    const otherBrowser = await decide({ pending: seen.pending, cookie: "__Host-pdftools_consent=someone-elses-nonce" });
+    expect(otherBrowser.status).toBe(403);
+    const cancelled = await decide({ ...seen, decision: "deny" });
+    expect(new URL(cancelled.headers.get("location")).searchParams.get("error")).toBe("access_denied");
+    const late = await authorizeDecision(new Request(`${ORIGIN}/oauth/authorize`, {
+      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", cookie: seen.cookie },
+      body: new URLSearchParams({ pending: seen.pending, decision: "allow" }).toString(),
+    }), config, NOW + 601);
+    expect(late.status).toBe(400);
+  });
+
   it("refuses a tampered or expired Lumin callback state without redirecting", async () => {
     const { luminUrl } = await fullFlow();
     const state = luminUrl.searchParams.get("state");
     const tampered = await luminCallback(new Request(`${ORIGIN}/oauth/lumin/callback?code=x&state=${encodeURIComponent(state.slice(0, -2) + "AA")}`), config, NOW);
     expect(tampered.status).toBe(400);
     expect(tampered.headers.get("location")).toBeNull();
-    const expired = await luminCallback(new Request(`${ORIGIN}/oauth/lumin/callback?code=x&state=${encodeURIComponent(state)}`), config, NOW + 601);
+    // The Lumin state is sealed at the consent decision (NOW + 2) for 10 minutes.
+    const expired = await luminCallback(new Request(`${ORIGIN}/oauth/lumin/callback?code=x&state=${encodeURIComponent(state)}`), config, NOW + 2 + 600);
     expect(expired.status).toBe(400);
   });
 
