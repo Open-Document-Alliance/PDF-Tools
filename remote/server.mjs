@@ -24,6 +24,7 @@ import {
 } from "../server/helpers.js";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES } from "./fetch-guard.mjs";
 import { createDocumentTools } from "./document-tools.mjs";
+import { hostedSkills, skillParams, SKILLS_EXTENSION } from "./skills.mjs";
 import { createLuminTools } from "./lumin-tools.mjs";
 import { OUTPUT_RESOURCE_URI, OUTPUT_TOOL_NAMES, outputResource } from "./output-card.mjs";
 
@@ -450,10 +451,12 @@ export const SIGNING_INSTRUCTIONS =
  * One server per request. `signing` is set only by the authenticated
  * /mcp/sign route, with the Lumin access token it opened for this request.
  */
-export function createRemoteServer({ dispatchTool = callTool, signing = null } = {}) {
+export function createRemoteServer({ dispatchTool = callTool, signing = null, era = "legacy" } = {}) {
+  // Skills over MCP is a 2026-07-28 extension, so only modern connections see it.
+  const skills = era === "modern" ? hostedSkills() : null;
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {}, resources: {} }, instructions: signing ? INSTRUCTIONS + SIGNING_INSTRUCTIONS : INSTRUCTIONS },
+    { capabilities: { tools: {}, resources: {}, ...(skills ? { extensions: { [SKILLS_EXTENSION]: {} } } : {}) }, instructions: signing ? INSTRUCTIONS + SIGNING_INSTRUCTIONS : INSTRUCTIONS },
   );
   const context = signing ? { lumin: { accessToken: signing.luminAccessToken } } : {};
 
@@ -461,11 +464,19 @@ export function createRemoteServer({ dispatchTool = callTool, signing = null } =
 
   server.setRequestHandler("tools/call", async (request, extra) =>
     dispatchTool(request.params?.name, request.params?.arguments ?? {}, { signal: extra?.signal, ...context }));
-  server.setRequestHandler("resources/list", async () => ({ resources: [{ uri: OUTPUT_RESOURCE_URI, name: "PDF Tools output", mimeType: "text/html;profile=mcp-app" }] }));
+  server.setRequestHandler("resources/list", async () => ({ resources: [
+    { uri: OUTPUT_RESOURCE_URI, name: "PDF Tools output", mimeType: "text/html;profile=mcp-app" },
+    ...(skills ? skills.resources() : []),
+  ] }));
   server.setRequestHandler("resources/read", async request => {
+    if (skills && String(request.params?.uri ?? "").startsWith("skill:")) return skills.read(request.params.uri);
     if (request.params?.uri !== OUTPUT_RESOURCE_URI) throw new Error("Unknown UI resource");
     return outputResource();
   });
+  if (skills) {
+    server.setRequestHandler("skills/list", { params: skillParams("list") }, () => skills.list());
+    server.setRequestHandler("skills/get", { params: skillParams("get") }, params => skills.get(params.uri));
+  }
 
   return server;
 }

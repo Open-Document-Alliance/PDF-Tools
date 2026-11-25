@@ -29,7 +29,7 @@ export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a
 export const MAX_HANDLER_BODY_BYTES = 4.5 * 1024 * 1024;
 
 /** Errors are reported without request content, per property P4 of the profile. */
-const handler = createMcpHandler(() => createRemoteServer({ dispatchTool: callToolIsolated }), {
+const handler = createMcpHandler(({ era }) => createRemoteServer({ dispatchTool: callToolIsolated, era }), {
   maxRequestBodySize: MAX_HANDLER_BODY_BYTES,
   onerror: (error) => process.stderr.write(`mcp error: ${error?.name ?? "Error"}\n`),
 });

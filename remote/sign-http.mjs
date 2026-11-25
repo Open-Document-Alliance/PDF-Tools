@@ -29,7 +29,7 @@ async function handleSignedMcp(request, config, now) {
   if (auth.response) return auth.response;
   // A handler per request: the Lumin token belongs to this request only.
   const handler = createMcpHandler(
-    () => createRemoteServer({ dispatchTool: callToolIsolated, signing: { luminAccessToken: auth.luminAccessToken } }),
+    ({ era }) => createRemoteServer({ dispatchTool: callToolIsolated, era, signing: { luminAccessToken: auth.luminAccessToken } }),
     { maxRequestBodySize: MAX_HANDLER_BODY_BYTES, onerror },
   );
   return handler.fetch(request);
