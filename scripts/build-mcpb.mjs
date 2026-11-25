@@ -251,7 +251,9 @@ function copyRegularFile(sourceRelativePath, destinationRelativePath, stagingDir
   copyFileSync(source, destination);
 }
 
-function copyRuntimeSource(stagingDir) {
+// Exported for the Claude plugin builder, which ships this exact source set
+// without node_modules or the MCPB manifest, so the two cannot drift.
+export function copyRuntimeSource(stagingDir, { includeMcpbManifest = true } = {}) {
   scanFirstPartyInputs();
   for (const filename of SKILL_FILES) copyRegularFile(filename, filename, stagingDir);
   for (const filename of SERVER_FILES) copyRegularFile(`server/${filename}`, `server/${filename}`, stagingDir);
@@ -284,7 +286,7 @@ function copyRuntimeSource(stagingDir) {
     dependencies: packageJson.dependencies,
   };
   writeFileSync(path.join(stagingDir, "package.json"), `${JSON.stringify(runtimePackageJson, null, 2)}\n`);
-  copyRegularFile("manifest.mcpb.json", "manifest.json", stagingDir);
+  if (includeMcpbManifest) copyRegularFile("manifest.mcpb.json", "manifest.json", stagingDir);
 }
 
 export function verifyLockedTooling(repoRoot = REPO_ROOT) {
