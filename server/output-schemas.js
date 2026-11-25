@@ -2010,6 +2010,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     width: number,
     height: number,
     label: string,
+    field_name: string,
+    save_mode: enumString(["incremental", "rewrite"]),
   }),
   apply_signature: activeDocument({
     pdf_path: string,

@@ -13,9 +13,11 @@ import {
   PDFDict,
   PDFDocument,
   PDFName,
+  PDFNumber,
   PDFObjectCopier,
   PDFPage,
   PDFRef,
+  PDFString,
   StandardFonts,
   rgb,
   degrees as pdfDegrees,
@@ -991,6 +993,50 @@ export async function drawSignatureFieldOnPage(pdfDoc, {
     font,
     color: rgb(0.45, 0.45, 0.5),
   });
+}
+
+/**
+ * Create an unsigned signature form field (/FT /Sig) with its widget at the
+ * same place as the drawn "Sign here" box, so a signing application finds a
+ * field to sign instead of only a picture of one. The field and widget are
+ * one merged dictionary, as most producers write them. Returns the field
+ * name, which is the requested one or the first free "Signature", "Signature2"...
+ */
+export function addSignatureFormField(pdfDoc, { page, x, y, width, height, fieldName = null }) {
+  const pages = pdfDoc.getPages();
+  const pdfPage = pages[page - 1];
+  const boxGeometry = getPageBoxGeometry(pdfPage);
+  const pdfY = boxGeometry.height - y - height;
+  const { x: userX, y: userY } = toUserSpace(boxGeometry, x, pdfY);
+  const form = pdfDoc.getForm();
+  const existing = new Set(form.getFields().map(field => {
+    try { return field.getName(); } catch { return ""; }
+  }));
+  let name = fieldName;
+  if (name !== null) {
+    if (existing.has(name)) throw new Error(`A form field named '${name}' already exists. Choose another field_name.`);
+  } else {
+    name = "Signature";
+    for (let suffix = 2; existing.has(name); suffix += 1) name = `Signature${suffix}`;
+  }
+  const context = pdfDoc.context;
+  const widget = context.register(context.obj({
+    Type: "Annot",
+    Subtype: "Widget",
+    FT: "Sig",
+    T: PDFString.of(name),
+    Rect: [userX, userY, userX + width, userY + height],
+    F: 4,
+    P: pdfPage.ref,
+  }));
+  pdfPage.node.addAnnot(widget);
+  const acroForm = pdfDoc.catalog.getOrCreateAcroForm();
+  acroForm.addField(widget);
+  // SigFlags bit 1, SignaturesExist: the document has a signature field.
+  const flags = acroForm.dict.lookup(PDFName.of("SigFlags"));
+  const current = typeof flags?.asNumber === "function" ? flags.asNumber() : 0;
+  acroForm.dict.set(PDFName.of("SigFlags"), PDFNumber.of(current | 1));
+  return name;
 }
 
 // Detect whether a PDF already has one or more cryptographic signature fields.

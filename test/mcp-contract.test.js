@@ -256,7 +256,10 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // signatures_kept, because a signed form is now filled by appending an
 // incremental update; their descriptions and bulk_fill_from_csv's say so.
 // Inputs and annotations unchanged. Replaces c97b8652634e316f85745d14c98e9e6a8cdbddc9ef6509ed9ce111b7dade66d9.
-const TOOL_CONTRACT_SHA256 = "c69e7964bf355c3aa40b2e9b5ac5153560bf99944768cdea8db62e564e871f4e";
+// 2026-11-25: add_signature_field creates a real /Sig form field: new
+// optional field_name input, field_name and save_mode outputs, and a
+// description that says so. Replaces c69e7964bf355c3aa40b2e9b5ac5153560bf99944768cdea8db62e564e871f4e.
+const TOOL_CONTRACT_SHA256 = "29d807da213b35fdc32bf15a2ce08fcfd3335aa88db5ecde75d419ca9141a127";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,

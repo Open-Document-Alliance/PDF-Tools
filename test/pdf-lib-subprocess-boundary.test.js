@@ -92,6 +92,7 @@ const OPTIONS = {
   apply_page_plan: { page_order: [1], rotations: {} },
   add_signature_field: {
     allow_resign: false,
+    field_name: null,
     placement: { page: 1, x: 0, y: 0, width: 10, height: 10, label: "Sign" },
   },
   apply_signature: {
