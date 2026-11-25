@@ -24,6 +24,8 @@ import {
 } from "../server/helpers.js";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES } from "./fetch-guard.mjs";
 import { createDocumentTools } from "./document-tools.mjs";
+import { hostedSkills, skillParams, SKILLS_EXTENSION } from "./skills.mjs";
+import { createLuminTools } from "./lumin-tools.mjs";
 import { OUTPUT_RESOURCE_URI, OUTPUT_TOOL_NAMES, outputResource } from "./output-card.mjs";
 
 export const SERVER_NAME = "pdf-tools-remote";
@@ -139,7 +141,7 @@ async function loadDocument(bytes) {
     if (/encrypt/i.test(String(error?.message))) {
       throw new ToolRefusal(
         "ENCRYPTED",
-        "That PDF is encrypted. This service never takes passwords; the PDF Tools desktop extension handles encrypted files on your own machine.",
+        "That PDF is encrypted. This service never takes passwords; the local PDF Tools server (Claude plugin or desktop app) handles encrypted files on your own machine.",
       );
     }
     throw new ToolRefusal("UNREADABLE", "That file could not be read as a PDF.");
@@ -367,24 +369,31 @@ const TOOLS = [
 
 TOOLS.push(...createDocumentTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocument, ok, ToolRefusal, MAX_PAGES, MAX_INLINE_PDF_BYTES }));
 
+/**
+ * Lumin tools exist only on the authenticated /mcp/sign surface. They are kept
+ * out of TOOLS so the public endpoint can neither list nor call them.
+ */
+const SIGNING_TOOLS = createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocument, ok, ToolRefusal, MAX_INLINE_PDF_BYTES });
+
 export const INSTRUCTIONS =
   "PDF Tools runs on a server. Each call takes an explicit PDF attachment, URL or inline PDF and returns its result without storing it. Read or convert bounded page ranges, search text, fill forms, and assemble or rotate pages. Extraction reports gaps and page coverage; no OCR is performed. " +
   "Signatures are visible stamps, not cryptographic signatures, and need the person's own words confirming intent. " +
-  "Encrypted PDFs are refused here; the PDF Tools desktop extension handles those on the person's own machine.";
+  "Encrypted PDFs are refused here; the local PDF Tools server (Claude plugin or desktop app) handles those on the person's own machine.";
 
 /**
  * Dispatch one tool call and convert refusals into typed, content-free tool
  * errors. Exported so tests exercise exactly what the transport reaches, rather
  * than reaching into the server's private handler table.
  */
-export async function callTool(name, args = {}) {
-  const tool = TOOLS.find((candidate) => candidate.name === name);
+export async function callTool(name, args = {}, context = {}) {
+  const tool = TOOLS.find((candidate) => candidate.name === name)
+    ?? (context?.lumin ? SIGNING_TOOLS.find((candidate) => candidate.name === name) : undefined);
   if (!tool) return refusal("UNKNOWN_TOOL", `There is no tool named ${name}.`);
   try {
     if (OUTPUT_TOOL_NAMES.has(name) && args.output_mode !== undefined && !["inline", "download"].includes(args.output_mode)) {
       return refusal("INVALID_OUTPUT_MODE", "Choose download for the result card or inline for a machine-readable base64 response.");
     }
-    const result = await tool.handler(args);
+    const result = await tool.handler(args, context);
     const output = result.structuredContent?.pdf_base64;
     if (output && Buffer.byteLength(output, "base64") > MAX_INLINE_PDF_BYTES) {
       return refusal("OUTPUT_TOO_LARGE", "The output exceeds the 3 MB inline transfer limit. Request fewer pages or use the local PDF Tools edition.");
@@ -418,9 +427,9 @@ export async function callTool(name, args = {}) {
   }
 }
 
-export function listTools() {
+export function listTools({ signing = false } = {}) {
   return {
-    tools: TOOLS.map(({ name, description, inputSchema, annotations }) => ({
+    tools: (signing ? [...TOOLS, ...SIGNING_TOOLS] : TOOLS).map(({ name, description, inputSchema, annotations }) => ({
       name,
       description,
       inputSchema: OUTPUT_TOOL_NAMES.has(name) ? { ...inputSchema, properties: { ...inputSchema.properties,
@@ -435,21 +444,45 @@ export function listTools() {
   };
 }
 
-export function createRemoteServer({ dispatchTool = callTool } = {}) {
+export const SIGNING_INSTRUCTIONS =
+  " This connection is linked to the person's Lumin account. To send a PDF for signature: find the boxes with detect_signature_zones, call prepare_lumin_request, show the person the disclosure and recipients, and ask them to confirm with the exact statement it returns. Only then call send_lumin_request with their own words and the time they confirmed. Never send without that confirmation, and never resend after an unknown outcome without checking first.";
+
+/**
+ * One server per request. `signing` is set only by the authenticated
+ * /mcp/sign route, with the Lumin access token it opened for this request.
+ */
+export function createRemoteServer({ dispatchTool = callTool, signing = null, era = "legacy" } = {}) {
+  // Skills over MCP is a 2026-07-28 extension, so only modern connections see
+  // it. The skill describes the public tool set, so the signing connection,
+  // which has more tools, does not offer it (P7). A skill that fails to load
+  // drops only the skill, never the rest of the request.
+  let skills = null;
+  if (era === "modern" && !signing) {
+    try { skills = hostedSkills(); } catch (error) { process.stderr.write(`skill unavailable: ${error?.name ?? "Error"}\n`); }
+  }
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {}, resources: {} }, instructions: INSTRUCTIONS },
+    { capabilities: { tools: {}, resources: {}, ...(skills ? { extensions: { [SKILLS_EXTENSION]: {} } } : {}) }, instructions: signing ? INSTRUCTIONS + SIGNING_INSTRUCTIONS : INSTRUCTIONS },
   );
+  const context = signing ? { lumin: { accessToken: signing.luminAccessToken } } : {};
 
-  server.setRequestHandler("tools/list", async () => listTools());
+  server.setRequestHandler("tools/list", async () => listTools({ signing: Boolean(signing) }));
 
   server.setRequestHandler("tools/call", async (request, extra) =>
-    dispatchTool(request.params?.name, request.params?.arguments ?? {}, { signal: extra?.signal }));
-  server.setRequestHandler("resources/list", async () => ({ resources: [{ uri: OUTPUT_RESOURCE_URI, name: "PDF Tools output", mimeType: "text/html;profile=mcp-app" }] }));
+    dispatchTool(request.params?.name, request.params?.arguments ?? {}, { signal: extra?.signal, ...context }));
+  server.setRequestHandler("resources/list", async () => ({ resources: [
+    { uri: OUTPUT_RESOURCE_URI, name: "PDF Tools output", mimeType: "text/html;profile=mcp-app" },
+    ...(skills ? skills.resources() : []),
+  ] }));
   server.setRequestHandler("resources/read", async request => {
+    if (skills && String(request.params?.uri ?? "").startsWith("skill:")) return skills.read(request.params.uri);
     if (request.params?.uri !== OUTPUT_RESOURCE_URI) throw new Error("Unknown UI resource");
     return outputResource();
   });
+  if (skills) {
+    server.setRequestHandler("skills/list", { params: skillParams("list") }, () => skills.list());
+    server.setRequestHandler("skills/get", { params: skillParams("get") }, params => skills.get(params.uri));
+  }
 
   return server;
 }
