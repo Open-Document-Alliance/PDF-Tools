@@ -620,7 +620,7 @@ function fillSaveNotice(result) {
 function skippedImagesNotice(count) {
   if (!count) return "";
   return `\nIncomplete render: ${count} image(s) on this page exceed the image size limit and were not drawn `
-    + "(images_skipped_at_limit). The rest of the page is shown.";
+    + "(images_skipped_at_limit; a rendered image can be at most 16 megapixels). The rest of the page is shown.";
 }
 
 // One reply line about bookmarks, so a rebuilt output never loses one silently.

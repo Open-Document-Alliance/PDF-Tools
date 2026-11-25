@@ -36,8 +36,18 @@ export class DecodeBudgetExceeded extends Error {
 const storage = new AsyncLocalStorage();
 
 /** Run fn with a fresh per-call budget. */
-export function withCallBudget(fn) {
-  return storage.run({ usedBytes: 0, exceeded: false, imagesSkipped: 0 }, fn);
+/**
+ * Run fn with a fresh per-call budget. maxImagePixels lowers the image limit
+ * for this call only, for work that must also draw each image (a renderer's
+ * canvas limit); it never raises the limit.
+ */
+export function withCallBudget(fn, { maxImagePixels = MAX_IMAGE_PIXELS } = {}) {
+  return storage.run({
+    usedBytes: 0,
+    exceeded: false,
+    imagesSkipped: 0,
+    maxImagePixels: Math.min(maxImagePixels, MAX_IMAGE_PIXELS),
+  }, fn);
 }
 
 /** Whether any decode in this call reached a limit, even if pdf-lib swallowed the error. */
@@ -92,7 +102,8 @@ function skipImage() {
 }
 
 export function guardImagePixels(width, height) {
-  if (!(width * height <= MAX_IMAGE_PIXELS)) skipImage();
+  const limit = storage.getStore()?.maxImagePixels ?? MAX_IMAGE_PIXELS;
+  if (!(width * height <= limit)) skipImage();
 }
 
 export function guardImageAllocation(bytes) {

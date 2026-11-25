@@ -278,6 +278,16 @@ describe("images over the image limit (stdio)", () => {
     expect(result.content[0].text).toMatch(/Incomplete render: 1 image\(s\) on this page exceed the image size limit/);
   }, 120_000);
 
+  it("renders a page whose scan is larger than the renderer can draw, and says so", async () => {
+    // About 600 dpi A4: within the decode limits, beyond the 16-megapixel canvas.
+    const scan = path.join(directory, "scan-600dpi.pdf");
+    await fs.writeFile(scan, await documentWithImage(4961, 7016));
+    const result = await client.callTool({ name: "render_pdf_page", arguments: { pdf_path: scan, page: 1 } });
+    expect(result.isError, JSON.stringify(result.content?.[0])).toBeFalsy();
+    expect(result.structuredContent.images_skipped_at_limit).toBe(1);
+    expect(result.content[0].text).toMatch(/at most 16 megapixels/);
+  }, 120_000);
+
   it("leaves an ordinary render's result without the field", async () => {
     const ordinary = path.join(directory, "ordinary.pdf");
     await fs.writeFile(ordinary, await documentWithImage(400, 400));

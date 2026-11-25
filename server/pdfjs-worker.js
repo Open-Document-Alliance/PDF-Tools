@@ -57,6 +57,9 @@ const MAX_RESPONSE_BYTES = 24 * 1024 * 1024;
 const MAX_BINARY_BYTES = 16 * 1024 * 1024;
 const MAX_CANVAS_AXIS_PX = 8192;
 const MAX_CANVAS_PIXELS = 16 * 1024 * 1024;
+// A render draws every image onto a canvas, so an image the canvas could not
+// hold is skipped (and reported) rather than failing the whole render.
+const RENDER_OPERATIONS = new Set(["render_page", "render_region", "render_comparison_page"]);
 const MAX_PASSWORD_CHARACTERS = 4096;
 const SYSTEM_COMMAND_TIMEOUT_MS = 15_000;
 const PDF_RESOURCE_LIMIT_CODE = "PDF_RESOURCE_LIMIT_EXCEEDED";
@@ -2398,7 +2401,7 @@ export async function executePdfjsWorkerRequest(inputRequest) {
           // not survive; the call's budget records that a limit was reached.
           throw error instanceof DecodeBudgetExceeded || decodeLimitReached() ? decodeLimitError() : error;
         }
-      });
+      }, RENDER_OPERATIONS.has(request.operation) ? { maxImagePixels: MAX_CANVAS_PIXELS } : {});
     },
   );
 }
