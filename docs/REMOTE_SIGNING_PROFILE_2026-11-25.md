@@ -30,6 +30,8 @@ The public endpoint promises P2, no identity. Sending to Lumin needs a Lumin cre
 
 **S4. No content or credentials in logs (P4 extended).** Logs never contain Authorization headers, any token or code, OAuth state, Lumin request IDs, signer names or emails, or anything from P4's list.
 
+**S6. One attempt per confirmation, without a durable claim.** The local send path writes a durable claim before calling Lumin (`server/lumin-sign-v1-operation.js`), so a crash or timeout can never turn into a second request. The hosted surface has nowhere to write that claim and must not fake its acknowledgement. It makes exactly one attempt per confirmed call and never retries, and an ambiguous outcome (timeout after the upload started) is reported as `outcome_unknown` with instructions to check status before sending again. If Lumin supports an idempotency key, the key is derived from the packet digest and the confirmation timestamp, so a client repeating the same confirmed call cannot create a second request. Until Lumin confirms that, a repeated call can, and the tool text says so.
+
 **S5. User-Agent attribution.** Every request to `auth.luminpdf.com` and `api.luminpdf.com` sends `User-Agent: PDF-Tools/<version>` from `server/lumin-client-identity.js`.
 
 ## OAuth shape (MCP authorization, stateless proxy)
