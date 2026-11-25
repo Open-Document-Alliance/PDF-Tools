@@ -259,6 +259,8 @@ describe("T2: hostile and encrypted documents", () => {
     expect(textOf(result)).toMatch(/^ENCRYPTED/);
     expect(textOf(result)).toMatch(/never takes passwords/i);
     expect(textOf(result)).not.toMatch(/supply the password|password parameter/i);
+    expect(textOf(result)).toMatch(/local PDF Tools server \(Claude plugin or desktop app\)/);
+    expect(textOf(result)).not.toMatch(/desktop extension/i);
   });
 
   it("refuses bytes that are not a document at all, without echoing them", async () => {
