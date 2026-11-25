@@ -292,9 +292,12 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
           fail("CONFIRMATION_MISMATCH", "The confirmation must be the person's own words, exactly the required statement.");
         }
         const confirmedAt = Date.parse(args.user_confirmed_at);
-        if (typeof args.user_confirmed_at !== "string" || !Number.isFinite(confirmedAt) || confirmedAt > nowMs + 60_000 || nowMs - confirmedAt > CONFIRMATION_WINDOW_MS
-          || confirmedAt < prepared.i * 1000 - 60_000) {
+        if (!Number.isSafeInteger(prepared.i)) fail("PREPARATION_INVALID", "That preparation is not valid. Prepare the request again.");
+        if (typeof args.user_confirmed_at !== "string" || !Number.isFinite(confirmedAt) || confirmedAt > nowMs + 60_000 || nowMs - confirmedAt > CONFIRMATION_WINDOW_MS) {
           fail("CONFIRMATION_STALE", "The confirmation must have been given within the last 10 minutes.");
+        }
+        if (confirmedAt < prepared.i * 1000 - 60_000) {
+          fail("CONFIRMATION_BEFORE_PREVIEW", "The confirmation predates this preview. Show the person the preview and ask them to confirm it.");
         }
         const source = await resolveBytes(documentInput(args));
         if (sha256(source) !== prepared.s) fail("SOURCE_CHANGED", "That is not the PDF that was prepared. Supply the same document or prepare again.");

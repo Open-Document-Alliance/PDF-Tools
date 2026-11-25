@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { LUMIN_CONFIRMATION_STATEMENT, LUMIN_TOOL_NAMES } from "../remote/lumin-tools.mjs";
 import { callTool, INSTRUCTIONS, listTools, SIGNING_INSTRUCTIONS } from "../remote/server.mjs";
@@ -144,7 +144,7 @@ describe("send_lumin_request", () => {
     expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { confirmation_statement: "yes, send it" }), lumin.context("t")))).toMatch(/^CONFIRMATION_MISMATCH/);
     expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(Date.now() - 11 * 60_000).toISOString() }), lumin.context("t")))).toMatch(/^CONFIRMATION_STALE/);
     expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(Date.now() + 5 * 60_000).toISOString() }), lumin.context("t")))).toMatch(/^CONFIRMATION_STALE/);
-    expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(Date.now() - 5 * 60_000).toISOString() }), lumin.context("t")))).toMatch(/^CONFIRMATION_STALE/);
+    expect(textOf(await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(Date.now() - 5 * 60_000).toISOString() }), lumin.context("t")))).toMatch(/^CONFIRMATION_BEFORE_PREVIEW/);
     expect(lumin.calls).toHaveLength(0);
   });
 
@@ -158,6 +158,23 @@ describe("send_lumin_request", () => {
     expect(textOf(await callTool("send_lumin_request", confirmed(changed, token), lumin.context("t")))).toMatch(/^SOURCE_CHANGED/);
     const tampered = token.slice(0, -4) + (token.endsWith("AAAA") ? "BBBB" : "AAAA");
     expect(textOf(await callTool("send_lumin_request", confirmed(other, tampered), lumin.context("t")))).toMatch(/^PREPARATION_INVALID/);
+    expect(lumin.calls).toHaveLength(0);
+  });
+
+  it("sends nothing when preparation used up the time budget, and says sending again is safe", async () => {
+    const { source, token } = await prepared();
+    const lumin = fakeLumin([]);
+    const real = Date.now.bind(Date);
+    const started = real();
+    let calls = 0;
+    // The handler reads the clock at its start; every later read is 35 s on, as if the fetch and preparation were slow.
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => (calls++ === 0 ? started : started + 35_000));
+    try {
+      const result = await callTool("send_lumin_request", confirmed(source, token, { user_confirmed_at: new Date(started).toISOString() }), lumin.context("t"));
+      expect(textOf(result)).toMatch(/^SEND_NOT_STARTED: .*safe/);
+    } finally {
+      spy.mockRestore();
+    }
     expect(lumin.calls).toHaveLength(0);
   });
 

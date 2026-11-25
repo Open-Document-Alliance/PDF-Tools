@@ -258,7 +258,7 @@ function consentPage({ pending, nonce, clientName, redirectUri }) {
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
       "referrer-policy": "no-referrer",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://auth.luminpdf.com https://claude.ai https://claude.com http://localhost:* http://127.0.0.1:*; frame-ancestors 'none'; base-uri 'none'",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://auth.luminpdf.com https://claude.ai https://claude.com http://localhost:* http://127.0.0.1:* http://[::1]:*; frame-ancestors 'none'; base-uri 'none'",
       "set-cookie": `${CONSENT_COOKIE}=${nonce}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${CONSENT_TTL_SECONDS}`,
     },
   });
