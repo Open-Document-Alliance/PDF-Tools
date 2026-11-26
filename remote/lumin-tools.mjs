@@ -99,7 +99,7 @@ export function createLuminTools({ PDF_INPUT_PROPERTIES, resolveBytes, loadDocum
 
   function documentInput(args) {
     const input = {};
-    for (const key of ["file", "pdf_url", "pdf_base64"]) if (args[key] !== undefined) input[key] = args[key];
+    for (const key of ["file", "pdf_url", "pdf_base64", "_uploaded_bytes"]) if (args[key] !== undefined) input[key] = args[key];
     return input;
   }
 

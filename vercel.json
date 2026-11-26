@@ -16,11 +16,20 @@
     "api/connect-key.js": {
       "maxDuration": 10
     },
+    "api/files-sweep.js": {
+      "maxDuration": 60
+    },
     "api/sign.js": {
       "maxDuration": 60,
       "includeFiles": "{package.json,remote/**,server/**,node_modules/{@napi-rs/canvas*,pdfjs-dist}/**}"
     }
   },
+  "crons": [
+    {
+      "path": "/api/files-sweep",
+      "schedule": "*/10 * * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/mcp",

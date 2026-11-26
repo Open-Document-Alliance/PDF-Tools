@@ -16,6 +16,19 @@ import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createRemoteServer } from "./server.mjs";
 import { callToolIsolated, isolationMode } from "./isolated-tool.mjs";
 import { trackRequest } from "./inflight.mjs";
+import { fileStoreFromEnv } from "./file-store.mjs";
+import { createFilesHandler } from "./files.mjs";
+import { issuanceQuotaFromEnv } from "./files-quota.mjs";
+import { withOidcToken } from "./oidc-context.mjs";
+import { parseSealingKeys } from "./sealed.mjs";
+
+/** The Files extension is off unless explicitly enabled with a store, its own sealing keys and an issuance quota. */
+function filesFromEnv(env = process.env) {
+  const store = fileStoreFromEnv(env);
+  const keys = parseSealingKeys(env.PDF_TOOLS_FILES_SEALING_KEYS);
+  const quota = issuanceQuotaFromEnv(env);
+  return store && keys && quota ? createFilesHandler({ store, keys, quota }) : null;
+}
 
 export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a third
 
@@ -30,13 +43,13 @@ export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a
 export const MAX_HANDLER_BODY_BYTES = 4.5 * 1024 * 1024;
 
 /** Errors are reported without request content, per property P4 of the profile. */
-const handler = createMcpHandler(({ era }) => createRemoteServer({ dispatchTool: callToolIsolated, era }), {
+const handler = createMcpHandler(({ era }) => createRemoteServer({ dispatchTool: callToolIsolated, era, files: filesFromEnv() }), {
   maxRequestBodySize: MAX_HANDLER_BODY_BYTES,
   onerror: (error) => process.stderr.write(`mcp error: ${error?.name ?? "Error"}\n`),
 });
 
 export async function handleMcpFetch(request) {
-  return trackRequest(async () => withIsolationHeader(await handler.fetch(request)));
+  return withOidcToken(request, () => trackRequest(async () => withIsolationHeader(await handler.fetch(request))));
 }
 
 /**

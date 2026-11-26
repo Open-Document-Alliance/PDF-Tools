@@ -27,6 +27,7 @@ import { DecodeBudgetExceeded, decodeLimitReached, isAllocationFailure, MEMORY_L
 import { loadBoundedPdfjs } from "./pdfjs-bounded.mjs";
 import { createDocumentTools } from "./document-tools.mjs";
 import { hostedSkills, skillParams, SKILLS_EXTENSION } from "./skills.mjs";
+import { declaredFiles, FILES_EXTENSION, UPLOAD_PROPERTY } from "./files.mjs";
 import { createLuminTools } from "./lumin-tools.mjs";
 import { OUTPUT_RESOURCE_URI, OUTPUT_TOOL_NAMES, outputResource } from "./output-card.mjs";
 
@@ -81,9 +82,17 @@ class ToolRefusal extends Error {
 }
 
 /** Resolve either input form to bytes. Nothing here touches a filesystem. */
-async function resolveBytes({ file, pdf_url, pdf_base64 }, fetchOptions = {}) {
-  if ([file, pdf_url, pdf_base64].filter(value => value !== undefined).length > 1) {
+async function resolveBytes({ file, pdf_url, pdf_base64, _uploaded_bytes }, fetchOptions = {}) {
+  if ([file, pdf_url, pdf_base64, _uploaded_bytes].filter(value => value !== undefined).length > 1) {
     throw new ToolRefusal("AMBIGUOUS_INPUT", "Supply exactly one of file, pdf_url or pdf_base64, never more than one.");
+  }
+  // Bytes confirmed in transfer storage by the Files extension (remote/files.mjs).
+  // Network JSON cannot produce a Uint8Array, so a caller cannot supply this.
+  if (_uploaded_bytes !== undefined) {
+    if (!(_uploaded_bytes instanceof Uint8Array) || _uploaded_bytes.length === 0 || _uploaded_bytes.length > MAX_PDF_BYTES) {
+      throw new ToolRefusal("INVALID_UPLOAD", "The uploaded document could not be used.");
+    }
+    return _uploaded_bytes;
   }
   if (file !== undefined) {
     if (!file || typeof file !== "object" || Array.isArray(file)
@@ -447,9 +456,17 @@ async function callToolWithinBudget(name, args, context) {
   }
 }
 
-export function listTools({ signing = false } = {}) {
+/** The tools that advertise an `upload` argument when Files is on: those that take one document as `file`. */
+export function uploadToolNames({ signing = false } = {}) {
+  return new Set((signing ? [...TOOLS, ...SIGNING_TOOLS] : TOOLS).filter(tool => tool.inputSchema.properties?.file).map(tool => tool.name));
+}
+
+export function listTools({ signing = false, files = false } = {}) {
   return {
-    tools: (signing ? [...TOOLS, ...SIGNING_TOOLS] : TOOLS).map(({ name, description, inputSchema, annotations }) => ({
+    tools: (signing ? [...TOOLS, ...SIGNING_TOOLS] : TOOLS).map(({ name, description, inputSchema: baseSchema, annotations }) => {
+      // With the Files extension on, single-document tools also accept a direct upload.
+      const inputSchema = files && baseSchema.properties?.file ? { ...baseSchema, properties: { ...baseSchema.properties, upload: UPLOAD_PROPERTY } } : baseSchema;
+      return {
       name,
       description,
       inputSchema: OUTPUT_TOOL_NAMES.has(name) ? { ...inputSchema, properties: { ...inputSchema.properties,
@@ -460,7 +477,7 @@ export function listTools({ signing = false } = {}) {
         "openai/fileParams": name === "merge_pdfs" ? ["files"] : ["file"],
         ...(OUTPUT_TOOL_NAMES.has(name) ? { ui: { resourceUri: OUTPUT_RESOURCE_URI } } : {}),
       },
-    })),
+    }; }),
   };
 }
 
@@ -471,7 +488,11 @@ export const SIGNING_INSTRUCTIONS =
  * One server per request. `signing` is set only by the authenticated
  * /mcp/sign route, with the Lumin access token it opened for this request.
  */
-export function createRemoteServer({ dispatchTool = callTool, signing = null, era = "legacy" } = {}) {
+export function createRemoteServer({ dispatchTool = callTool, signing = null, era = "legacy", files = null } = {}) {
+  // The Files extension needs 2026-07-28 and a configured transfer store, and
+  // is offered on the public route only: the signing route's upload state would
+  // have to bind the Lumin principal first.
+  const filesOn = era === "modern" && files !== null && !signing;
   // Skills over MCP is a 2026-07-28 extension, so only modern connections see
   // it. The skill describes the public tool set, so the signing connection,
   // which has more tools, does not offer it (P7). A skill that fails to load
@@ -482,14 +503,37 @@ export function createRemoteServer({ dispatchTool = callTool, signing = null, er
   }
   const server = new Server(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { tools: {}, resources: {}, ...(skills ? { extensions: { [SKILLS_EXTENSION]: {} } } : {}) }, instructions: signing ? INSTRUCTIONS + SIGNING_INSTRUCTIONS : INSTRUCTIONS },
+    {
+      capabilities: {
+        tools: {}, resources: {},
+        ...((skills || filesOn) ? { extensions: { ...(skills ? { [SKILLS_EXTENSION]: {} } : {}), ...(filesOn ? { [FILES_EXTENSION]: files.capability } : {}) } } : {}),
+      },
+      instructions: signing ? INSTRUCTIONS + SIGNING_INSTRUCTIONS : INSTRUCTIONS,
+    },
   );
   const context = signing ? { lumin: { accessToken: signing.luminAccessToken } } : {};
 
-  server.setRequestHandler("tools/list", async () => listTools({ signing: Boolean(signing) }));
+  const uploadable = filesOn ? uploadToolNames({ signing: Boolean(signing) }) : new Set();
+  server.setRequestHandler("tools/list", async () => listTools({ signing: Boolean(signing), files: filesOn }));
 
-  server.setRequestHandler("tools/call", async (request, extra) =>
-    dispatchTool(request.params?.name, request.params?.arguments ?? {}, { signal: extra?.signal, ...context }));
+  server.setRequestHandler("tools/call", async (request, extra) => {
+    const name = request.params?.name;
+    const args = request.params?.arguments ?? {};
+    const run = callArgs => dispatchTool(name, callArgs, { signal: extra?.signal, ...context });
+    if (!filesOn) return run(args);
+    const declared = declaredFiles(extra?.mcpReq?.envelope);
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    // Only the tools that advertise `upload` may open the upload flow; anything
+    // else is refused before a target is issued.
+    if (args.upload !== undefined && !uploadable.has(name)) {
+      return refusal("UPLOAD_UNSUPPORTED_TOOL", "This tool does not take an upload. Tools that list an upload argument accept one PDF each.");
+    }
+    const result = args.upload !== undefined
+      ? await files.handleUpload({ name, args, requestState: extra?.mcpReq?.requestState?.(), declared, nowSeconds, run })
+      : await run(args);
+    if (result?.resultType === "upload_required") return result;
+    return files.offloadResult(result, { declared, nowSeconds, fileName: `${name}.pdf` });
+  });
   server.setRequestHandler("resources/list", async () => ({ resources: [
     { uri: OUTPUT_RESOURCE_URI, name: "PDF Tools output", mimeType: "text/html;profile=mcp-app" },
     ...(skills ? skills.resources() : []),
