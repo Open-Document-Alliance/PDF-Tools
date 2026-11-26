@@ -18,6 +18,7 @@ import { callToolIsolated, isolationMode } from "./isolated-tool.mjs";
 import { trackRequest } from "./inflight.mjs";
 import { fileStoreFromEnv } from "./file-store.mjs";
 import { createFilesHandler } from "./files.mjs";
+import { withOidcToken } from "./oidc-context.mjs";
 import { parseSealingKeys } from "./sealed.mjs";
 
 /** The Files extension is off unless explicitly enabled with a store and its own sealing keys. */
@@ -46,7 +47,7 @@ const handler = createMcpHandler(({ era }) => createRemoteServer({ dispatchTool:
 });
 
 export async function handleMcpFetch(request) {
-  return trackRequest(async () => withIsolationHeader(await handler.fetch(request)));
+  return withOidcToken(request, () => trackRequest(async () => withIsolationHeader(await handler.fetch(request))));
 }
 
 /**

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "",
+  "installCommand": "",
+  "outputDirectory": "public",
+  "rewrites": [
+    {
+      "source": "/up/:path*",
+      "destination": "https://oda-pdf-tools-files-d82ce20bfa7a.s3.us-east-1.amazonaws.com/up/:path*"
+    },
+    {
+      "source": "/dl/:path*",
+      "destination": "https://oda-pdf-tools-files-d82ce20bfa7a.s3.us-east-1.amazonaws.com/dl/:path*"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/up/:path*",
+      "headers": [
+        { "key": "Cache-Control", "value": "private, no-store" },
+        { "key": "Vercel-CDN-Cache-Control", "value": "no-store" },
+        { "key": "X-Robots-Tag", "value": "noindex" }
+      ]
+    },
+    {
+      "source": "/dl/:path*",
+      "headers": [
+        { "key": "Cache-Control", "value": "private, no-store" },
+        { "key": "Vercel-CDN-Cache-Control", "value": "no-store" },
+        { "key": "X-Robots-Tag", "value": "noindex" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    }
+  ]
+}
