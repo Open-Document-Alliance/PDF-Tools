@@ -17,9 +17,10 @@ import { open, seal } from "./sealed.mjs";
 
 export const FILES_EXTENSION = "io.modelcontextprotocol/files";
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-const UPLOAD_TARGET_SECONDS = 20 * 60;
-const STATE_SECONDS = 60 * 60;
-const DOWNLOAD_SECONDS = 60 * 60;
+export const UPLOAD_TARGET_SECONDS = 20 * 60;
+/** Upload sessions end here, before the sweeper (files-sweeper.mjs) may delete the upload. */
+export const STATE_SECONDS = 60 * 60;
+export const DOWNLOAD_SECONDS = 60 * 60;
 const ID_PATTERN = /^[\x21-\x7e]{1,128}$/;
 const DIGEST_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 

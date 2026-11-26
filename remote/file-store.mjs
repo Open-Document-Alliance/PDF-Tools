@@ -13,11 +13,18 @@
  *   take(key) -> Uint8Array | null      read and delete in one step (consumption)
  *   putResult(key, bytes, { mimeType }) -> void
  *   presignDownload(key, { expiresAt }) -> { url }
+ *   list() -> async iterable of { key, lastModified }   lastModified in epoch ms
+ *   delete(keys) -> void                 at most 1,000 keys per call (the S3 batch limit)
+ *
+ * list() and delete() serve only the sweeper (files-sweeper.mjs).
  */
 import { createHash } from "node:crypto";
 
-export function createMemoryFileStore({ origin = "https://files.test.invalid" } = {}) {
+export function createMemoryFileStore({ origin = "https://files.test.invalid", clock = Date.now } = {}) {
   const objects = new Map();
+  const modified = new Map();
+  const write = (key, bytes) => { objects.set(key, Uint8Array.from(bytes)); modified.set(key, clock()); };
+  const remove = key => { objects.delete(key); modified.delete(key); };
   const uploads = new Map();
   return {
     kind: "memory",
@@ -28,7 +35,7 @@ export function createMemoryFileStore({ origin = "https://files.test.invalid" } 
     /** Test helper: what the client does with the presigned URL. */
     acceptUpload(key, bytes) {
       if (!uploads.has(key)) throw new Error("no such upload target");
-      objects.set(key, Uint8Array.from(bytes));
+      write(key, bytes);
     },
     async head(key) {
       const bytes = objects.get(key);
@@ -36,12 +43,12 @@ export function createMemoryFileStore({ origin = "https://files.test.invalid" } 
     },
     async take(key) {
       const bytes = objects.get(key) ?? null;
-      objects.delete(key);
+      remove(key);
       uploads.delete(key);
       return bytes;
     },
     async putResult(key, bytes) {
-      objects.set(key, Uint8Array.from(bytes));
+      write(key, bytes);
     },
     presignDownload(key) {
       return { url: `${origin}/d/${encodeURIComponent(key)}` };
@@ -49,6 +56,13 @@ export function createMemoryFileStore({ origin = "https://files.test.invalid" } 
     /** Test helper: what the client does with a download URL. */
     fetchDownload(key) {
       return objects.get(key) ?? null;
+    },
+    async *list() {
+      for (const [key, lastModified] of [...modified]) yield { key, lastModified };
+    },
+    async delete(keys) {
+      if (keys.length > 1000) throw new Error("at most 1000 keys per delete");
+      for (const key of keys) { remove(key); uploads.delete(key); }
     },
     size: () => objects.size,
   };

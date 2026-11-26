@@ -4,7 +4,8 @@ import { PDFDocument } from "pdf-lib";
 import { describe, expect, it } from "vitest";
 
 import { createMemoryFileStore, fileStoreFromEnv } from "../remote/file-store.mjs";
-import { createFilesHandler, MAX_UPLOAD_BYTES } from "../remote/files.mjs";
+import { createFilesHandler, DOWNLOAD_SECONDS, MAX_UPLOAD_BYTES, STATE_SECONDS, UPLOAD_TARGET_SECONDS } from "../remote/files.mjs";
+import { handleSweepRequest, RETENTION_PROMISE_MS, SWEEP_INTERVAL_MS, SWEEP_MAX_AGE_MS, sweepTransfers } from "../remote/files-sweeper.mjs";
 import { handleMcpFetch } from "../remote/http.mjs";
 import { parseSealingKeys } from "../remote/sealed.mjs";
 import { createRemoteServer } from "../remote/server.mjs";
@@ -146,5 +147,76 @@ describe("MCP Files extension, switched on with a test store", () => {
     const result = await rpc("tools/call", { name: "select_pdf_pages", arguments: { pdf_base64: bytes.toString("base64"), page_numbers: [2] } }, { files: { upload: {} } });
     expect(result.result.structuredContent.pdf_base64).toBeTruthy();
     expect(result.result._meta?.["io.modelcontextprotocol/files"]).toBeUndefined();
+  });
+});
+
+describe("MCP Files transfer sweeper", () => {
+  const MINUTE = 60 * 1000;
+
+  it("keeps every object inside the 2-hour promise, and never before a session can end", () => {
+    expect(SWEEP_MAX_AGE_MS + SWEEP_INTERVAL_MS).toBeLessThanOrEqual(RETENTION_PROMISE_MS);
+    expect(STATE_SECONDS * 1000).toBeLessThan(SWEEP_MAX_AGE_MS);
+    expect(DOWNLOAD_SECONDS * 1000).toBeLessThan(SWEEP_MAX_AGE_MS);
+    expect(UPLOAD_TARGET_SECONDS).toBeLessThanOrEqual(STATE_SECONDS);
+  });
+
+  it("deletes objects older than 105 minutes and keeps newer ones", async () => {
+    let now = 0;
+    const store = createMemoryFileStore({ clock: () => now });
+    store.presignUpload("up/old", { size: 3, mimeType: "application/pdf", expiresAt: 0 });
+    store.acceptUpload("up/old", [1, 2, 3]);
+    now = 30 * MINUTE;
+    await store.putResult("dl/new", [4, 5]);
+    now = 106 * MINUTE;
+    expect(await sweepTransfers(store, { now })).toEqual({ deleted: 1, kept: 1 });
+    expect(await store.head("up/old")).toBeNull();
+    expect(await store.head("dl/new")).not.toBeNull();
+    now = 140 * MINUTE;
+    expect(await sweepTransfers(store, { now })).toEqual({ deleted: 1, kept: 0 });
+    expect(store.size()).toBe(0);
+  });
+
+  it("deletes in batches the S3 API accepts", async () => {
+    const deletes = [];
+    const keys = Array.from({ length: 2500 }, (_, index) => `up/${index}`);
+    const store = {
+      async *list() { for (const key of keys) yield { key, lastModified: 0 }; },
+      async delete(batch) { deletes.push(batch.length); },
+    };
+    expect(await sweepTransfers(store, { now: 200 * MINUTE })).toEqual({ deleted: 2500, kept: 0 });
+    expect(deletes).toEqual([1000, 1000, 500]);
+  });
+
+  it("answers without storage when Files is off, and fails closed without the cron secret", async () => {
+    const get = headers => new Request("http://localhost/api/files-sweep", { headers });
+    const off = await handleSweepRequest(get(), { store: null, env: {} });
+    expect(off.status).toBe(200);
+    expect(await off.json()).toEqual({ files: "disabled" });
+
+    const store = createMemoryFileStore({ clock: () => 0 });
+    await store.putResult("dl/x", [1]);
+    const logged = [];
+    const unset = await handleSweepRequest(get(), { store, env: {}, now: 200 * MINUTE, log: line => logged.push(line) });
+    expect(unset.status).toBe(503);
+    expect(logged.join("\n")).toMatch(/ERROR files sweep refused/);
+    expect(store.size()).toBe(1);
+
+    const wrong = await handleSweepRequest(get({ authorization: "Bearer nope" }), { store, env: { CRON_SECRET: "s3cret-for-tests" }, now: 200 * MINUTE });
+    expect(wrong.status).toBe(401);
+    expect(store.size()).toBe(1);
+
+    const right = await handleSweepRequest(get({ authorization: "Bearer s3cret-for-tests" }), { store, env: { CRON_SECRET: "s3cret-for-tests" }, now: 200 * MINUTE });
+    expect(right.status).toBe(200);
+    const body = await right.json();
+    expect(body).toEqual({ files: "swept", deleted: 1, kept: 0 });
+    expect(JSON.stringify(body)).not.toContain("dl/");
+    expect(store.size()).toBe(0);
+  });
+
+  it("is scheduled every 15 minutes in the Vercel configuration", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const config = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8"));
+    expect(config.crons).toContainEqual({ path: "/api/files-sweep", schedule: "*/15 * * * *" });
+    expect(config.functions["api/files-sweep.js"]).toBeDefined();
   });
 });
