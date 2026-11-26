@@ -18,14 +18,16 @@ import { callToolIsolated, isolationMode } from "./isolated-tool.mjs";
 import { trackRequest } from "./inflight.mjs";
 import { fileStoreFromEnv } from "./file-store.mjs";
 import { createFilesHandler } from "./files.mjs";
+import { issuanceQuotaFromEnv } from "./files-quota.mjs";
 import { withOidcToken } from "./oidc-context.mjs";
 import { parseSealingKeys } from "./sealed.mjs";
 
-/** The Files extension is off unless explicitly enabled with a store and its own sealing keys. */
+/** The Files extension is off unless explicitly enabled with a store, its own sealing keys and an issuance quota. */
 function filesFromEnv(env = process.env) {
   const store = fileStoreFromEnv(env);
   const keys = parseSealingKeys(env.PDF_TOOLS_FILES_SEALING_KEYS);
-  return store && keys ? createFilesHandler({ store, keys }) : null;
+  const quota = issuanceQuotaFromEnv(env);
+  return store && keys && quota ? createFilesHandler({ store, keys, quota }) : null;
 }
 
 export const MAX_REQUEST_BYTES = 34 * 1024 * 1024; // base64 inflates by about a third

@@ -140,11 +140,11 @@ describe("AWS Signature Version 4", () => {
 });
 
 describe("Files S3 store configuration", () => {
-  const complete = { PDF_TOOLS_FILES_ENABLED: "1", S3_BUCKET_NAME: BUCKET, AWS_REGION: "us-east-1", AWS_ROLE_ARN: ROLE, PDF_TOOLS_FILES_ORIGIN: ORIGIN, CRON_SECRET: "synthetic" };
+  const complete = { PDF_TOOLS_FILES_ENABLED: "1", S3_BUCKET_NAME: BUCKET, AWS_REGION: "us-east-1", AWS_ROLE_ARN: ROLE, PDF_TOOLS_FILES_ORIGIN: ORIGIN, CRON_SECRET: "synthetic", PDF_TOOLS_FILES_QUOTA_RULES: "files-upload-ip:ip" };
 
   it("is selected only when enabled with a complete configuration and an https origin", () => {
     expect(fileStoreFromEnv({ ...complete, PDF_TOOLS_FILES_ENABLED: undefined })).toBeNull();
-    for (const missing of ["S3_BUCKET_NAME", "AWS_REGION", "AWS_ROLE_ARN", "PDF_TOOLS_FILES_ORIGIN", "CRON_SECRET"]) {
+    for (const missing of ["S3_BUCKET_NAME", "AWS_REGION", "AWS_ROLE_ARN", "PDF_TOOLS_FILES_ORIGIN", "CRON_SECRET", "PDF_TOOLS_FILES_QUOTA_RULES"]) {
       expect(fileStoreFromEnv({ ...complete, [missing]: undefined })).toBeNull();
     }
     for (const origin of ["http://files.example.test", "https://files.example.test/", "https://files.example.test/path", "https://localhost"]) {

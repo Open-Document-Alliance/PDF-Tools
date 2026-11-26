@@ -1,0 +1,13 @@
+{
+  "package": "@vercel/firewall",
+  "version": "1.2.6",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/vercel/vercel",
+  "tarball": "https://registry.npmjs.org/@vercel/firewall/-/firewall-1.2.6.tgz",
+  "tarballIntegrity": "sha512-89ybsa2rnVNdw6RI3jGOVvqUJaBj6Umm4IagC1o3PKtr/MXxBKOLek+yyUgF0csA0O5W+dzcpdIhKxVXhgVVtA==",
+  "files": {
+    "rate-limit.cjs": { "from": "package/dist/rate-limit.js", "sha256": "5dd1841bd40842175c99e3982141becc821cb1db7ddb6401fbb4a4c972c96268" },
+    "LICENSE": { "from": "package/LICENSE", "sha256": "b070d77bfb2c52a1dd6996de0ce5f64c49a0ca55c889b163a963ddf5cb001ee2" }
+  },
+  "why": "Hosted-only (remote/ is in no shipped artifact). Vendored byte-for-byte so package.json, the MCPB, its SBOM and the share package stay unchanged. To update: npm pack @vercel/firewall@<version>, check the tarball against npm's dist.integrity, copy dist/rate-limit.js and LICENSE, and update this file."
+}

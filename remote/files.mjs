@@ -72,7 +72,12 @@ export function declaredFiles(envelope) {
   return { upload: Boolean(declared?.upload), download: Boolean(declared?.download) };
 }
 
-export function createFilesHandler({ store, keys, principal = "public" }) {
+/**
+ * `quota` (files-quota.mjs) is consulted only before a new upload target is
+ * signed. Production always has one (http.mjs will not enable Files without
+ * it); tests may omit it.
+ */
+export function createFilesHandler({ store, keys, principal = "public", quota = null }) {
   return {
     capability: { upload: {} },
 
@@ -96,6 +101,14 @@ export function createFilesHandler({ store, keys, principal = "public" }) {
       const binding = argsDigest(name, args, principal);
 
       if (requestState === undefined) {
+        if (quota) {
+          const admission = await quota.admit();
+          if (!admission.ok) {
+            return admission.reason === "rate_limited"
+              ? refusal("UPLOAD_RATE_LIMITED", "Too many uploads were started just now. Try again in a minute, or pass the PDF as pdf_url or pdf_base64.")
+              : refusal("UPLOAD_UNAVAILABLE", "Direct uploads are unavailable right now. Try again shortly, or pass the PDF as pdf_url or pdf_base64.");
+          }
+        }
         const key = `up/${randomBytes(18).toString("base64url")}`;
         const target = await store.presignUpload(key, { size: upload.size, mimeType: "application/pdf", lifetimeSeconds: UPLOAD_TARGET_SECONDS });
         const state = seal("files", { b: binding, k: key, z: upload.size, d: upload.digest?.value }, { keys, expiresAt: nowSeconds + STATE_SECONDS });

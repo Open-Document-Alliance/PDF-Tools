@@ -302,7 +302,8 @@ describe("MCP Files transfer sweeper", () => {
     expect(transferStoreFromEnv({ ...bucket, PDF_TOOLS_FILES_ENABLED: "0" })?.kind).toBe("s3");
     const enabled = { ...bucket, PDF_TOOLS_FILES_ENABLED: "1", PDF_TOOLS_FILES_ORIGIN: "https://files.example.test" };
     expect(fileStoreFromEnv(enabled)).toBeNull();
-    expect(fileStoreFromEnv({ ...enabled, CRON_SECRET: "set" })?.kind).toBe("s3");
+    expect(fileStoreFromEnv({ ...enabled, CRON_SECRET: "set" })).toBeNull();
+    expect(fileStoreFromEnv({ ...enabled, CRON_SECRET: "set", PDF_TOOLS_FILES_QUOTA_RULES: "files-upload-ip:ip" })?.kind).toBe("s3");
   });
 
   it("is scheduled every 10 minutes in the Vercel configuration", async () => {

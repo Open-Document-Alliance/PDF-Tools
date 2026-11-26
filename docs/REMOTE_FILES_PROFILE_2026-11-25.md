@@ -16,7 +16,19 @@ The public profile promises P1, "no persistence: bytes exist only for one reques
 
 - the server replaces an upload's bytes with an empty tombstone as soon as the second call consumes it. The key stays, so the upload URL can never write again;
 - a Vercel cron (`api/files-sweep.js`, `remote/files-sweeper.mjs`) runs every 10 minutes. It deletes every object under the Files prefixes (`up/`, `dl/`, `claimed/`, and nothing else in the bucket) that is older than 65 minutes. Nothing legitimate needs an object that long: upload sessions end at 60 minutes and download URLs at 55. When every run happens, an object is gone within 75 minutes. It is still gone within 2 hours if up to four runs in a row are missed; Vercel can skip or delay a cron run, and the sweep is idempotent. A run that deletes an object older than 85 minutes logs an ERROR line saying scheduled runs were missed;
-- a 1-day bucket lifecycle rule is the backstop if the cron stops entirely, where the Marketplace account allows setting one. It cannot carry the promise alone, because S3 lifecycle rules count whole days and round up to the next midnight UTC.
+- a 1-day bucket lifecycle rule on `up/`, `dl/` and `claimed/` is the backstop if the cron stops entirely. It was set and read back on 2026-11-26. It cannot carry the promise alone, because S3 lifecycle rules count whole days and round up to the next midnight UTC.
+
+Deletion is real deletion. Bucket checks through the role on 2026-11-26:
+
+| Check | Result |
+|---|---|
+| Versioning | never enabled |
+| Object versions or delete markers under any Files prefix | none |
+| Encryption | default SSE-S3 (AES256) |
+| Public access block | all four settings on |
+| Bucket policy | none |
+
+So neither the tombstone overwrite nor a delete leaves an older copy behind. If versioning were ever enabled, this promise would stop holding, so the bucket's versioning state is part of the production gate.
 
 The sweeper runs whenever the bucket is connected, whether or not Files is enabled, so switching Files off never strands stored transfers. Files is never advertised unless `CRON_SECRET` is set. Without the secret, the cron endpoint refuses and logs an ERROR line.
 
@@ -62,7 +74,17 @@ Then the exact size and digest are checked, and the tool runs on those bytes ins
 
 **Storage adapter.** `remote/file-store.mjs` exposes `presignUpload`, `head`, `take`, `putResult`, `presignDownload`, and, for the sweeper only, `list` and `delete`. The S3 implementation signs requests itself (`remote/aws-s3.mjs`, checked against AWS's published Signature Version 4 examples), so no AWS SDK is added to `package.json`. It has no stored AWS key. For each request it exchanges that request's Vercel OIDC token for Marketplace role credentials (`AssumeRoleWithWebIdentity`), reusing a session only while it outlives the URL being signed. URLs are signed for the bucket host and handed out on `PDF_TOOLS_FILES_ORIGIN`, and the files host forwards them unchanged. An in-memory store serves the tests. Nothing logs keys, URLs, tokens or object names.
 
-**Configuration** (`pdf-tools-remote`): `PDF_TOOLS_FILES_ENABLED=1`, `PDF_TOOLS_FILES_ORIGIN=https://files.opendocuments.ai`, `PDF_TOOLS_FILES_SEALING_KEYS` and `CRON_SECRET`, plus `S3_BUCKET_NAME`, `AWS_REGION` and `AWS_ROLE_ARN`, which the Marketplace integration sets. Without all of them, Files is not advertised.
+**Upload quota.** Issuing a new upload target is the one step that consults a quota (`remote/files-quota.mjs`). It runs after the tool and the upload metadata are validated and before a URL is signed. Ordinary tool calls, second calls that finish an upload already issued, downloads and invalid uploads never consult it. The Vercel Firewall counts through its rate-limit SDK, `@vercel/firewall` 1.2.6. That package is vendored byte-for-byte under `remote/vendor/` and pinned to the npm tarball's integrity, so `package.json` and every shipped artifact stay unchanged.
+
+`PDF_TOOLS_FILES_QUOTA_RULES` names the firewall rules, for example `files-upload-ip:ip,files-upload-global:global`. Each rule's window and limit live in the project firewall, as a rule whose condition is `rate_limit_api_id` with the same ID:
+- **`ip` rules** are keyed by client address. Claude's calls arrive from shared egress, so for Claude this bounds all its users together.
+- **`global` rules** use one fixed key and bound all issuance together.
+
+Vercel counts per region, so a rule's effective ceiling is its limit times the number of regions that receive traffic. Over the limit, the call gets a retryable `UPLOAD_RATE_LIMITED` and no target. A missing rule, an SDK error or a 2-second timeout gives a retryable `UPLOAD_UNAVAILABLE` and an ERROR line; the SDK itself would fail open on a missing rule, and the quota closes it. Only issuance is affected.
+
+Proposed production thresholds: per IP, 20 targets per 60 seconds; globally, 120 targets per 10 minutes per region. They are based on the last day of project traffic (505 allowed requests in all, peaking at 113 in an hour). At the global limit, the worst case is 3 GB of uploads per 10 minutes per region. Stored bytes stay bounded by the 75-minute sweep, and Vercel data transfer on `pdf-tools-files` is the cost that dominates.
+
+**Configuration** (`pdf-tools-remote`): `PDF_TOOLS_FILES_ENABLED=1`, `PDF_TOOLS_FILES_ORIGIN=https://files.opendocuments.ai`, `PDF_TOOLS_FILES_SEALING_KEYS`, `CRON_SECRET` and `PDF_TOOLS_FILES_QUOTA_RULES`, plus `S3_BUCKET_NAME`, `AWS_REGION` and `AWS_ROLE_ARN`, which the Marketplace integration sets. Without all of them, Files is not advertised.
 
 **Signing surface.** Not at launch (decision 4). `/mcp/sign` neither advertises Files nor accepts `upload`.
 
@@ -76,8 +98,8 @@ Then the exact size and digest are checked, and the tool runs on those bytes ins
    - the real MCP two-call flow with a download;
    - after DNS, the same through the files host without preview authentication.
 
-   It also proves the 1-day lifecycle backstop, if the Marketplace account allows setting one. Otherwise the sweeper alone carries F1, and the listing still says 2 hours.
-3. A bounded quota on upload-target issuance for the account-free route is decided and in place, for example a Vercel firewall rate limit on `/mcp` tool calls. It must not filter the files host, which Anthropic requires to stay unfiltered.
+   The bucket stays unversioned, and the lifecycle backstop stays in place.
+3. The issuance quota is proven on a Preview. Rules scoped to the preview environment must show three things: a refusal with no target once over the limit, a finished upload and an ordinary call still working while over it, and issuance coming back after the window. The production rules are then published with agreed thresholds. They apply to issuance checks only, never to the files host, which Anthropic requires to stay unfiltered.
 4. Anthropic approves the hosts; the directory listing exists.
 5. A real Claude run on web and mobile with a synthetic PDF above 3 MB as input and a supported result: upload, process, download a result within the output limit, reopen.
 6. `remote-mcp.md`, the privacy policy and the listing state F1 in the same words.

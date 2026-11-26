@@ -32,6 +32,7 @@
  * only under FILES_PREFIXES.
  */
 import { assumeRoleWithWebIdentity, createS3Client, presignUrl } from "./aws-s3.mjs";
+import { parseQuotaRules } from "./files-quota.mjs";
 import { currentOidcToken } from "./oidc-context.mjs";
 
 /** The Marketplace role's maximum session (measured 2026-11-26: 3601 s is refused). */
@@ -208,14 +209,15 @@ export function transferStoreFromEnv(env = process.env, { fetchImpl } = {}) {
 
 /**
  * The store for admitting transfers. Returns null (Files not advertised) unless
- * explicitly enabled, with a public origin and with the cleanup configured
- * (CRON_SECRET), so nothing is accepted that the sweeper could not delete.
+ * explicitly enabled, with a public origin, with the cleanup configured
+ * (CRON_SECRET), so nothing is accepted that the sweeper could not delete, and
+ * with an issuance quota (PDF_TOOLS_FILES_QUOTA_RULES).
  * The memory store needs an injected instance; it is never selected by
  * environment alone.
  */
 export function fileStoreFromEnv(env = process.env, { injected = null, fetchImpl } = {}) {
   if (env.PDF_TOOLS_FILES_ENABLED !== "1") return null;
   if (injected) return injected;
-  if (!env.CRON_SECRET || !ORIGIN_PATTERN.test(env.PDF_TOOLS_FILES_ORIGIN ?? "")) return null;
+  if (!env.CRON_SECRET || !ORIGIN_PATTERN.test(env.PDF_TOOLS_FILES_ORIGIN ?? "") || !parseQuotaRules(env.PDF_TOOLS_FILES_QUOTA_RULES)) return null;
   return transferStoreFromEnv(env, { fetchImpl });
 }
