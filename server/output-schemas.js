@@ -130,6 +130,23 @@ const activeDocumentProperties = {
   last_mutation_tool: nullable(string),
   last_mutation_at: nullable(string),
 };
+// What a rebuilt output did with the source's bookmarks. A dropped bookmark is
+// always listed here and named in the reply text; see server/outline-carry.js.
+const outlineReport = object({
+  status: enumString(["absent", "carried", "partial", "not_carried"]),
+  source_entries: integer,
+  carried_entries: integer,
+  dropped_entries: integer,
+  dropped: arrayOf(object({
+    title: string,
+    source_page: nullable(integer),
+    reason: enumString(["page_not_in_output", "all_children_dropped"]),
+  })),
+  unresolved_targets: integer,
+  actions_not_carried: integer,
+  unreadable_reason: nullable(string),
+});
+const pageLabelStatus = enumString(["absent", "carried", "not_carried"]);
 const activeDocument = (extra = {}) => object({
   ...activeDocumentProperties,
   ...extra,
@@ -1445,7 +1462,23 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     recoverable: { const: false },
   }),
   read_pdf_fields: activeDocument(),
-  fill_pdf: activeDocument({ filled_fields: stringArray, fill_errors: stringArray }),
+  fill_pdf: activeDocument({
+    filled_fields: stringArray,
+    fill_errors: stringArray,
+    save_mode: enumString(["incremental", "rewrite"]),
+    signatures_kept: integer,
+  }),
+  set_pdf_metadata: activeDocument({
+    save_mode: enumString(["incremental", "rewrite"]),
+    appended_objects: integer,
+    changes: arrayOf(object({
+      field: enumString(["title", "author", "subject", "keywords"]),
+      before: nullable(string),
+      after: nullable(string),
+    })),
+    xmp: enumString(["updated", "absent"]),
+    signatures_kept: integer,
+  }),
   bulk_fill_from_csv: object({
     row_count: integer,
     results: arrayOf(object({
@@ -1461,6 +1494,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     profile_name: string,
     filled_fields: stringArray,
     fill_errors: stringArray,
+    save_mode: enumString(["incremental", "rewrite"]),
+    signatures_kept: integer,
   }),
   extract_to_csv: object({
     output_csv: string,
@@ -1883,6 +1918,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
   merge_pdfs: activeDocument({
     total_pages: integer,
     metadata_fields_omitted: stringArray,
+    outline: outlineReport,
+    page_labels: pageLabelStatus,
   }),
   split_pdf: object({
     input_path: string,
@@ -1894,14 +1931,25 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
       start_page: integer,
       end_page: integer,
       page_count: integer,
+      outline: outlineReport,
     })),
+    outline: outlineReport,
+    page_labels: pageLabelStatus,
   }),
   rotate_pdf_pages: activeDocument({
     rotated_pages: integer,
     degrees: { type: "number", enum: [90, 180, 270] },
   }),
-  reorder_pdf_pages: activeDocument({ page_order: integerArray }),
+  reorder_pdf_pages: activeDocument({
+    page_order: integerArray,
+    outline: outlineReport,
+    page_labels: pageLabelStatus,
+    page_labels_changed: integer,
+  }),
   apply_page_plan: activeDocument({
+    outline: outlineReport,
+    page_labels: pageLabelStatus,
+    page_labels_changed: integer,
     deleted_pages: integer,
     rotated_pages: integer,
     page_order: integerArray,
@@ -1968,6 +2016,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     width: number,
     height: number,
     label: string,
+    field_name: string,
+    save_mode: enumString(["incremental", "rewrite"]),
   }),
   apply_signature: activeDocument({
     pdf_path: string,
@@ -2073,6 +2123,8 @@ export const TOOL_SUCCESS_OUTPUT_SCHEMAS = Object.freeze({
     width: number,
     height: number,
     text: string,
+    save_mode: enumString(["incremental", "rewrite"]),
+    audit_in_keywords: boolean,
   }),
   detect_signature_zones: object({
     detection_status: enumString(["complete", "partial"]),
@@ -2146,6 +2198,7 @@ for (const toolName of [
   "prepare_signing_packet",
   "reorder_pdf_pages",
   "rotate_pdf_pages",
+  "set_pdf_metadata",
   "split_pdf",
 ]) {
   specialErrorSchemas[toolName] = [

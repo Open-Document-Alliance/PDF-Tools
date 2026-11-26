@@ -1087,6 +1087,7 @@ endobj
     request.operation = "add_signature_field";
     request.options = {
       allow_resign: false,
+      field_name: null,
       placement: {
         page: 2,
         x: 10,
@@ -1111,6 +1112,7 @@ endobj
     request.operation = "add_signature_field";
     request.options = {
       allow_resign: false,
+      field_name: null,
       placement: {
         page: 1,
         x: 72,
@@ -1137,8 +1139,8 @@ endobj
   it.each([
     ["merge_pdfs", {}],
     ["split_pdf", { page_ranges: "1-1" }],
-    ["reorder_pdf_pages", { page_order: [1], rotations: {} }],
-    ["apply_page_plan", { page_order: [1], rotations: {} }],
+    ["reorder_pdf_pages", { page_labels: "positional", page_order: [1], rotations: {} }],
+    ["apply_page_plan", { page_labels: "positional", page_order: [1], rotations: {} }],
   ])("emits no unproven null references from the %s rebuild path", async (
     operation,
     options,
@@ -1168,8 +1170,8 @@ endobj
   it.each([
     ["merge_pdfs", {}],
     ["split_pdf", { page_ranges: "1-1" }],
-    ["reorder_pdf_pages", { page_order: [1], rotations: {} }],
-    ["apply_page_plan", { page_order: [1], rotations: {} }],
+    ["reorder_pdf_pages", { page_labels: "positional", page_order: [1], rotations: {} }],
+    ["apply_page_plan", { page_labels: "positional", page_order: [1], rotations: {} }],
   ])("maps selected-page null-target provenance through the %s rebuild path", async (
     operation,
     options,
@@ -1793,10 +1795,13 @@ endobj
  * half-wired change turns it red.
  *
  * What it deliberately does NOT assert is that the current partition is the
- * right one. At the time of writing, eight mutations — fill_pdf,
- * fill_with_profile, bulk_fill_from_csv, merge_pdfs, split_pdf,
- * rotate_pdf_pages, reorder_pdf_pages and apply_page_plan — neither declare
- * `allow_resign` nor refuse, so they re-save a signed document silently. That
+ * right one. fill_pdf, fill_with_profile, bulk_fill_from_csv and
+ * set_pdf_metadata neither declare `allow_resign` nor refuse because they do
+ * not need to: on a signed document they append an incremental update, and the
+ * signature keeps verifying (test/signed-fill.test.js). At the time of writing,
+ * five mutations — merge_pdfs, split_pdf, rotate_pdf_pages, reorder_pdf_pages
+ * and apply_page_plan — neither declare `allow_resign` nor refuse, so they
+ * re-save a signed document silently. That
  * is a coverage gap, not an invariant, and pinning it here would make a later
  * fix read as a regression.
  */
@@ -1814,13 +1819,18 @@ describe("existing-signature resign guard coverage", () => {
   const BASE_OPTIONS = new Map([
     ["fill_pdf", { field_data: { Name: "Bob" } }],
     ["fill_with_profile", { field_data: { Name: "Bob" } }],
+    ["set_pdf_metadata", {
+      edits: { title: "Retitled" },
+      modification_at: "2026-11-25T08:00:00.000Z",
+      save_mode: "incremental",
+    }],
     ["bulk_fill_from_csv", { records: [{ Name: "Bob" }] }],
     ["merge_pdfs", {}],
     ["split_pdf", { page_ranges: "1" }],
     ["rotate_pdf_pages", { degrees: 90, pages: [] }],
-    ["reorder_pdf_pages", { page_order: [2, 1], rotations: {} }],
-    ["apply_page_plan", { page_order: [2, 1], rotations: {} }],
-    ["add_signature_field", { placement: LABELLED_PLACEMENT }],
+    ["reorder_pdf_pages", { page_labels: "positional", page_order: [2, 1], rotations: {} }],
+    ["apply_page_plan", { page_labels: "positional", page_order: [2, 1], rotations: {} }],
+    ["add_signature_field", { field_name: null, placement: LABELLED_PLACEMENT }],
     ["apply_signature", {
       audit_line: "Signed by Alice",
       audit_text: "Signed by Alice",
@@ -1851,6 +1861,7 @@ describe("existing-signature resign guard coverage", () => {
       font_style: "normal",
       modification_at: "2026-09-21T08:00:00.000Z",
       placement: PLACEMENT,
+      record_audit_in_keywords: false,
       text: "Alice Example",
     }],
   ]);

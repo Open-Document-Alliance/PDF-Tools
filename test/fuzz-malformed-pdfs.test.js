@@ -240,6 +240,14 @@ const MUTATING_PDF_TOOLS = [
     }),
   },
   {
+    name: "set_pdf_metadata",
+    argumentsFor: ({ inputPath, outputPath }) => ({
+      pdf_path: inputPath,
+      output_path: outputPath,
+      title: "Retitled",
+    }),
+  },
+  {
     name: "merge_pdfs",
     argumentsFor: ({ inputPath, outputPath, validControlPath }) => ({
       input_paths: [inputPath, validControlPath],
@@ -338,6 +346,7 @@ const MUTATING_PDF_TOOLS = [
 
 const SAME_PATH_MUTATING_TOOLS = new Set([
   "fill_pdf",
+  "set_pdf_metadata",
   "fill_with_profile",
   "add_signature_field",
   "apply_signature",

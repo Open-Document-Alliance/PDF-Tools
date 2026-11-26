@@ -116,8 +116,9 @@ own machine.
 | Reading, search or Markdown range | 10 pages per call |
 | Returned PDF copy | 3 MB |
 | Download deadline | 15 seconds across DNS, headers, redirects and body; shared across merge inputs |
-| Hosted operation deadline | 45 seconds, parent terminates the per-call worker |
-| Hosted concurrency | 2 active workers per service instance, no waiting document queue |
+| Hosted operation deadline | 45 seconds, parent terminates the per-call process |
+| Hosted concurrency | 2 active calls per service instance, no waiting document queue |
+| Hosted memory per call | Each call runs in its own process under an operating-system memory limit (about 1 GB usable); a call that exceeds it returns `MEMORY_LIMIT` |
 | Redirects followed | 3 |
 
 The two document limits differ because they are set by different things. A

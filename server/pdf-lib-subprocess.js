@@ -40,6 +40,7 @@ export const PDF_LIB_MUTATION_TOOL_NAMES = new Set([
   "prepare_signing_packet",
   "reorder_pdf_pages",
   "rotate_pdf_pages",
+  "set_pdf_metadata",
   "split_pdf",
 ]);
 export { PDF_LIB_READ_ONLY_OPERATIONS };
@@ -82,13 +83,14 @@ let gracefulShutdownPromise = null;
 const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
   ["fill_with_profile", ["field_data"]],
+  ["set_pdf_metadata", ["edits", "modification_at", "save_mode"]],
   ["bulk_fill_from_csv", ["records"]],
   ["merge_pdfs", []],
   ["split_pdf", ["page_ranges"]],
   ["rotate_pdf_pages", ["degrees", "pages"]],
-  ["reorder_pdf_pages", ["page_order", "rotations"]],
-  ["apply_page_plan", ["page_order", "rotations"]],
-  ["add_signature_field", ["allow_resign", "placement"]],
+  ["reorder_pdf_pages", ["page_labels", "page_order", "rotations"]],
+  ["apply_page_plan", ["page_labels", "page_order", "rotations"]],
+  ["add_signature_field", ["allow_resign", "field_name", "placement"]],
   ["apply_signature", [
     "allow_resign", "audit_line", "audit_text", "draw_audit_line",
     "modification_at", "placement", "signature",
@@ -97,7 +99,8 @@ const OPTION_KEYS = new Map([
     "allow_resign", "field_values", "require_provider_ready", "signature_locations",
   ]],
   ["apply_text", [
-    "allow_resign", "audit_line", "font_style", "modification_at", "placement", "text",
+    "allow_resign", "audit_line", "font_style", "modification_at", "placement",
+    "record_audit_in_keywords", "text",
   ]],
 ]);
 

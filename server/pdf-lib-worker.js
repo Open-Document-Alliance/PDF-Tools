@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -31,6 +31,8 @@ import {
   copyPdfDocumentMetadata,
   copyPdfPagesPreservingForms,
   detectExistingSignatures,
+  detectXfaFormInDocument,
+  addSignatureFormField,
   drawSignatureFieldOnPage,
   getPageBoxGeometry,
   parsePageRanges,
@@ -61,6 +63,30 @@ import {
   withBoundedPdfFileSafely,
 } from "./bounded-pdf-file.js";
 import { startPdfLibRssMonitor } from "./pdf-lib-rss-monitor.js";
+import {
+  publicOutlineReport,
+  readSourceOutline,
+  writeCarriedOutline,
+} from "./outline-carry.js";
+import { carryPageLabels, carryReorderedPageLabels, readSourcePageLabels } from "./page-label-carry.js";
+import {
+  IncrementalUpdateRefusal,
+  buildIncrementalUpdate,
+  keepsPrefix,
+  recoverTrailerReferences,
+  snapshotIndirectObjects,
+} from "./incremental-update.js";
+import { inspectSignatureState, isFieldLocked } from "./signature-state.js";
+import {
+  XmpUnsupported,
+  decodeXmpPacket,
+  hasXmlIllegalCharacters,
+  editXmpDocumentFields,
+  normalizeDocumentFieldValue,
+  readXmpDocumentFields,
+  readXmpStreamBytes,
+  xmpPacketFromInfo,
+} from "./xmp-metadata.js";
 
 const PROTOCOL_VERSION = 1;
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024;
@@ -166,11 +192,16 @@ const OPERATIONS = new Set([
   "prepare_signing_packet",
   "reorder_pdf_pages",
   "rotate_pdf_pages",
+  "set_pdf_metadata",
   "split_pdf",
 ]);
+const METADATA_EDIT_FIELDS = Object.freeze(["title", "author", "subject", "keywords"]);
+const APPENDABLE_OPERATIONS = new Set(["add_signature_field", "apply_text"]);
+const MAX_METADATA_VALUE_LENGTH = 32_768;
 const OPTION_KEYS = new Map([
   ["fill_pdf", ["field_data"]],
   ["fill_with_profile", ["field_data"]],
+  ["set_pdf_metadata", ["edits", "modification_at", "save_mode"]],
   ["inspect_pdf_accessibility", []],
   ["inspect_pdf_form", []],
   ["inspect_import_pdf", []],
@@ -181,9 +212,9 @@ const OPTION_KEYS = new Map([
   ["merge_pdfs", []],
   ["split_pdf", ["page_ranges"]],
   ["rotate_pdf_pages", ["degrees", "pages"]],
-  ["reorder_pdf_pages", ["page_order", "rotations"]],
-  ["apply_page_plan", ["page_order", "rotations"]],
-  ["add_signature_field", ["allow_resign", "placement"]],
+  ["reorder_pdf_pages", ["page_labels", "page_order", "rotations"]],
+  ["apply_page_plan", ["page_labels", "page_order", "rotations"]],
+  ["add_signature_field", ["allow_resign", "field_name", "placement"]],
   ["apply_signature", [
     "allow_resign", "audit_line", "audit_text", "draw_audit_line",
     "modification_at", "placement", "signature",
@@ -192,7 +223,8 @@ const OPTION_KEYS = new Map([
     "allow_resign", "field_values", "require_provider_ready", "signature_locations",
   ]],
   ["apply_text", [
-    "allow_resign", "audit_line", "font_style", "modification_at", "placement", "text",
+    "allow_resign", "audit_line", "font_style", "modification_at", "placement",
+    "record_audit_in_keywords", "text",
   ]],
 ]);
 
@@ -313,6 +345,10 @@ function validateRequest(request) {
   if (request.operation === "bulk_fill_from_csv") {
     boundedArray(options.records, "records");
     options.records.forEach((record, index) => objectValue(record, `records[${index}]`));
+  }
+  if (["reorder_pdf_pages", "apply_page_plan"].includes(request.operation)
+      && !["positional", "follow_pages"].includes(options.page_labels)) {
+    throw new TypeError("page_labels must be positional or follow_pages.");
   }
   if (request.operation === "split_pdf"
       && (typeof options.page_ranges !== "string" || options.page_ranges.length < 1 || options.page_ranges.length > 16_384)) {
@@ -471,8 +507,38 @@ function validateRequest(request) {
   ) {
     throw new TypeError("audit_text is invalid.");
   }
+  if (Object.hasOwn(options, "record_audit_in_keywords") && typeof options.record_audit_in_keywords !== "boolean") {
+    throw new TypeError("record_audit_in_keywords must be boolean.");
+  }
   if (Object.hasOwn(options, "draw_audit_line") && typeof options.draw_audit_line !== "boolean") {
     throw new TypeError("draw_audit_line must be boolean.");
+  }
+  if (request.operation === "add_signature_field" && options.field_name !== null
+      && (typeof options.field_name !== "string" || options.field_name.length < 1
+        || options.field_name.length > 120 || /[.\u0000-\u001f]/.test(options.field_name))) {
+    throw new TypeError("field_name must be 1-120 characters with no period or control characters.");
+  }
+  if (request.operation === "set_pdf_metadata") {
+    objectValue(options.edits, "edits");
+    const keys = Object.keys(options.edits);
+    if (keys.length < 1 || keys.some(key => !METADATA_EDIT_FIELDS.includes(key))) {
+      throw new TypeError("edits must name at least one of title, author, subject, keywords.");
+    }
+    for (const key of keys) {
+      const value = options.edits[key];
+      if (value !== null && (typeof value !== "string" || value.length > MAX_METADATA_VALUE_LENGTH)) {
+        throw new TypeError(`edits.${key} must be a string of at most ${MAX_METADATA_VALUE_LENGTH} characters, or null.`);
+      }
+      if (value !== null && hasXmlIllegalCharacters(value)) {
+        throw new TypeError(`edits.${key} contains a control character, which document metadata cannot carry.`);
+      }
+    }
+    if (!["incremental", "rewrite"].includes(options.save_mode)) {
+      throw new TypeError("save_mode must be incremental or rewrite.");
+    }
+    if (typeof options.modification_at !== "string" || Number.isNaN(Date.parse(options.modification_at))) {
+      throw new TypeError("modification_at is invalid.");
+    }
   }
   if (typeof request.stage_directory !== "string" || !path.isAbsolute(request.stage_directory)) {
     throw new TypeError("stage_directory must be absolute.");
@@ -1898,6 +1964,37 @@ function copyPdfDocumentMetadataForRebuiltOutput(
       captureRebuiltSpecNullAuthority(targetDoc, state);
     },
   });
+  regenerateXmpFromInfo(targetDoc, sourceDoc);
+}
+
+/**
+ * A rebuilt output keeps the source's Info entries but not its XMP packet,
+ * which may carry claims the rebuilt file does not meet (see
+ * docs/METADATA_PROVENANCE.md). When the source had XMP, write a fresh packet
+ * stating only the four document fields the output's Info already asserts, so
+ * a viewer that prefers XMP shows the same title and author instead of none.
+ * A source without XMP gets none.
+ */
+function regenerateXmpFromInfo(targetDoc, sourceDoc) {
+  if (sourceDoc.catalog.get(PDFName.of("Metadata")) === undefined) return;
+  const fields = Object.fromEntries(Object.keys(INFO_ACCESSORS).map(field => [field, readInfoField(targetDoc, field)]));
+  if (Object.values(fields).every(value => value === null)) return;
+  let packet;
+  try {
+    packet = xmpPacketFromInfo(fields);
+  } catch (error) {
+    // An Info value XML cannot carry (a control character) gets no XMP twin;
+    // the output keeps its Info and simply has no packet, as before.
+    if (error instanceof XmpUnsupported) return;
+    throw error;
+  }
+  targetDoc.catalog.set(
+    PDFName.of("Metadata"),
+    targetDoc.context.register(targetDoc.context.stream(new TextEncoder().encode(packet), {
+      Type: "Metadata",
+      Subtype: "XML",
+    })),
+  );
 }
 
 async function copyPdfPagesForRebuiltOutput(
@@ -2029,12 +2126,93 @@ export async function savePdfDocumentSafely(document, options = {}) {
   return bytes;
 }
 
-export async function loadPdfForMutation(bytes, password, { forceXfa = false, guardXfa = false } = {}) {
+/**
+ * Save by appending an incremental update instead of rewriting, after the
+ * same integrity checks savePdfDocumentSafely makes. The result must keep the
+ * original bytes as an exact prefix; it is then re-parsed and held to the same
+ * page-count and rotation postconditions. Refusals from the writer (encrypted,
+ * damaged cross-reference, nothing changed) surface with their reason.
+ */
+export async function savePdfDocumentIncrementally(document, originalBytes, snapshot, {
+  expectedPageCount,
+  expectedPageRotations,
+}) {
+  try {
+    await document.flush();
+  } catch {
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "PDF failed to materialize deferred objects before verification",
+    );
+  }
+  assertSafeParsedPdfDecodeChains(document);
+  assertSafeParsedPdfComplexity(document);
+  const initialAuthority = inputSpecNullReferenceAuthorities.get(document)?.graph_authority;
+  const graphBeforeSave = enforceSafeParsedPdfGraph(document);
+  if (!initialAuthority
+      || !sameSpecNullReferenceAuthority(specNullReferenceAuthority(graphBeforeSave), initialAuthority)) {
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "Mutation introduced or altered a standards-defined null reference",
+    );
+  }
+  let built;
+  try {
+    built = buildIncrementalUpdate(document, originalBytes, snapshot);
+  } catch (error) {
+    if (error instanceof IncrementalUpdateRefusal) {
+      const refusal = new Error(`The change could not be appended to this PDF: ${error.message}`);
+      refusal.reason = error.reason;
+      throw refusal;
+    }
+    throw error;
+  }
+  const { bytes } = built;
+  if (!keepsPrefix(bytes, originalBytes)) {
+    throw resourceError("unsafe_pdf_integrity", "Incremental update did not keep the original bytes as its prefix");
+  }
+  let verified;
+  try {
+    await assertBoundedPdfStreamDecodes(bytes);
+    verified = await PDFDocument.load(bytes, { updateMetadata: false });
+    enforceSafeParsedPdfGraph(verified, { pruneUnreachableInvalid: false });
+    validatePageTree(verified);
+  } catch (error) {
+    if (error?.code === RESOURCE_CODE) throw error;
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "Incrementally updated PDF failed isolated object-graph verification",
+    );
+  }
+  if (verified.getPageCount() !== expectedPageCount
+      || JSON.stringify(normalizedPageRotations(verified)) !== JSON.stringify(expectedPageRotations)) {
+    throw resourceError(
+      "unsafe_pdf_integrity",
+      "Incrementally updated PDF changed its pages",
+    );
+  }
+  return { bytes, summary: built.summary, changedRefs: built.changedRefs, verified };
+}
+
+export async function loadPdfForMutation(bytes, password, {
+  forceXfa = false,
+  guardXfa = false,
+  updateMetadata = true,
+} = {}) {
   assertBoundedPdfStructure(bytes);
   await assertBoundedPdfStreamDecodes(bytes);
   let document;
   try {
-    document = await PDFDocument.load(bytes, password ? { password } : {});
+    // updateMetadata false keeps pdf-lib from rewriting Producer, Creator and
+    // ModDate at load. An incremental update must start from the document as
+    // it is on disk, or the rewrite would ride along as an unrequested change.
+    // Always load without pdf-lib's Info rewrite: it creates an empty Info
+    // dictionary when the trailer it kept has none, before the real one can be
+    // recovered below. The rewrite is applied afterwards when asked for.
+    document = await PDFDocument.load(bytes, {
+      ...(password ? { password } : {}),
+      updateMetadata: false,
+    });
   } catch (error) {
     if (error.message?.includes("password") || error.message?.includes("encrypt")) {
       throw new Error(PDF_LIB_ENCRYPTED_MESSAGE);
@@ -2043,6 +2221,8 @@ export async function loadPdfForMutation(bytes, password, { forceXfa = false, gu
   }
   assertSafeParsedPdfDecodeChains(document);
   assertSafeParsedPdfComplexity(document);
+  recoverTrailerReferences(document, bytes);
+  if (updateMetadata) document.updateInfoDict();
   const graphAuthority = enforceSafeParsedPdfGraph(document);
   inputSpecNullReferenceAuthorities.set(document, {
     graph_authority: specNullReferenceAuthority(graphAuthority),
@@ -2213,13 +2393,172 @@ function formInfo(document, { strict = false } = {}) {
 }
 
 function assertMayResave(document, allowResign, noun = "modify") {
-  const signatures = detectExistingSignatures(document);
-  if (signatures.present && !allowResign) {
+  // Only a signature field with a value is a signature. An empty /Sig field
+  // is a place to sign (add_signature_field makes them), and refusing every
+  // later edit to a document nobody has signed protects nothing.
+  const signed = inspectSignatureState(document).signed.map(entry => entry.name);
+  if (signed.length > 0 && !allowResign) {
     throw new Error(
-      `This PDF already contains ${signatures.fieldNames.length} cryptographic signature field(s) `
-      + `(${signatures.fieldNames.slice(0, 3).join(", ")}${signatures.fieldNames.length > 3 ? "..." : ""}). `
+      `This PDF already contains ${signed.length} signed cryptographic signature field(s) `
+      + `(${signed.slice(0, 3).join(", ")}${signed.length > 3 ? "..." : ""}). `
       + `Saving would invalidate those signatures. Pass allow_resign=true if you intend to ${noun} a signed PDF.`,
     );
+  }
+}
+
+/**
+ * Fill a form and save it. A document without a signature is rewritten as
+ * before. A signed document is filled by appending an incremental update, so
+ * every byte a signature covers stays where it was and the signature keeps
+ * verifying; ISO 32000 lets an approval signature, and a certification at
+ * DocMDP level 2 or 3, survive a form fill made that way. What it cannot
+ * survive is refused before anything changes: DocMDP level 1, a field a
+ * signature's /Lock covers, writing a signature field itself, and an
+ * encrypted signed document (an update would need the document's own keys).
+ */
+async function fillAndSave(protection, sourceBytes, fieldData) {
+  let document = await loadMutationSource(protection, sourceBytes);
+  const state = inspectSignatureState(document);
+  if (state.signed.length === 0) {
+    const expectedPageCount = document.getPageCount();
+    const expectedPageRotations = normalizedPageRotations(document);
+    const fill = fillFields(document, fieldData);
+    const bytes = await savePdfDocumentSafely(document, { expectedPageCount, expectedPageRotations });
+    return { bytes, fill, saveMode: "rewrite", signaturesKept: 0, formInfo: formInfo(document) };
+  }
+  const names = state.signed.map(entry => entry.name).join(", ");
+  if ((protection.sources.get(sourceBytes) ?? null) !== null) {
+    throw new Error(
+      `This PDF is encrypted and signed (${names}). Filling it here would rewrite the file and invalidate the `
+      + "signature, because an appended update would need the document's own encryption keys. Nothing was changed.",
+    );
+  }
+  if (state.certification === 1) {
+    throw new Error(
+      "This PDF is certified with DocMDP level 1, which permits no changes at all after signing. Nothing was changed.",
+    );
+  }
+  if (detectXfaFormInDocument(document).present) {
+    // pdf-lib drops the XFA layer as soon as the form is opened, which on a
+    // signed document is a change to signed content nobody asked for; keeping
+    // it would leave XFA showing the old values. Neither is a fill.
+    throw new Error(
+      `This PDF is signed (${names}) and carries an XFA form. Filling it here would remove or contradict the XFA `
+      + "layer the signature covers. Nothing was changed.",
+    );
+  }
+  const signatureFields = new Set([...state.signed.map(entry => entry.name), ...state.unsigned]);
+  for (const fieldName of Object.keys(fieldData ?? {})) {
+    if (signatureFields.has(fieldName)) {
+      throw new Error(`'${fieldName}' is a signature field. Filling cannot sign a document; nothing was changed.`);
+    }
+    if (isFieldLocked(state, fieldName)) {
+      throw new Error(
+        `'${fieldName}' is locked by an existing signature (${names}), so changing it would invalidate that `
+        + "signature. Nothing was changed.",
+      );
+    }
+  }
+  // Start again from the bytes on disk: the first load rewrote Producer and
+  // ModDate, and an update must not carry changes nobody asked for.
+  document = await loadMutationSource(protection, sourceBytes, { updateMetadata: false });
+  const snapshot = snapshotIndirectObjects(document, sourceBytes);
+  const expectedPageCount = document.getPageCount();
+  const expectedPageRotations = normalizedPageRotations(document);
+  const owners = fieldObjectOwners(document);
+  const fill = fillFields(document, fieldData);
+  if (fill.filledFields.length === 0) {
+    throw new Error(`No requested field could be filled, so nothing was appended. ${fill.errors.join(" ")}`.trim());
+  }
+  // Regenerate appearances for the filled fields only. pdf-lib's form-wide
+  // update also rebuilds any other field whose widget lacks one, which on a
+  // signed document is a change to fields nobody asked to fill.
+  const form = document.getForm();
+  const font = form.getDefaultFont();
+  for (const fieldName of fill.filledFields) {
+    const field = form.getField(fieldName);
+    if (typeof field.defaultUpdateAppearances === "function") field.defaultUpdateAppearances(font);
+  }
+  const modifiedAt = new Date();
+  document.setModificationDate(modifiedAt);
+  refreshCatalogXmpDates(document, modifiedAt);
+  const saved = await savePdfDocumentIncrementally(document, sourceBytes, snapshot, {
+    expectedPageCount,
+    expectedPageRotations,
+  });
+  // Whatever pdf-lib touched, the update may change only the fields asked
+  // for. An object that belongs to any other field, or to a locked one, means
+  // the signed content would change beyond the fill, so nothing is written.
+  const requested = new Set(fill.filledFields);
+  for (const ref of saved.changedRefs) {
+    const owner = owners.get(ref);
+    if (owner === undefined) continue;
+    if (!requested.has(owner)) {
+      throw new Error(`Filling would also change the field '${owner}', which was not asked for. Nothing was changed.`);
+    }
+    if (isFieldLocked(state, owner)) {
+      throw new Error(`'${owner}' is locked by an existing signature (${names}). Nothing was changed.`);
+    }
+  }
+  return {
+    bytes: saved.bytes,
+    fill,
+    saveMode: "incremental",
+    signaturesKept: state.signed.length,
+    formInfo: formInfo(saved.verified),
+  };
+}
+
+/**
+ * Map each object that belongs to a form field (the field dictionaries along
+ * its parent chain, and its widgets) to the field's qualified name. Built
+ * before a fill, so an object that changes can be traced to the field it
+ * belongs to.
+ */
+function fieldObjectOwners(document) {
+  const owners = new Map();
+  const context = document.context;
+  for (const field of document.getForm().getFields()) {
+    let name;
+    try { name = field.getName(); } catch { continue; }
+    owners.set(field.ref.toString(), name);
+    for (const widget of field.acroField.getWidgets()) {
+      const ref = context.getObjectRef(widget.dict);
+      if (ref) owners.set(ref.toString(), name);
+    }
+  }
+  return owners;
+}
+
+/**
+ * Best-effort: keep the XMP dates in step with Info's ModDate, and with any
+ * Info fields named in edits. If those fields cannot be edited, the dates
+ * still are.
+ */
+function refreshCatalogXmpDates(document, modifiedAt, edits = {}) {
+  let xmp;
+  try {
+    xmp = readCatalogXmp(document);
+  } catch {
+    return;
+  }
+  if (!xmp) return;
+  const attempt = fields => {
+    try {
+      return editXmpDocumentFields(xmp.text, fields, { modifiedAt: modifiedAt.toISOString() });
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const edited = attempt(edits) ?? (Object.keys(edits).length > 0 ? attempt({}) : null);
+    if (edited === null || edited === xmp.text) return;
+    document.context.assign(xmp.ref, document.context.stream(new TextEncoder().encode(edited), {
+      Type: "Metadata",
+      Subtype: "XML",
+    }));
+  } catch {
+    // An XMP packet that cannot be rewritten is left as it was.
   }
 }
 
@@ -2237,6 +2576,12 @@ function fillFields(document, data, { objectErrors = false } = {}) {
         else field.uncheck();
       } else if (name.includes("RadioGroup")) field.select(String(value));
       else if (name.includes("Dropdown") || name.includes("OptionList")) field.select(String(value));
+      else {
+        // A signature or push-button field holds no value a fill can set.
+        // Reporting it as filled would claim a change that never happened.
+        const kind = name.includes("Signature") ? "a signature field" : "not a fillable field";
+        throw new Error(`is ${kind}, so it was not changed`);
+      }
       filledFields.push(fieldName);
     } catch (error) {
       const message = error.message?.includes("No field")
@@ -2309,8 +2654,8 @@ function createProtection(request) {
  * is entered only after pdf-lib has said the document is encrypted, which is
  * the same detection the read path uses.
  */
-async function loadMutationSource(protection, bytes) {
-  const xfa = { forceXfa: protection.forceXfa, guardXfa: protection.guardXfa };
+async function loadMutationSource(protection, bytes, { updateMetadata = true } = {}) {
+  const xfa = { forceXfa: protection.forceXfa, guardXfa: protection.guardXfa, updateMetadata };
   if (!ENCRYPTED_WRITE_OPERATIONS[protection.operation]) {
     // Not a mutation that may decrypt; behave exactly as before.
     return loadPdfForMutation(bytes, protection.password, xfa);
@@ -2399,36 +2744,35 @@ async function execute(request, protection) {
   } else if (["inspect_pdf_form", "inspect_import_pdf", "read_pdf_fields", "validate_pdf", "extract_to_csv"].includes(request.operation)) {
     result = await inspectFormSource(sourceBytes[0], request.sources[0], request.operation, request.password);
   } else if (["fill_pdf", "fill_with_profile"].includes(request.operation)) {
-    const document = await loadMutationSource(protection, sourceBytes[0]);
-    const expectedPageCount = document.getPageCount();
-    const expectedPageRotations = normalizedPageRotations(document);
-    const fill = fillFields(document, options.field_data);
-    outputs = [await savePdfDocumentSafely(document, {
-      expectedPageCount,
-      expectedPageRotations,
-    })];
-    result = { ...fill, form_info: formInfo(document) };
+    const filled = await fillAndSave(protection, sourceBytes[0], options.field_data);
+    outputs = [filled.bytes];
+    result = {
+      ...filled.fill,
+      save_mode: filled.saveMode,
+      signatures_kept: filled.signaturesKept,
+      form_info: filled.formInfo,
+    };
   } else if (request.operation === "bulk_fill_from_csv") {
     const rows = [];
+    let saveMode = "rewrite";
     for (const record of options.records) {
-      const document = await loadMutationSource(protection, sourceBytes[0]);
-      const expectedPageCount = document.getPageCount();
-      const expectedPageRotations = normalizedPageRotations(document);
-      const fill = fillFields(document, record);
-      outputs.push(await savePdfDocumentSafely(document, {
-        expectedPageCount,
-        expectedPageRotations,
-      }));
-      rows.push(fill);
+      const filled = await fillAndSave(protection, sourceBytes[0], record);
+      outputs.push(filled.bytes);
+      rows.push(filled.fill);
+      saveMode = filled.saveMode;
     }
-    result = { rows };
+    result = { rows, save_mode: saveMode };
   } else if (request.operation === "merge_pdfs") {
     const target = await PDFDocument.create();
     const metadata = [];
     let pages = 0;
     const expectedPageRotations = [];
+    const outlineParts = [];
+    const labelParts = [];
+    let firstSource = null;
     for (const [sourceIndex, bytes] of sourceBytes.entries()) {
       const source = await loadMutationSource(protection, bytes);
+      firstSource = firstSource ?? source;
       if (sourceBytes.length > 1) metadata.push(captureMergeDescriptiveMetadata(source));
       else {
         copyPdfDocumentMetadataForRebuiltOutput(
@@ -2439,12 +2783,20 @@ async function execute(request, protection) {
       }
       const indices = source.getPageIndices();
       expectedPageRotations.push(...normalizedPageRotations(source));
-      await copyPdfPagesForRebuiltOutput(target, source, indices, {
+      const copied = await copyPdfPagesForRebuiltOutput(target, source, indices, {
         sourceAuthorityLabel: parsedSourceAuthority(protection, bytes, request.sources[sourceIndex]),
       });
+      outlineParts.push({
+        outline: readSourceOutline(source),
+        targetPageFor: sourcePage => copied[sourcePage]?.ref ?? null,
+        sourcePageOffset: pages,
+      });
+      labelParts.push({ labels: readSourcePageLabels(source), sourcePages: indices });
       pages += indices.length;
     }
     if (pages < 1) throw new Error("merge_pdfs has no effective output pages.");
+    const outline = writeCarriedOutline(target, outlineParts, { pageModeFrom: firstSource });
+    const pageLabels = carryPageLabels(target, labelParts);
     const consensus = sourceBytes.length > 1
       ? applyMergeDescriptiveMetadataConsensus(target, metadata)
       : { preservedFields: [], omittedFields: [] };
@@ -2452,10 +2804,20 @@ async function execute(request, protection) {
       expectedPageCount: pages,
       expectedPageRotations,
     })];
-    result = { total_pages: pages, omitted_fields: consensus.omittedFields, form_info: formInfo(target) };
+    result = {
+      total_pages: pages,
+      omitted_fields: consensus.omittedFields,
+      outline: publicOutlineReport(outline),
+      page_labels: pageLabels,
+      form_info: formInfo(target),
+    };
   } else if (request.operation === "split_pdf") {
     const source = await loadMutationSource(protection, sourceBytes[0]);
     const ranges = parsePageRanges(options.page_ranges, source.getPageCount());
+    const sourceOutline = readSourceOutline(source);
+    const sourceLabels = readSourcePageLabels(source);
+    const outlines = [];
+    let pageLabels = "absent";
     for (const [start, end] of ranges) {
       const target = await PDFDocument.create();
       copyPdfDocumentMetadataForRebuiltOutput(
@@ -2463,7 +2825,7 @@ async function execute(request, protection) {
         source,
         parsedSourceAuthority(protection, sourceBytes[0], request.sources[0]),
       );
-      await copyPdfPagesForRebuiltOutput(
+      const copied = await copyPdfPagesForRebuiltOutput(
         target,
         source,
         Array.from({ length: end - start + 1 }, (_, index) => start - 1 + index),
@@ -2472,13 +2834,23 @@ async function execute(request, protection) {
         },
       );
       if (target.getPageCount() < 1) throw new Error("split_pdf produced an empty effective page range.");
+      const inPart = sourcePage => sourcePage >= start - 1 && sourcePage <= end - 1;
+      outlines.push(publicOutlineReport(writeCarriedOutline(target, [{
+        outline: sourceOutline,
+        targetPageFor: sourcePage => (inPart(sourcePage) ? copied[sourcePage - (start - 1)].ref : null),
+        anchorKept: inPart,
+      }], { pageModeFrom: source })));
+      pageLabels = carryPageLabels(target, [{
+        labels: sourceLabels,
+        sourcePages: Array.from({ length: end - start + 1 }, (_, index) => start - 1 + index),
+      }]);
       outputs.push(await savePdfDocumentSafely(target, {
         expectedPageCount: end - start + 1,
         expectedPageRotations: normalizedPageRotations(source)
           .slice(start - 1, end),
       }));
     }
-    result = { ranges };
+    result = { ranges, outlines, outline: splitOutlineLoss(sourceOutline, ranges), page_labels: pageLabels };
   } else if (request.operation === "rotate_pdf_pages") {
     const document = await loadMutationSource(protection, sourceBytes[0]);
     const all = document.getPages();
@@ -2529,13 +2901,26 @@ async function execute(request, protection) {
       source,
       parsedSourceAuthority(protection, sourceBytes[0], request.sources[0]),
     );
-    await copyPdfPagesForRebuiltOutput(target, source, order.map(page => page - 1), {
+    const copied = await copyPdfPagesForRebuiltOutput(target, source, order.map(page => page - 1), {
       sourceAuthorityLabel: parsedSourceAuthority(protection, sourceBytes[0], request.sources[0]),
       mutatePage(page, index) {
         const rotation = options.rotations?.[String(order[index])];
         if (rotation) page.setRotation(degrees((page.getRotation().angle + rotation) % 360));
       },
     });
+    const outputPosition = new Map(order.map((page, index) => [page - 1, index]));
+    const outline = writeCarriedOutline(target, [{
+      outline: readSourceOutline(source),
+      targetPageFor: sourcePage => (
+        outputPosition.has(sourcePage) ? copied[outputPosition.get(sourcePage)].ref : null
+      ),
+    }], { pageModeFrom: source });
+    const labelCarry = carryReorderedPageLabels(
+      target,
+      readSourcePageLabels(source),
+      order.map(page => page - 1),
+      options.page_labels === "follow_pages" ? "follow" : "positional",
+    );
     outputs = [await savePdfDocumentSafely(target, {
       expectedPageCount: order.length,
       expectedPageRotations,
@@ -2544,10 +2929,30 @@ async function execute(request, protection) {
       total_pages: total,
       deleted_pages: total - order.length,
       rotated_pages: Object.keys(options.rotations ?? {}).filter(key => seen.has(Number(key))).length,
+      outline: publicOutlineReport(outline),
+      page_labels: labelCarry.status,
+      page_labels_changed: labelCarry.changed,
+      page_label_example: labelCarry.example,
       form_info: formInfo(target),
     };
+  } else if (request.operation === "set_pdf_metadata") {
+    const edited = await setDocumentMetadata(protection, sourceBytes[0], options);
+    outputs = [edited.bytes];
+    result = edited.result;
   } else {
-    const document = await loadMutationSource(protection, sourceBytes[0]);
+    // Additive edits are appended as an incremental update when the source is
+    // neither encrypted nor signed: nothing is replaced, so the original bytes
+    // stay as they were. A signed source is never appended to here: these
+    // edits change page content, and an append would leave the old signature
+    // verifying over a revision the edit comes after, which reads as signed
+    // when it is not. With allow_resign such a source is rewritten, as it
+    // always was, and its signature visibly breaks. Loading without pdf-lib's
+    // metadata rewrite keeps the update to the change that was asked for.
+    let appendable = APPENDABLE_OPERATIONS.has(request.operation);
+    const document = await loadMutationSource(protection, sourceBytes[0], { updateMetadata: !appendable });
+    if ((protection.sources.get(sourceBytes[0]) ?? null) !== null) appendable = false;
+    if (appendable && inspectSignatureState(document).signed.length > 0) appendable = false;
+    const snapshot = appendable ? snapshotIndirectObjects(document, sourceBytes[0]) : null;
     const expectedPageCount = document.getPageCount();
     if (request.operation === "prepare_signing_packet" && expectedPageCount > MAX_SIGNING_PACKET_PAGES) {
       throw resourceError(
@@ -2575,7 +2980,8 @@ async function execute(request, protection) {
     assertMayResave(document, options.allow_resign, request.operation === "apply_signature" ? "re-sign" : "modify");
     if (request.operation === "add_signature_field") {
       await drawSignatureFieldOnPage(document, options.placement);
-      result = { form_info: formInfo(document) };
+      const fieldName = addSignatureFormField(document, { ...options.placement, fieldName: options.field_name });
+      result = { field_name: fieldName, form_info: formInfo(document) };
     } else if (request.operation === "apply_signature") {
       await stampSignatureOnPage(document, options.signature, {
         ...options.placement,
@@ -2610,15 +3016,47 @@ async function execute(request, protection) {
       };
     } else if (request.operation === "apply_text") {
       await stampTextOnPage(document, { ...options.placement, text: options.text, fontStyle: options.font_style });
-      const keywords = document.getKeywords() || "";
-      document.setKeywords([keywords ? `${keywords}\n${options.audit_line}` : options.audit_line]);
-      document.setModificationDate(new Date(options.modification_at));
-      result = { form_info: formInfo(document) };
+      // Keywords are the document's own search terms. Writing an audit trail
+      // into them changed descriptive metadata the user never asked to
+      // change, so it happens only on request.
+      if (options.record_audit_in_keywords) {
+        const keywords = document.getKeywords() || "";
+        document.setKeywords([keywords ? `${keywords}\n${options.audit_line}` : options.audit_line]);
+      }
+      const modifiedAt = new Date(options.modification_at);
+      document.setModificationDate(modifiedAt);
+      // Info's ModDate moved, so the XMP dates move with it; otherwise the
+      // two records disagree about when the document last changed.
+      refreshCatalogXmpDates(
+        document,
+        modifiedAt,
+        options.record_audit_in_keywords ? { keywords: document.getKeywords() } : {},
+      );
+      result = { audit_in_keywords: options.record_audit_in_keywords === true, form_info: formInfo(document) };
     }
-    outputs = [await savePdfDocumentSafely(document, {
-      expectedPageCount,
-      expectedPageRotations,
-    })];
+    let saveMode = "rewrite";
+    if (appendable) {
+      try {
+        outputs = [(await savePdfDocumentIncrementally(document, sourceBytes[0], snapshot, {
+          expectedPageCount,
+          expectedPageRotations,
+        })).bytes];
+        saveMode = "incremental";
+      } catch {
+        // The source is unsigned, so nothing depends on its bytes staying put.
+        // Anything that stops a faithful append (a damaged cross-reference,
+        // an unreachable broken object the append verifier will not accept)
+        // falls back to the rewrite these tools always did; save_mode says so.
+        saveMode = "rewrite";
+      }
+    }
+    if (saveMode === "rewrite") {
+      outputs = [await savePdfDocumentSafely(document, {
+        expectedPageCount,
+        expectedPageRotations,
+      })];
+    }
+    if (APPENDABLE_OPERATIONS.has(request.operation)) result = { ...result, save_mode: saveMode };
   }
   if (outputs.length > MAX_OUTPUTS) throw resourceError("too_many_outputs", "Mutation produced too many outputs.");
   if (
@@ -2637,6 +3075,187 @@ async function execute(request, protection) {
     throw new TypeError("Mutation operations must stage at least one output.");
   }
   return { outputs, result };
+}
+
+const INFO_ACCESSORS = Object.freeze({
+  title: { key: "Title", read: document => document.getTitle(), write: (document, value) => document.setTitle(value) },
+  author: { key: "Author", read: document => document.getAuthor(), write: (document, value) => document.setAuthor(value) },
+  subject: { key: "Subject", read: document => document.getSubject(), write: (document, value) => document.setSubject(value) },
+  keywords: { key: "Keywords", read: document => document.getKeywords(), write: (document, value) => document.setKeywords([value]) },
+});
+
+function readInfoField(document, field) {
+  try {
+    return INFO_ACCESSORS[field].read(document) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The catalog XMP stream as { ref, text }, null when there is none, or a
+ * refusal when there is one this cannot read: editing Info alone would then
+ * leave the two records disagreeing, which is the defect this tool exists to
+ * prevent.
+ */
+function readCatalogXmp(document) {
+  const raw = document.catalog.get(PDFName.of("Metadata"));
+  if (raw === undefined) return null;
+  const stream = raw instanceof PDFRef ? document.context.lookup(raw) : null;
+  const decoded = readXmpStreamBytes(stream, value => document.context.lookup(value));
+  return { ref: raw, text: decodeXmpPacket(decoded) };
+}
+
+async function setDocumentMetadata(protection, sourceBytes, options) {
+  const incremental = options.save_mode === "incremental";
+  // Never let pdf-lib rewrite Producer here: this tool changes the four
+  // fields it names and the modification date, nothing else.
+  const document = await loadMutationSource(protection, sourceBytes, { updateMetadata: false });
+  const encrypted = (protection.sources.get(sourceBytes) ?? null) !== null;
+  if (incremental && encrypted) {
+    throw new Error(
+      "This PDF is encrypted, so its metadata cannot be appended as an update here: the appended objects would need the "
+      + "document's own encryption keys. Pass save_mode \"rewrite\" to rewrite the file with its protection restored.",
+    );
+  }
+  const signatures = inspectSignatureState(document);
+  if (signatures.certification !== null) {
+    throw new Error(
+      `This PDF is certified (DocMDP level ${signatures.certification}). Changing its metadata is not among the changes `
+      + "the certification permits, so any edit would void it. Nothing was changed.",
+    );
+  }
+  if (signatures.signed.length > 0 && !incremental) {
+    throw new Error(
+      `This PDF has ${signatures.signed.length} signature(s). Rewriting the file would invalidate them; use the default `
+      + "save_mode \"incremental\", which appends the change and leaves the signed bytes untouched.",
+    );
+  }
+  if (!incremental && detectXfaFormInDocument(document).present) {
+    throw new Error(
+      "This PDF carries an XFA form, which rewriting the file would drop. Use the default save_mode \"incremental\", "
+      + "which leaves the XFA layer as it is.",
+    );
+  }
+  const snapshot = incremental ? snapshotIndirectObjects(document, sourceBytes) : null;
+  const expectedPageCount = document.getPageCount();
+  const expectedPageRotations = normalizedPageRotations(document);
+
+  let xmp;
+  try {
+    xmp = readCatalogXmp(document);
+  } catch (error) {
+    if (error instanceof XmpUnsupported) {
+      throw new Error(`${error.message} Nothing was changed, so Info and XMP still agree. (${error.reason})`);
+    }
+    throw error;
+  }
+  const modifiedAt = new Date(options.modification_at);
+  // Write each field in the form it reads back as (an author list becomes
+  // "A; B"), to Info and XMP alike, so the read-back below compares like
+  // with like.
+  const edits = Object.fromEntries(Object.entries(options.edits)
+    .map(([field, value]) => [field, normalizeDocumentFieldValue(field, value)]));
+  let editedXmp = null;
+  if (xmp) {
+    try {
+      editedXmp = editXmpDocumentFields(xmp.text, edits, {
+        modifiedAt: modifiedAt.toISOString(),
+        instanceId: `uuid:${randomUUID()}`,
+      });
+    } catch (error) {
+      if (error instanceof XmpUnsupported) {
+        throw new Error(
+          `${error.message} PDF Tools will not change Info alone and leave the two records disagreeing, so nothing was changed. (${error.reason})`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  const changes = [];
+  for (const [field, value] of Object.entries(edits)) {
+    const before = readInfoField(document, field);
+    if (value === null) {
+      const info = document.getInfoDict();
+      info.delete(PDFName.of(INFO_ACCESSORS[field].key));
+    } else {
+      INFO_ACCESSORS[field].write(document, value);
+    }
+    changes.push({ field, before, after: value });
+  }
+  document.setModificationDate(modifiedAt);
+  if (editedXmp !== null) {
+    // pdf-lib turns a string into one byte per UTF-16 code unit, which is not
+    // UTF-8: the packet's BOM and any non-ASCII value would be corrupted.
+    const stream = document.context.stream(new TextEncoder().encode(editedXmp), { Type: "Metadata", Subtype: "XML" });
+    document.context.assign(xmp.ref, stream);
+  }
+
+  let bytes;
+  let saveSummary;
+  let verified;
+  if (incremental) {
+    const saved = await savePdfDocumentIncrementally(document, sourceBytes, snapshot, {
+      expectedPageCount,
+      expectedPageRotations,
+    });
+    bytes = saved.bytes;
+    saveSummary = saved.summary;
+    verified = saved.verified;
+  } else {
+    bytes = await savePdfDocumentSafely(document, { expectedPageCount, expectedPageRotations });
+    verified = await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: false }).catch(() => null);
+    saveSummary = { appended_objects: 0, original_bytes: sourceBytes.length, cross_reference: "rewritten" };
+  }
+  // Read the result back and hold it to what was asked, Info and XMP both.
+  // A mismatch is a failed check of this edit, not a resource limit, and is
+  // reported as one.
+  const notCarried = (record, field) => new Error(
+    `The edited PDF did not read back with the requested ${field} in its ${record}, so nothing was written. `
+    + "Info and XMP are unchanged.",
+  );
+  if (verified) {
+    for (const { field, after } of changes) {
+      if (readInfoField(verified, field) !== after) throw notCarried("Info dictionary", field);
+    }
+    if (editedXmp !== null) {
+      const readBack = readXmpDocumentFields(readCatalogXmp(verified).text);
+      for (const { field, after } of changes) {
+        const observed = readBack[field];
+        const ok = after === null ? observed.state === "absent" : observed.state === "value" && observed.value === after;
+        if (!ok) throw notCarried("XMP packet", field);
+      }
+    }
+  }
+  return {
+    bytes,
+    result: {
+      save_mode: incremental ? "incremental" : "rewrite",
+      appended_objects: saveSummary.appended_objects,
+      changes,
+      xmp: editedXmp !== null ? "updated" : "absent",
+      signatures_kept: incremental ? signatures.signed.length : 0,
+      form_info: formInfo(document),
+    },
+  };
+}
+
+/**
+ * Bookmarks that land in none of the split parts. A part legitimately holds
+ * only its own pages' bookmarks, so per-part drops are expected; a bookmark
+ * whose page is in no part at all is the loss the reply must name.
+ */
+function splitOutlineLoss(sourceOutline, ranges) {
+  const covered = page => ranges.some(([start, end]) => page >= start - 1 && page <= end - 1);
+  const anchorKept = page => covered(page);
+  anchorKept.inNoPart = page => !covered(page);
+  const loss = writeCarriedOutline(
+    { context: null, catalog: null },
+    [{ outline: sourceOutline, targetPageFor: page => (covered(page) ? true : null), anchorKept }],
+    { dryRun: true },
+  );
+  return publicOutlineReport(loss);
 }
 
 async function stageOutputs(stageDirectory, outputBytes) {

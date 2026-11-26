@@ -243,7 +243,34 @@ const EXAMPLE_PDF = path.join(REPO_ROOT, "example-fw9.pdf");
 // 2026-10-20: version the optional tight-grid/caption repair as renderer 1.23.0.
 // 2026-10-20: private local password entry replaces public credential inputs.
 // 2026-10-21: optional table packets describe draft arrangements that require review.
-const TOOL_CONTRACT_SHA256 = "2239a74dcdb71387f855c49bb26bc01e52ca9a14e773be13a32d19d3af9ec2d4";
+// 2026-11-25: rebuilt outputs report what they did with the source bookmarks.
+// merge_pdfs, reorder_pdf_pages and apply_page_plan gain an `outline` report in
+// their output schemas, and split_pdf gains one per file plus one for the
+// whole split, and all four gain a `page_labels` status. Input schemas,
+// annotations, descriptions and the count of 64 are unchanged. Replaces 2239a74dcdb71387f855c49bb26bc01e52ca9a14e773be13a32d19d3af9ec2d4.
+// 2026-11-25: add set_pdf_metadata, which changes title, author, subject and
+// keywords in Info and XMP together and appends the change as an incremental
+// update by default. 65 tools; no existing tool's inputs, annotations or
+// descriptions change. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+// 2026-11-25: fill_pdf and fill_with_profile report save_mode and
+// signatures_kept, because a signed form is now filled by appending an
+// incremental update; their descriptions and bulk_fill_from_csv's say so.
+// Inputs and annotations unchanged. Replaces c97b8652634e316f85745d14c98e9e6a8cdbddc9ef6509ed9ce111b7dade66d9.
+// 2026-11-25: add_signature_field creates a real /Sig form field: new
+// optional field_name input, field_name and save_mode outputs, and a
+// description that says so. Replaces c69e7964bf355c3aa40b2e9b5ac5153560bf99944768cdea8db62e564e871f4e.
+// 2026-11-25: apply_text leaves Keywords alone unless the new
+// record_audit_in_keywords is true, is appended incrementally, and reports
+// save_mode and audit_in_keywords. Replaces 29d807da213b35fdc32bf15a2ce08fcfd3335aa88db5ecde75d419ca9141a127.
+// 2026-11-25: reorder_pdf_pages and apply_page_plan take an optional
+// page_labels ("positional" by default, or "follow_pages") and report
+// page_labels_changed. Replaces b5385eba19a20b4083b22a367fd60fd340e452fb7b638ccdd3ea83d2c16ba8c3.
+// 2026-11-25: the fill descriptions say a signed form's signed bytes are not
+// changed, rather than claiming the signatures verify, which nothing checks.
+// Inputs, outputs and annotations unchanged. Replaces bc056a750057bae630f7afe6538ba693246366264766402afb2470aef5a68aff.
+// 2026-11-25: set_pdf_metadata is not idempotent (each call appends a
+// revision), so idempotentHint is false. Replaces 6d6259aabe43bf7760c8ef1fe5a156dfcaab7aa2032b00f4e4b9b2d9043c1bf7.
+const TOOL_CONTRACT_SHA256 = "ecdc9b1be2eee776e2aaf40f8802674f1721593d5f3eae393abaf1218845c06a";
 
 const CLOSED_READ = Object.freeze({
   readOnlyHint: true,
@@ -310,6 +337,7 @@ const TOOL_EFFECT_ANNOTATIONS = {
   list_pdfs: CLOSED_READ,
   read_pdf_fields: CLOSED_SESSION_ACTION,
   fill_pdf: CLOSED_IDEMPOTENT_OVERWRITE,
+  set_pdf_metadata: CLOSED_NON_IDEMPOTENT_OVERWRITE,
   bulk_fill_from_csv: CLOSED_IDEMPOTENT_OVERWRITE,
   compare_pdfs: CLOSED_READ,
   inspect_pdf_accessibility: CLOSED_READ,
@@ -519,6 +547,11 @@ describe("MCPB static declarations", () => {
       "helpers.js",
       "host-pdf-import.js",
       "output-schemas.js",
+      "outline-carry.js",
+      "page-label-carry.js",
+      "incremental-update.js",
+      "signature-state.js",
+      "xmp-metadata.js",
       "layout-extraction.js",
       "type3-cm-reference.js",
       "type3-cm-pk-reference.js",
@@ -554,7 +587,7 @@ describe("MCPB static declarations", () => {
     }
     // A new server file must be added to the list above, not silently shipped
     // in the mirror unchecked. Two already had been.
-    expect(mirrored).toHaveLength(39);
+    expect(mirrored).toHaveLength(44);
     for (const relativePath of [
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/SKILL.md",
       "plugins/pdf-tools-workflow/skills/pdf-tools-workflow/agents/openai.yaml",
@@ -649,7 +682,7 @@ describe.each(RUNTIMES)("$name runtime discovery", runtime => {
   });
 
   it("exposes the same uniquely named, fully annotated tool contract", () => {
-    expect(tools).toHaveLength(64);
+    expect(tools).toHaveLength(65);
     expect(new Set(names(tools)).size).toBe(tools.length);
     expect(sorted(names(tools))).toEqual(sorted(names(SOURCE_MANIFEST.tools)));
     expect(createHash("sha256").update(JSON.stringify(tools)).digest("hex"))

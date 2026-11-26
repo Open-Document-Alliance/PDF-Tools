@@ -23,6 +23,8 @@ import {
   validateSigningIntent,
 } from "../server/helpers.js";
 import { fetchPdfBytes, FetchRefused, MAX_PDF_BYTES } from "./fetch-guard.mjs";
+import { DecodeBudgetExceeded, decodeLimitReached, isAllocationFailure, MEMORY_LIMIT_CODE, MEMORY_LIMIT_MESSAGE, withCallBudget } from "./decode-budget.mjs";
+import { loadBoundedPdfjs } from "./pdfjs-bounded.mjs";
 import { createDocumentTools } from "./document-tools.mjs";
 import { hostedSkills, skillParams, SKILLS_EXTENSION } from "./skills.mjs";
 import { declaredFiles, FILES_EXTENSION, UPLOAD_PROPERTY } from "./files.mjs";
@@ -277,7 +279,7 @@ const TOOLS = [
     async handler(args) {
       const bytes = await resolveBytes(args);
       const document = await loadDocument(bytes);
-      const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      const pdfjsLib = await loadBoundedPdfjs();
       const zones = await detectSignatureZones({
         pdfDoc: document,
         pdfBytes: bytes,
@@ -394,7 +396,18 @@ export const INSTRUCTIONS =
  * errors. Exported so tests exercise exactly what the transport reaches, rather
  * than reaching into the server's private handler table.
  */
-export async function callTool(name, args = {}, context = {}) {
+const DECODE_LIMIT_CODE = "DOCUMENT_TOO_LARGE_DECODED";
+const DECODE_LIMIT_MESSAGE = "This document's decompressed content exceeds what the hosted service processes. Use local PDF Tools for it: https://github.com/Open-Document-Alliance/PDF-Tools";
+
+/** A failed allocation in a send can follow the request, so it never reads as a clean memory stop. */
+const OUTCOME_SENSITIVE_TOOL_NAMES = new Set(["send_lumin_request"]);
+
+/** Each call gets its own decode budget, including overlapping in-process calls. */
+export function callTool(name, args = {}, context = {}) {
+  return withCallBudget(() => callToolWithinBudget(name, args, context));
+}
+
+async function callToolWithinBudget(name, args, context) {
   const tool = TOOLS.find((candidate) => candidate.name === name)
     ?? (context?.lumin ? SIGNING_TOOLS.find((candidate) => candidate.name === name) : undefined);
   if (!tool) return refusal("UNKNOWN_TOOL", `There is no tool named ${name}.`);
@@ -403,6 +416,7 @@ export async function callTool(name, args = {}, context = {}) {
       return refusal("INVALID_OUTPUT_MODE", "Choose download for the result card or inline for a machine-readable base64 response.");
     }
     const result = await tool.handler(args, context);
+    if (decodeLimitReached()) return refusal(DECODE_LIMIT_CODE, DECODE_LIMIT_MESSAGE);
     const output = result.structuredContent?.pdf_base64;
     if (output && Buffer.byteLength(output, "base64") > MAX_INLINE_PDF_BYTES) {
       return refusal("OUTPUT_TOO_LARGE", "The output exceeds the 3 MB inline transfer limit. Request fewer pages or use the local PDF Tools edition.");
@@ -421,6 +435,12 @@ export async function callTool(name, args = {}, context = {}) {
     }
     return result;
   } catch (error) {
+    if (error instanceof DecodeBudgetExceeded || decodeLimitReached()) {
+      return refusal(DECODE_LIMIT_CODE, DECODE_LIMIT_MESSAGE);
+    }
+    if (isAllocationFailure(error) && !OUTCOME_SENSITIVE_TOOL_NAMES.has(name)) {
+      return refusal(MEMORY_LIMIT_CODE, MEMORY_LIMIT_MESSAGE);
+    }
     if (error instanceof ToolRefusal || error instanceof FetchRefused) {
       return refusal(error.code, error.message);
     }

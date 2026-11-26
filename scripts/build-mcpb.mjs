@@ -85,6 +85,7 @@ export const SERVER_FILES = [
   "extraction-review.js",
   "helpers.js",
   "host-pdf-import.js",
+  "incremental-update.js",
   "index.js",
   "layout-extraction.js",
   "local-ocr-jobs.js",
@@ -97,7 +98,9 @@ export const SERVER_FILES = [
   "lumin-signing-tools.js",
   "markdown-conversion.js",
   "markdown-output-transaction.js",
+  "outline-carry.js",
   "output-schemas.js",
+  "page-label-carry.js",
   "pdf-comparison.js",
   "pdf-lib-rss-monitor.js",
   "pdf-lib-subprocess.js",
@@ -109,6 +112,7 @@ export const SERVER_FILES = [
   "qpdf-decrypt-worker.js",
   "qpdf-decrypt.js",
   "resource-uri.js",
+  "signature-state.js",
   "skill-files.js",
   "skills.js",
   "stderr-suppression.js",
@@ -116,6 +120,7 @@ export const SERVER_FILES = [
   "type3-cm-pk-reference.js",
   "type3-cm-reference.js",
   "verified-extraction-tools.js",
+  "xmp-metadata.js",
 ];
 export { VERIFIED_EXTRACTION_RUNTIME_FILES } from "./mcpb-packaging-policy.mjs";
 const FIRST_PARTY_TEXT_FILES = [
@@ -251,7 +256,9 @@ function copyRegularFile(sourceRelativePath, destinationRelativePath, stagingDir
   copyFileSync(source, destination);
 }
 
-function copyRuntimeSource(stagingDir) {
+// Exported for the Claude plugin builder, which ships this exact source set
+// without node_modules or the MCPB manifest, so the two cannot drift.
+export function copyRuntimeSource(stagingDir, { includeMcpbManifest = true } = {}) {
   scanFirstPartyInputs();
   for (const filename of SKILL_FILES) copyRegularFile(filename, filename, stagingDir);
   for (const filename of SERVER_FILES) copyRegularFile(`server/${filename}`, `server/${filename}`, stagingDir);
@@ -284,7 +291,7 @@ function copyRuntimeSource(stagingDir) {
     dependencies: packageJson.dependencies,
   };
   writeFileSync(path.join(stagingDir, "package.json"), `${JSON.stringify(runtimePackageJson, null, 2)}\n`);
-  copyRegularFile("manifest.mcpb.json", "manifest.json", stagingDir);
+  if (includeMcpbManifest) copyRegularFile("manifest.mcpb.json", "manifest.json", stagingDir);
 }
 
 export function verifyLockedTooling(repoRoot = REPO_ROOT) {

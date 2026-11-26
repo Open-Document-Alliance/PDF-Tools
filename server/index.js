@@ -604,6 +604,49 @@ import {
   PDF_LIB_ENCRYPTED_MESSAGE,
   PDF_LIB_GEOMETRY_PASSWORD_DESCRIPTION,
 } from "./helpers.js";
+import { describeOutlineReport } from "./outline-carry.js";
+
+// How a fill was saved, when it matters: a signed form is filled by appending.
+function fillSaveNotice(result) {
+  if (result.save_mode !== "incremental") return "";
+  return `\nThe form was signed, so the fill was appended as an incremental update: the ${result.signatures_kept} `
+    + "existing signature(s) still cover their original, unchanged bytes. A validator will report that the "
+    + "document was changed after signing (a form fill, which the signature permits).";
+}
+
+// One reply line about bookmarks, so a rebuilt output never loses one silently.
+function outlineNotice(report) {
+  const line = describeOutlineReport(report);
+  return line ? `\n${line}` : "";
+}
+
+// Page labels are only worth a line when they could not be carried, or when
+// keeping the numbering by position changed what a moved page is labelled.
+function pageLabelNotice(status, changed = 0, example = null) {
+  if (status === "not_carried") {
+    return "\nPage labels: NOT carried. The source's page-label tree could not be read safely, so the output uses plain page numbers.";
+  }
+  if (status === "carried" && changed > 0 && example) {
+    return `\nPage labels keep their positions, so the numbering stays sequential: ${changed} page(s) now show a different label `
+      + `than in the source (source page ${example.source_page}, labelled "${example.before}", now shows "${example.after}"). `
+      + "Pass page_labels \"follow_pages\" to keep each page's own label instead.";
+  }
+  return "";
+}
+
+const PAGE_LABELS_INPUT_SCHEMA = Object.freeze({
+  type: "string",
+  enum: ["positional", "follow_pages"],
+  description: "How page labels (the i, ii, 1, 2 numbering a viewer shows) are carried. positional (default) keeps the document's numbering scheme by position, so it stays sequential; follow_pages keeps each page's own label wherever it moves, for labels that name pages (such as \"Cover\").",
+});
+
+function normalizePageLabelsOption(value) {
+  if (value === undefined || value === null) return "positional";
+  if (value !== "positional" && value !== "follow_pages") {
+    throw new Error("page_labels must be \"positional\" or \"follow_pages\".");
+  }
+  return value;
+}
 
 // Helper: validate profile name to prevent path traversal
 function validateProfileName(name) {
@@ -976,7 +1019,15 @@ function normalizeAddSignatureFieldArguments(value) {
     }
     label = args.label || "Sign here";
   }
-  return { ...normalized, label };
+  let fieldName = null;
+  if (args.field_name !== undefined && args.field_name !== null) {
+    if (typeof args.field_name !== "string" || args.field_name.length < 1 || args.field_name.length > 120
+        || /[.\u0000-\u001f]/.test(args.field_name)) {
+      throw new Error("'field_name' must be 1-120 characters with no period or control characters.");
+    }
+    fieldName = args.field_name;
+  }
+  return { ...normalized, label, field_name: fieldName };
 }
 
 function normalizeApplyTextArguments(value) {
@@ -988,11 +1039,13 @@ function normalizeApplyTextArguments(value) {
     throw new Error("'font_style' must be 'normal' or 'italic'.");
   }
   const legacyOverwrite = optionalBooleanArgument(args.overwrite, "overwrite");
+  const recordAudit = optionalBooleanArgument(args.record_audit_in_keywords, "record_audit_in_keywords") === true;
   return {
     ...normalized,
     text,
     font_style: fontStyle,
     legacy_overwrite: legacyOverwrite,
+    record_audit_in_keywords: recordAudit,
   };
 }
 
@@ -3511,7 +3564,7 @@ async function listTools(request) {
       },
       {
         name: "fill_pdf",
-        description: "Fill a PDF form with provided data and save it. output_path may be the same as pdf_path for in-place editing; the original is backed up on the first same-path mutation. All paths must be absolute paths on the user's local machine, NOT Claude container paths (/mnt/...).",
+        description: "Fill a PDF form with provided data and save it. output_path may be the same as pdf_path for in-place editing; the original is backed up on the first same-path mutation. If the PDF is already signed, the fill is appended as an incremental update so the bytes existing signatures cover are not changed; a field a signature locks, a signature field itself, and a certified PDF that permits no changes are refused. All paths must be absolute paths on the user's local machine, NOT Claude container paths (/mnt/...).",
         inputSchema: {
           type: "object",
           properties: {
@@ -3548,8 +3601,59 @@ async function listTools(request) {
         }
       },
       {
+        name: "set_pdf_metadata",
+        description: "Change a PDF's document title, author, subject or keywords. Updates the Info dictionary and the XMP metadata together, so viewers that read either see the same values. By default the change is appended as an incremental update: the original bytes, including any existing signature, stay exactly as they were, and the earlier values remain in the file's revision history (use save_mode \"rewrite\" to drop that history; it is refused for signed files). output_path may be the same as pdf_path to update the file in place; the original is backed up on the first same-path change. Refuses certified (DocMDP) PDFs and XMP it cannot edit safely, changing nothing. All paths must be absolute paths on the user's local machine.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            pdf_path: {
+              type: "string",
+              description: "Path to the source PDF file"
+            },
+            output_path: {
+              type: "string",
+              description: "Where to save the result; may equal pdf_path to update in place"
+            },
+            title: {
+              type: ["string", "null"],
+              description: "New document title, or null to remove it. Omit to leave it unchanged."
+            },
+            author: {
+              type: ["string", "null"],
+              description: "New author, or null to remove it. Omit to leave it unchanged."
+            },
+            subject: {
+              type: ["string", "null"],
+              description: "New subject (description), or null to remove it. Omit to leave it unchanged."
+            },
+            keywords: {
+              type: ["string", "null"],
+              description: "New keywords as one string, or null to remove them. Omit to leave them unchanged."
+            },
+            save_mode: {
+              type: "string",
+              enum: ["incremental", "rewrite"],
+              description: "incremental (default) appends the change and keeps the original bytes and any signatures intact; rewrite writes a new file without the earlier revision"
+            },
+            password: {
+              type: "string",
+              description: PDF_REPROTECTING_PASSWORD_DESCRIPTION,
+            },
+            expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
+          },
+          required: ["pdf_path", "output_path"]
+        },
+        annotations: {
+          title: "Set PDF Metadata",
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: false,
+          openWorldHint: false
+        }
+      },
+      {
         name: "bulk_fill_from_csv",
-        description: "Fill multiple PDFs using data from a CSV file. Output filenames must be unique. New outputs need no identity; every existing destination requires one exact entry in expected_output_identities. Any missing, stale, unrelated, or duplicate identity or any row failure aborts the whole batch.",
+        description: "Fill multiple PDFs using data from a CSV file. A signed template is filled by appending an incremental update to each copy, so the bytes its signature covers are not changed. Output filenames must be unique. New outputs need no identity; every existing destination requires one exact entry in expected_output_identities. Any missing, stale, unrelated, or duplicate identity or any row failure aborts the whole batch.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3652,7 +3756,7 @@ async function listTools(request) {
       },
       {
         name: "fill_with_profile",
-        description: "Fill a PDF using a saved profile",
+        description: "Fill a PDF using a saved profile. A signed PDF is filled by appending an incremental update, so the bytes its signatures cover are not changed.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4359,6 +4463,7 @@ async function listTools(request) {
               type: "string",
               description: PDF_REPROTECTING_PASSWORD_DESCRIPTION,
             },
+            page_labels: PAGE_LABELS_INPUT_SCHEMA,
             expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
           },
           required: ["input_path", "output_path", "page_order"]
@@ -4503,6 +4608,7 @@ async function listTools(request) {
               type: "boolean",
               description: "Proceed even if the PDF is a DYNAMIC XFA form, whose pages are built from the XFA layer that saving drops (default: false). Static XFA needs no flag: its values live in the AcroForm and survive, and the result says the layer was removed."
             },
+            page_labels: PAGE_LABELS_INPUT_SCHEMA,
             expected_output_identity: EXPECTED_OUTPUT_IDENTITY_INPUT_SCHEMA
           },
           required: ["input_path", "output_path", "plan"]
@@ -4630,7 +4736,7 @@ async function listTools(request) {
       },
       {
         name: "add_signature_field",
-        description: "Draw a visible 'Sign here' placeholder box on a PDF page and save as a new file. Marks where a signature should go — does NOT sign the document. Useful when preparing a PDF to send to another party for signing. Coordinates are in points (72pt = 1 inch), TOP-LEFT origin: x=distance from left, y=distance from top.",
+        description: "Add an unsigned signature form field (/Sig, with a widget) on a PDF page, drawn as a visible 'Sign here' box, and save it. A signing application such as Acrobat or Lumin Sign can then sign that field. It does NOT sign the document. Useful when preparing a PDF to send to another party for signing. Coordinates are in points (72pt = 1 inch), TOP-LEFT origin: x=distance from left, y=distance from top.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4642,6 +4748,7 @@ async function listTools(request) {
             width: { type: "number", description: "Width of the signature box, in points (e.g. 150 for a typical signature line)" },
             height: { type: "number", description: "Height of the signature box, in points (e.g. 36 for a typical signature line)" },
             label: { type: "string", description: "Text shown inside the box (default: 'Sign here')" },
+            field_name: { type: "string", description: "Name of the new signature form field (default: the first free of Signature, Signature2, ...). No periods." },
             allow_resign: {
               type: "boolean",
               description: "Proceed even if the PDF already contains cryptographic signature fields (default: false). Warning: saving will invalidate any existing signatures."
@@ -4784,7 +4891,7 @@ async function listTools(request) {
       },
       {
         name: "apply_text",
-        description: "Stamp a plain text string at a location on a PDF, saving the result as a new file. Use this for date zones (stamp today's date), or any other \"put these characters here\" operation that isn't a signature. NO user_intent_statement required — text is not a signature. Coordinates use TOP-LEFT origin in points, same as apply_signature. Writes a one-line audit entry to the PDF's Keywords metadata.",
+        description: "Stamp a plain text string at a location on a PDF, saving the result as a new file. Use this for date zones (stamp today's date), or any other \"put these characters here\" operation that isn't a signature. NO user_intent_statement required — text is not a signature. Coordinates use TOP-LEFT origin in points, same as apply_signature. Leaves the document's Keywords alone unless record_audit_in_keywords is true, and is appended as an incremental update when the PDF is not encrypted.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4797,6 +4904,7 @@ async function listTools(request) {
             height: { type: "number", description: "Height in points" },
             text: { type: "string", description: "Text to stamp (max 200 chars)" },
             font_style: { type: "string", enum: ["normal", "italic"], description: "Font style (default: normal)" },
+            record_audit_in_keywords: { type: "boolean", description: "Also add a one-line audit entry to the document's Keywords metadata (default: false; Keywords are left unchanged)" },
             allow_resign: { type: "boolean", description: "Proceed even if the PDF has existing cryptographic signatures (default: false — saving would invalidate them)" },
             force_xfa: { type: "boolean", description: "Proceed even if the PDF uses XFA forms (default: false — the XFA layer will be stripped)" },
             overwrite: {
@@ -5124,7 +5232,7 @@ async function handleToolCall(request) {
           inputRecoveryBinding,
         } = recoveredInput;
         assertXfaMutationAllowed(rawPdfBytes, { forceXfa: force_xfa });
-        const { payload, backupPath, filledFields, errors } = await runPdfLibMutation({
+        const { payload, backupPath, filledFields, errors, saveNotice } = await runPdfLibMutation({
           operation: "fill_pdf",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -5142,13 +5250,19 @@ async function handleToolCall(request) {
             expectedInputSha256: sha256Bytes(rawPdfBytes),
             expectedOutputIdentity: normalizeExpectedOutputIdentity(expected_output_identity),
             inputRecoveryBinding,
-            extraPayload: { filled_fields: filledFields, fill_errors: errors },
+            extraPayload: {
+              filled_fields: filledFields,
+              fill_errors: errors,
+              save_mode: result.save_mode,
+              signatures_kept: result.signatures_kept,
+            },
           });
-          return { ...committed, filledFields, errors };
+          return { ...committed, filledFields, errors, saveNotice: fillSaveNotice(result) };
         });
         
         let message = `PDF filled successfully and saved to: ${output_path}\n`;
         message += `Fields filled: ${filledFields.length}`;
+        message += saveNotice;
         if (backupPath) {
           message += `\nOriginal backed up to: ${backupPath}`;
         }
@@ -5161,6 +5275,84 @@ async function handleToolCall(request) {
             type: "text",
             text: message
           }],
+          structuredContent: payload,
+        };
+      }
+
+      case "set_pdf_metadata": {
+        const {
+          pdf_path,
+          output_path,
+          save_mode = "incremental",
+          password,
+          expected_output_identity,
+        } = args;
+        const edits = {};
+        for (const field of ["title", "author", "subject", "keywords"]) {
+          if (!Object.hasOwn(args, field)) continue;
+          const value = args[field];
+          if (value !== null && typeof value !== "string") {
+            throw new Error(`${field} must be a string, or null to remove it.`);
+          }
+          if (value !== null && /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) {
+            throw new Error(`${field} contains a control character, which document metadata cannot carry.`);
+          }
+          edits[field] = value;
+        }
+        if (Object.keys(edits).length === 0) {
+          throw new Error("Name at least one of title, author, subject or keywords to change.");
+        }
+        if (!["incremental", "rewrite"].includes(save_mode)) {
+          throw new Error("save_mode must be \"incremental\" or \"rewrite\".");
+        }
+        const resolvedPdfPath = resolvePath(pdf_path);
+        const resolvedOutputPath = resolvePath(output_path);
+        const recoveredInput = await readPdfInputWithRecovery(resolvedPdfPath);
+        const { pdfBytes: rawPdfBytes, inputRecoveryBinding } = recoveredInput;
+        const { payload, backupPath, workerResult } = await runPdfLibMutation({
+          operation: "set_pdf_metadata",
+          sources: [bindRecoveredMutationSource(recoveredInput)],
+          password,
+          options: { edits, save_mode, modification_at: new Date().toISOString() },
+        }, async ({ result, outputs, atomicTransition }) => {
+          const committed = await persistPdfMutation({
+            mutationOutput: { ...outputs[0], atomicTransition },
+            formInfo: result.form_info,
+            inputPath: resolvedPdfPath,
+            outputPath: resolvedOutputPath,
+            toolName: "set_pdf_metadata",
+            expectedInputSha256: sha256Bytes(rawPdfBytes),
+            expectedOutputIdentity: normalizeExpectedOutputIdentity(expected_output_identity),
+            inputRecoveryBinding,
+            extraPayload: {
+              save_mode: result.save_mode,
+              appended_objects: result.appended_objects,
+              changes: result.changes,
+              xmp: result.xmp,
+              signatures_kept: result.signatures_kept,
+            },
+          });
+          return { ...committed, workerResult: result };
+        });
+        const describe = value => (value === null ? "(none)" : JSON.stringify(value));
+        const lines = [`Saved to: ${output_path}`];
+        for (const change of workerResult.changes) {
+          lines.push(`${change.field}: ${describe(change.before)} -> ${describe(change.after)}`);
+        }
+        lines.push(workerResult.xmp === "updated"
+          ? "Info and XMP metadata were both updated."
+          : "The PDF has no XMP metadata; the Info dictionary was updated.");
+        if (workerResult.save_mode === "incremental") {
+          lines.push(`Appended as an incremental update (${workerResult.appended_objects} object(s)); the original bytes are unchanged, and the previous values remain in the file's revision history.`);
+          if (workerResult.signatures_kept > 0) {
+            lines.push(`${workerResult.signatures_kept} existing signature(s) still cover their original bytes; a validator will report that the document changed after signing.`);
+          }
+        } else {
+          lines.push("The file was rewritten; it does not keep the earlier revision.");
+        }
+        if (backupPath) lines.push(`Original backed up to: ${backupPath}`);
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
           structuredContent: payload,
         };
       }
@@ -5226,6 +5418,7 @@ async function handleToolCall(request) {
           pendingOutputs,
           expectedOutputIdentities,
         );
+        let bulkSaveMode = "rewrite";
         const results = await runPdfLibMutation({
           operation: "bulk_fill_from_csv",
           sources: [bindRecoveredMutationSource(recoveredInput)],
@@ -5236,6 +5429,7 @@ async function handleToolCall(request) {
           if (outputs.length !== pendingOutputs.length || result.rows.length !== pendingOutputs.length) {
             throw new Error("Bulk fill worker returned an incomplete batch.");
           }
+          bulkSaveMode = result.save_mode;
           if (pendingOutputs.length === 0) return [];
           const atomicEntries = pendingOutputs.map((entry, index) => ({
             ...entry,
@@ -5258,6 +5452,9 @@ async function handleToolCall(request) {
           }));
         });
 
+        const bulkSaveNotice = bulkSaveMode === "incremental"
+          ? "\nThe template was signed, so each fill was appended as an incremental update; in every output its signature still covers the template's original, unchanged bytes."
+          : "";
         const resultLines = results.map(result => {
           const marker = result.status === "error" ? "✗" : result.status === "warning" ? "!" : "✓";
           const suffix = result.errors.length > 0 ? ` (${result.errors.length} warnings/errors)` : "";
@@ -5267,7 +5464,7 @@ async function handleToolCall(request) {
         return {
           content: [{
             type: "text",
-            text: `Bulk fill complete!\n${resultLines.join('\n')}`
+            text: `Bulk fill complete!\n${resultLines.join('\n')}${bulkSaveNotice}`
           }],
           structuredContent: {
             row_count: records.length,
@@ -5344,7 +5541,7 @@ async function handleToolCall(request) {
         const mergedData = { ...profileData, ...additional_data };
         const recoveredInput = await readPdfInputWithRecovery(resolvedPdfPath);
         const { pdfBytes: rawPdfBytes, inputRecoveryBinding } = recoveredInput;
-        const { payload, backupPath, filledFields } = await runPdfLibMutation({
+        const { payload, backupPath, filledFields, saveNotice } = await runPdfLibMutation({
           operation: "fill_with_profile",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -5363,9 +5560,11 @@ async function handleToolCall(request) {
               profile_name,
               filled_fields: result.filledFields,
               fill_errors: result.errors,
+              save_mode: result.save_mode,
+              signatures_kept: result.signatures_kept,
             },
           });
-          return { ...committed, filledFields: result.filledFields };
+          return { ...committed, filledFields: result.filledFields, saveNotice: fillSaveNotice(result) };
         });
         
         return {
@@ -5373,6 +5572,7 @@ async function handleToolCall(request) {
             type: "text",
             text:
               `PDF filled with profile '${profile_name}' and saved to: ${output_path}\nFields filled: ${filledFields.length}` +
+              saveNotice +
               (backupPath ? `\nOriginal backed up to: ${backupPath}` : "")
           }],
           structuredContent: payload,
@@ -6818,10 +7018,12 @@ async function handleToolCall(request) {
           ...workerResult.form_info,
           total_pages: workerResult.total_pages,
           metadata_fields_omitted: workerResult.omitted_fields,
+          outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
         });
-        const metadataNotice = workerResult.omitted_fields.length > 0
+        const metadataNotice = (workerResult.omitted_fields.length > 0
           ? `\nOmitted unverified metadata: ${workerResult.omitted_fields.join(", ")}`
-          : "";
+          : "") + outlineNotice(workerResult.outline) + pageLabelNotice(workerResult.page_labels);
 
         return {
           content: [{
@@ -6885,21 +7087,36 @@ async function handleToolCall(request) {
               start_page: entry.start,
               end_page: entry.end,
               page_count: entry.end - entry.start + 1,
+              outline: result.outlines[index],
             })),
+            outline: result.outline,
+            page_labels: result.page_labels,
           };
         });
-        const results = split.files.map(file => `${file.filename} (${file.page_count} pages)`);
+        const results = split.files.map(file => {
+          const bookmarks = file.outline.status === "absent" ? "" : `, ${file.outline.carried_entries} bookmark(s)`;
+          return `${file.filename} (${file.page_count} pages${bookmarks})`;
+        });
+        // Per part, a bookmark for another part's page is expected to be
+        // absent. Only a bookmark no part keeps is a loss worth naming.
+        const splitOutlineNotice = (split.outline.status === "absent"
+          ? ""
+          : split.outline.status === "carried"
+            ? `\nBookmarks: each part keeps the bookmarks for its own pages (${split.outline.source_entries} in the source, none lost).`
+            : outlineNotice(split.outline)) + pageLabelNotice(split.page_labels);
 
         return {
           content: [{
             type: "text",
-            text: `Split ${path.basename(resolvedInputPath)} into ${results.length} files:\n${results.join("\n")}\nSaved to: ${output_directory}`
+            text: `Split ${path.basename(resolvedInputPath)} into ${results.length} files:\n${results.join("\n")}\nSaved to: ${output_directory}${splitOutlineNotice}`
           }],
           structuredContent: {
             input_path: resolvedInputPath,
             output_directory: resolvedOutputDir,
             file_count: split.files.length,
             files: split.files,
+            outline: split.outline,
+            page_labels: split.page_labels,
           },
         };
       }
@@ -6971,7 +7188,9 @@ async function handleToolCall(request) {
           page_order,
           password,
           expected_output_identity,
+          page_labels,
         } = args;
+        const pageLabelsMode = normalizePageLabelsOption(page_labels);
         if (!page_order || page_order.length === 0) {
           throw new Error("page_order must be a non-empty array of page numbers.");
         }
@@ -6989,7 +7208,7 @@ async function handleToolCall(request) {
           operation: "reorder_pdf_pages",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
-          options: { page_order, rotations: {} },
+          options: { page_order, rotations: {}, page_labels: pageLabelsMode },
         }, async ({ result, outputs, atomicTransition }) => {
           const committedOutput = await writePdfOutputAtomic(resolvedOutputPath, null, {
             produceBytes: outputs[0].readBytes,
@@ -7007,12 +7226,15 @@ async function handleToolCall(request) {
         const payload = await buildNewOutputDocumentPayload(committedOutputPath, "reorder_pdf_pages", 1, {
           ...workerResult.form_info,
           page_order,
+          outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
+          page_labels_changed: workerResult.page_labels_changed,
         });
 
         return {
           content: [{
             type: "text",
-            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB`
+            text: `Reordered ${workerResult.total_pages} pages and saved to: ${output_path}\nNew order: [${page_order.join(", ")}]\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB${outlineNotice(workerResult.outline)}${pageLabelNotice(workerResult.page_labels, workerResult.page_labels_changed, workerResult.page_label_example)}`
           }],
           structuredContent: payload,
           _meta: {
@@ -7192,7 +7414,9 @@ async function handleToolCall(request) {
           password,
           force_xfa = false,
           expected_output_identity,
+          page_labels,
         } = args;
+        const pageLabelsMode = normalizePageLabelsOption(page_labels);
         const { page_order, rotations = {} } = plan;
 
         if (!page_order || page_order.length === 0) {
@@ -7231,7 +7455,7 @@ async function handleToolCall(request) {
             sources: [bindRecoveredMutationSource(recoveredInput)],
             password,
             force_xfa: force_xfa === true,
-            options: { page_order, rotations },
+            options: { page_order, rotations, page_labels: pageLabelsMode },
           }, async ({ result, outputs, atomicTransition }) => {
             const committedOutput = await writePdfOutputAtomic(resolvedOutputPath, null, {
               produceBytes: outputs[0].readBytes,
@@ -7258,8 +7482,13 @@ async function handleToolCall(request) {
         let summary = `Saved ${page_order.length}-page PDF to: ${output_path}\nFile size: ${(outputStats.size / 1024).toFixed(0)} KB`;
         if (deletedCount > 0) summary += `\n${deletedCount} page(s) removed`;
         if (rotatedCount > 0) summary += `\n${rotatedCount} page(s) rotated`;
+        summary += outlineNotice(workerResult.outline)
+          + pageLabelNotice(workerResult.page_labels, workerResult.page_labels_changed, workerResult.page_label_example);
         const payload = await buildNewOutputDocumentPayload(committedOutputPath, "apply_page_plan", 1, {
           ...workerResult.form_info,
+          outline: workerResult.outline,
+          page_labels: workerResult.page_labels,
+          page_labels_changed: workerResult.page_labels_changed,
           deleted_pages: deletedCount,
           rotated_pages: rotatedCount,
           page_order,
@@ -7558,7 +7787,7 @@ async function handleToolCall(request) {
 
       case "add_signature_field": {
         const {
-          pdf_path, output_path, page, x, y, width, height, label,
+          pdf_path, output_path, page, x, y, width, height, label, field_name,
           allow_resign, password, force_xfa, expected_output_identity,
         } = normalizeAddSignatureFieldArguments(args);
         const resolvedOutput = resolvePath(output_path);
@@ -7566,7 +7795,7 @@ async function handleToolCall(request) {
         const recoveredInput = await readPdfInputWithRecovery(pdf_path);
         const { pdfBytes, inputRecoveryBinding } = recoveredInput;
         assertXfaMutationAllowed(pdfBytes, { forceXfa: force_xfa });
-        const { payload, backupPath } = await runPdfLibMutation({
+        const { payload, backupPath, fieldName, saveMode } = await runPdfLibMutation({
           operation: "add_signature_field",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -7574,8 +7803,10 @@ async function handleToolCall(request) {
           options: {
             placement: { page, x, y, width, height, label },
             allow_resign,
+            field_name,
           },
-        }, ({ result, outputs, atomicTransition }) => persistPdfMutation({
+        }, async ({ result, outputs, atomicTransition }) => ({
+          ...(await persistPdfMutation({
             mutationOutput: { ...outputs[0], atomicTransition },
             formInfo: result.form_info,
             inputPath: resolvedInput,
@@ -7585,21 +7816,27 @@ async function handleToolCall(request) {
             expectedOutputIdentity: expected_output_identity,
             inputRecoveryBinding,
             initialPage: page,
-          }));
+            extraPayload: { save_mode: result.save_mode },
+          })),
+          fieldName: result.field_name,
+          saveMode: result.save_mode,
+        }));
         return {
           content: [{
             type: "text",
             text:
-              `Added signature field to page ${page} at (${x}, ${y}) — ${width}x${height} pts\n` +
+              `Added signature field '${fieldName}' to page ${page} at (${x}, ${y}) — ${width}x${height} pts\n` +
               `Output: ${resolvedOutput}\n` +
               (backupPath ? `Original backed up to: ${backupPath}\n` : "") +
-              `The field is a visible placeholder; use apply_signature to stamp a signature there.`
+              `It is a real, unsigned signature form field with a visible "${label}" box, so a signing application (Acrobat, Lumin Sign) can sign it. It does not sign the document.` +
+              (saveMode === "incremental" ? "\nAppended as an incremental update; the original bytes are unchanged." : "")
           }],
           structuredContent: {
             ...payload,
             pdf_path: resolvedOutput,
             page, x, y, width, height,
             label,
+            field_name: fieldName,
           },
           _meta: {
             ui: { resourceUri: "ui://pdf-toolkit/viewer" },
@@ -7820,6 +8057,7 @@ async function handleToolCall(request) {
           password,
           expected_output_identity,
           legacy_overwrite,
+          record_audit_in_keywords,
         } = normalizeApplyTextArguments(args);
 
         const resolvedOutput = resolvePath(output_path);
@@ -7829,10 +8067,10 @@ async function handleToolCall(request) {
         const { pdfBytes, inputRecoveryBinding } = recoveredInput;
         assertXfaMutationAllowed(pdfBytes, { forceXfa: force_xfa });
 
-        // Short audit line so filling dates/initials shows up in Keywords.
+        // Short audit line, written to Keywords only when the caller asks.
         const modificationAt = new Date().toISOString();
         const auditLine = `stamped text via pdf-toolkit; text="${String(text).replace(/\s+/g, " ").slice(0, 80)}"; at=${modificationAt}; page=${page}`;
-        const { payload, backupPath } = await runPdfLibMutation({
+        const { payload, backupPath, saveMode, auditInKeywords } = await runPdfLibMutation({
           operation: "apply_text",
           sources: [bindRecoveredMutationSource(recoveredInput)],
           password,
@@ -7844,8 +8082,10 @@ async function handleToolCall(request) {
             audit_line: auditLine,
             modification_at: modificationAt,
             allow_resign,
+            record_audit_in_keywords,
           },
-        }, ({ result, outputs, atomicTransition }) => persistPdfMutation({
+        }, async ({ result, outputs, atomicTransition }) => ({
+          ...(await persistPdfMutation({
             mutationOutput: { ...outputs[0], atomicTransition },
             formInfo: result.form_info,
             inputPath: resolvedInput,
@@ -7856,7 +8096,11 @@ async function handleToolCall(request) {
             legacyOverwrite: legacy_overwrite,
             inputRecoveryBinding,
             initialPage: page,
-          }));
+            extraPayload: { save_mode: result.save_mode, audit_in_keywords: result.audit_in_keywords },
+          })),
+          saveMode: result.save_mode,
+          auditInKeywords: result.audit_in_keywords,
+        }));
 
         return {
           content: [{
@@ -7864,7 +8108,9 @@ async function handleToolCall(request) {
             text:
               `Stamped text "${text}" on page ${page} at (${x}, ${y}).\n` +
               (backupPath ? `Original backed up to: ${backupPath}\n` : "") +
-              `Output: ${resolvedOutput}`
+              `Output: ${resolvedOutput}` +
+              (saveMode === "incremental" ? "\nAppended as an incremental update; the original bytes are unchanged." : "") +
+              (auditInKeywords ? "\nAn audit line was added to the document's Keywords, as requested." : "")
           }],
           structuredContent: {
             ...payload,
@@ -8251,7 +8497,7 @@ function buildPdfToolsServer({ era }) {
   const server = new Server(
     {
       name: "pdf-tools",
-      version: "0.14.0",
+      version: "0.15.0",
     },
     {
       capabilities: {

@@ -491,7 +491,7 @@ mcp__<display_name, spaces underscored, non [A-Za-z0-9_-] stripped>__<tool_name>
 Identifiers over **64 characters** fail in the host. This shipped as a real
 defect (issue #44): the original benefit-led directory title
 `PDF Tools - Fill, Sign, Merge, Split, Extract` normalizes to 41 characters and
-pushes 32 of the current 61 packed tool identifiers past the ceiling.
+pushes 32 of the current 62 packed tool identifiers past the ceiling.
 
 The naming strategy is therefore **dual**:
 

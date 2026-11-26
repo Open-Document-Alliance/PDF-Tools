@@ -1,0 +1,10 @@
+{
+  "generator": "scripts/make-signed-form-fixture.mjs",
+  "description": "Synthetic AcroForm with an approval signature from a throwaway self-signed key generated and discarded at build time. Not trusted; contains no real data.",
+  "sha256": "eef3540266998b911acf13a6e8408c457ebd87bfa799d9f1bbcd33f176980143",
+  "fields": {
+    "full_name": "",
+    "company": "Example Widgets LLC",
+    "approver_signature": "signed"
+  }
+}
