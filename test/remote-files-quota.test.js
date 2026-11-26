@@ -5,7 +5,7 @@ import { PDFDocument } from "pdf-lib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createMemoryFileStore } from "../remote/file-store.mjs";
-import { createIssuanceQuota, issuanceQuotaFromEnv, parseQuotaRules, QUOTA_GLOBAL_KEY } from "../remote/files-quota.mjs";
+import { createIssuanceQuota, issuanceQuotaFromEnv, parseQuotaRules, PRODUCTION_QUOTA_HOST, QUOTA_GLOBAL_KEY, quotaHostFromEnv } from "../remote/files-quota.mjs";
 import { createFilesHandler } from "../remote/files.mjs";
 import { currentRequestHeaders, withOidcToken } from "../remote/oidc-context.mjs";
 import { parseSealingKeys } from "../remote/sealed.mjs";
@@ -14,8 +14,9 @@ import { checkRateLimit } from "../remote/vendor/vercel-firewall-1.2.6/rate-limi
 
 const MODERN = "2026-07-28";
 const KEYS = parseSealingKeys(`q1:${"c3".repeat(32)}`);
+const OWNED = "pdf-tools-remote-abc123xyz-open-document-alliance.vercel.app";
 const REQUEST_HEADERS = new Headers({
-  host: "mcp.example.test", "x-real-ip": "203.0.113.7", "x-forwarded-for": "203.0.113.7", "x-vercel-ja4-digest": "t13d1516h2_synthetic",
+  host: "attacker.example", "x-real-ip": "203.0.113.7", "x-forwarded-for": "203.0.113.7", "x-vercel-ja4-digest": "t13d1516h2_synthetic",
   authorization: "Bearer must-not-forward", "x-vercel-oidc-token": "must-not-forward", cookie: "other=must-not-forward; _vercel_jwt=synthetic-jwt",
 });
 
@@ -65,22 +66,63 @@ describe("Files upload issuance quota", () => {
     expect(issuanceQuotaFromEnv({ PDF_TOOLS_FILES_QUOTA_RULES: "files-upload-ip:ip" }).rules).toEqual([{ id: "files-upload-ip", scope: "ip" }]);
   });
 
+  it("takes the check's destination only from deployment configuration", () => {
+    expect(quotaHostFromEnv({ VERCEL_ENV: "production", VERCEL_URL: "anything.vercel.app" })).toBe(PRODUCTION_QUOTA_HOST);
+    expect(quotaHostFromEnv({ VERCEL_ENV: "preview", VERCEL_URL: OWNED })).toBe(OWNED);
+    for (const url of ["attacker.example", "pdf-tools-remote-abc123xyz-other-team.vercel.app", "evil-pdf-tools-remote-abc123xyz-open-document-alliance.vercel.app", "pdf-tools-remote-abc123xyz-open-document-alliance.vercel.app.attacker.example", ""]) {
+      expect(quotaHostFromEnv({ VERCEL_ENV: "preview", VERCEL_URL: url })).toBeNull();
+    }
+    expect(quotaHostFromEnv({ VERCEL_ENV: "development", VERCEL_URL: OWNED })).toBeNull();
+    expect(quotaHostFromEnv({})).toBeNull();
+  });
+
+  it("sends the check to the owned host whatever the inbound Host says, and closes without one", async () => {
+    const calls = [];
+    const logs = [];
+    const check = async (id, options) => { calls.push(options.headers.get("host")); return { rateLimited: false }; };
+    const pinned = createIssuanceQuota({ rules: [{ id: "files-upload-ip", scope: "ip" }], check, host: () => OWNED });
+    expect(await ctx(() => pinned.admit())).toEqual({ ok: true });
+    expect(calls).toEqual([OWNED]);
+    const unowned = createIssuanceQuota({ rules: [{ id: "files-upload-ip", scope: "ip" }], check, host: () => null, log: line => logs.push(line) });
+    expect(await ctx(() => unowned.admit())).toEqual({ ok: false, reason: "unavailable" });
+    expect(calls).toHaveLength(1);
+    expect(logs).toEqual(["pdf-tools: ERROR files upload quota unavailable: no owned hostname for this deployment"]);
+  });
+
+  it("through the vendored SDK, the request and the bypass secret go only to the owned host", async () => {
+    const seen = [];
+    vi.stubGlobal("fetch", async (url, init) => { seen.push({ url, headers: init.headers }); return new Response(null, { status: 204 }); });
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "synthetic-bypass");
+    try {
+      const quota = createIssuanceQuota({ rules: [{ id: "files-upload-ip", scope: "ip" }], host: () => OWNED, check: (id, options) => checkRateLimit(id, { ...options, firewallHostForDevelopment: "ignore-for-testing" }) });
+      expect(await ctx(() => quota.admit())).toEqual({ ok: true });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    }
+    expect(seen).toHaveLength(1);
+    expect(new URL(seen[0].url).host).toBe(OWNED);
+    expect(seen[0].headers.get("x-vercel-protection-bypass")).toBe("synthetic-bypass");
+    expect(seen[0].headers.get("x-rr-host")).toBe(OWNED);
+    expect(JSON.stringify([...seen[0].headers])).not.toMatch(/attacker\.example|must-not-forward/);
+  });
+
   it("forwards only what identifies the client, and uses one fixed key for the global rule", async () => {
     const calls = [];
-    const quota = createIssuanceQuota({ rules: parseQuotaRules("files-upload-ip:ip,files-upload-global:global"), check: async (id, options) => { calls.push({ id, options }); return { rateLimited: false }; } });
+    const quota = createIssuanceQuota({ rules: parseQuotaRules("files-upload-ip:ip,files-upload-global:global"), host: () => OWNED, check: async (id, options) => { calls.push({ id, options }); return { rateLimited: false }; } });
     expect(await ctx(() => quota.admit())).toEqual({ ok: true });
     expect(calls.map(call => call.id)).toEqual(["files-upload-ip", "files-upload-global"]);
     expect(calls[0].options.rateLimitKey).toBeUndefined();
     expect(calls[1].options.rateLimitKey).toBe(QUOTA_GLOBAL_KEY);
     expect(calls[0].options.timeout).toBe(2000);
     const sent = Object.fromEntries(calls[0].options.headers.entries());
-    expect(sent).toEqual({ host: "mcp.example.test", "x-real-ip": "203.0.113.7", "x-forwarded-for": "203.0.113.7", "x-vercel-ja4-digest": "t13d1516h2_synthetic", cookie: "_vercel_jwt=synthetic-jwt" });
+    expect(sent).toEqual({ host: OWNED, "x-real-ip": "203.0.113.7", "x-forwarded-for": "203.0.113.7", "x-vercel-ja4-digest": "t13d1516h2_synthetic" });
   });
 
   it("refuses when any rule is over its limit, and closes on a missing rule, an error, a timeout or no request", async () => {
     const logs = [];
     const log = line => logs.push(line);
-    const quotaFor = check => createIssuanceQuota({ rules: parseQuotaRules("files-upload-ip:ip,files-upload-global:global"), check, log });
+    const quotaFor = check => createIssuanceQuota({ rules: parseQuotaRules("files-upload-ip:ip,files-upload-global:global"), check, log, host: () => OWNED });
     expect(await ctx(() => quotaFor(async id => ({ rateLimited: id === "files-upload-global" })).admit())).toEqual({ ok: false, reason: "rate_limited" });
     expect(await ctx(() => quotaFor(async () => ({ rateLimited: true, error: "blocked" })).admit())).toEqual({ ok: false, reason: "rate_limited" });
     expect(await ctx(() => quotaFor(async () => ({ rateLimited: false, error: "not-found" })).admit())).toEqual({ ok: false, reason: "unavailable" });
@@ -94,7 +136,7 @@ describe("Files upload issuance quota", () => {
   });
 
   it("keeps the request headers scoped to the request", async () => {
-    expect(await ctx(async () => currentRequestHeaders()?.get("host"))).toBe("mcp.example.test");
+    expect(await ctx(async () => currentRequestHeaders()?.get("host"))).toBe("attacker.example");
     expect(currentRequestHeaders()).toBeNull();
   });
 });
@@ -109,7 +151,7 @@ describe("Files with the quota, over the MCP handler", () => {
     let limited = false;
     const checks = [];
     const store = createMemoryFileStore();
-    const quota = createIssuanceQuota({ rules: [{ id: "files-upload-ip", scope: "ip" }], check: async id => { checks.push(id); return { rateLimited: limited }; }, headers: () => REQUEST_HEADERS });
+    const quota = createIssuanceQuota({ rules: [{ id: "files-upload-ip", scope: "ip" }], check: async id => { checks.push(id); return { rateLimited: limited }; }, headers: () => REQUEST_HEADERS, host: () => OWNED });
     const handler = createMcpHandler(({ era }) => createRemoteServer({ era, files: createFilesHandler({ store, keys: KEYS, quota }) }));
     let id = 0;
     const rpc = async (name, args, requestState) => {

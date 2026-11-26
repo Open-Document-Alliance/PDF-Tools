@@ -21,15 +21,34 @@
  * Failure closes issuance only: a missing rule, an error or a timeout refuses
  * the new target with a retryable answer and an ERROR line, and every other
  * call keeps working.
+ *
+ * Where the check goes. The SDK sends its request, with the project's
+ * automation-bypass secret, to whatever `host` header it is given. That host is
+ * pinned from deployment configuration, never taken from the inbound request:
+ * the connector hostname in Production, this deployment's own URL (VERCEL_URL)
+ * in Preview. Anything else, or a value that does not look like ours, closes
+ * issuance. No inbound cookie is forwarded; the bypass secret authenticates
+ * the check on protected previews.
  */
 import { checkRateLimit } from "./vendor/vercel-firewall-1.2.6/rate-limit.cjs";
 import { currentRequestHeaders } from "./oidc-context.mjs";
 
 export const QUOTA_GLOBAL_KEY = "pdf-tools-files-upload-issuance";
+/** The connector's production hostname, the only Production destination for the check. */
+export const PRODUCTION_QUOTA_HOST = "mcp.opendocuments.ai";
+/** VERCEL_URL of a deployment of this project in the ODA team: pdf-tools-remote-<id>-open-document-alliance.vercel.app */
+const PREVIEW_HOST_PATTERN = /^pdf-tools-remote-[a-z0-9]{6,16}-open-document-alliance\.vercel\.app$/;
 const DEFAULT_TIMEOUT_MS = 2_000;
 const RULE_PATTERN = /^([a-z0-9][a-z0-9-]{0,62}):(ip|global)$/;
-/** What the firewall needs to identify the client; never tokens, authorization or other cookies. */
-const FORWARDED_HEADERS = ["host", "x-real-ip", "x-forwarded-for", "x-vercel-ja4-digest"];
+/** What the firewall needs to identify the client; never the host, tokens, authorization or cookies. */
+const FORWARDED_HEADERS = ["x-real-ip", "x-forwarded-for", "x-vercel-ja4-digest"];
+
+/** The owned hostname the check may be sent to, from deployment configuration, or null. */
+export function quotaHostFromEnv(env = process.env) {
+  if (env.VERCEL_ENV === "production") return PRODUCTION_QUOTA_HOST;
+  if (env.VERCEL_ENV === "preview" && PREVIEW_HOST_PATTERN.test(env.VERCEL_URL ?? "")) return env.VERCEL_URL;
+  return null;
+}
 
 /** "files-upload-ip:ip,files-upload-global:global" -> [{ id, scope }], or null if malformed or empty. */
 export function parseQuotaRules(value) {
@@ -43,19 +62,16 @@ export function parseQuotaRules(value) {
   return rules;
 }
 
-function forwardedHeaders(source) {
-  const headers = new Headers();
+function forwardedHeaders(source, host) {
+  const headers = new Headers({ host });
   for (const name of FORWARDED_HEADERS) {
     const value = source.get(name);
     if (value) headers.set(name, value);
   }
-  // Protected previews authenticate the check with the deployment's own session cookie.
-  const jwt = (source.get("cookie") ?? "").split(";").map(part => part.trim()).find(part => part.startsWith("_vercel_jwt="));
-  if (jwt) headers.set("cookie", jwt);
   return headers;
 }
 
-export function createIssuanceQuota({ rules, check = checkRateLimit, headers = currentRequestHeaders, timeoutMs = DEFAULT_TIMEOUT_MS, log = console.error }) {
+export function createIssuanceQuota({ rules, check = checkRateLimit, headers = currentRequestHeaders, host = () => quotaHostFromEnv(), timeoutMs = DEFAULT_TIMEOUT_MS, log = console.error }) {
   if (!Array.isArray(rules) || rules.length === 0) throw new Error("an issuance quota needs at least one rule");
   return {
     rules: rules.map(rule => ({ ...rule })),
@@ -66,7 +82,12 @@ export function createIssuanceQuota({ rules, check = checkRateLimit, headers = c
         log("pdf-tools: ERROR files upload quota unavailable: no request context");
         return { ok: false, reason: "unavailable" };
       }
-      const forwarded = forwardedHeaders(source);
+      const destination = host();
+      if (!destination) {
+        log("pdf-tools: ERROR files upload quota unavailable: no owned hostname for this deployment");
+        return { ok: false, reason: "unavailable" };
+      }
+      const forwarded = forwardedHeaders(source, destination);
       for (const rule of rules) {
         let result;
         try {
