@@ -2,7 +2,7 @@
 
 The transfer host for the hosted server's MCP Files extension (docs/REMOTE_FILES_PROFILE_2026-11-25.md). It is the Vercel project `pdf-tools-files` in the Open Document Alliance team, separate from `pdf-tools-remote`, and it serves nothing of its own: it rewrites `/up/` and `/dl/` to the private Files bucket, and everything else is 404 (robots.txt aside).
 
-Every request carries its own S3 signature, made by `pdf-tools-remote` for one object key. The bucket refuses anything unsigned, expired or tampered with, and the rewrite passes S3's answer through unchanged. Upload URLs sign `Content-Length`, `Content-Type` and `If-None-Match: *`, so each accepts exactly one write of the declared size. Responses are never cached. Claim markers (`claimed/`) and anything else in the bucket are not reachable through this host.
+Every request carries its own S3 signature, made by `pdf-tools-remote` for one object key. The bucket refuses anything unsigned, expired or tampered with, and the rewrite passes S3's answer through unchanged. Upload URLs sign `Content-Length`, `Content-Type` and `If-None-Match: *`, so each accepts exactly one write of the declared size; after use the key holds an empty tombstone, so the URL cannot write again. Responses are never cached. Claim markers (`claimed/`) and anything else in the bucket are not reachable through this host.
 
 Deploy (production only after the Files gates in the profile):
 

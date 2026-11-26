@@ -170,6 +170,12 @@ export function createS3Client({ bucket, region, credentials, fetchImpl = fetch,
       await response.body?.cancel();
       return true;
     },
+    /** Unconditional write (replaces whatever is there). */
+    async put(key, body, { contentType = "application/octet-stream" } = {}) {
+      const response = await call("PUT", objectPath(key), { body, headers: { "content-type": contentType, "content-length": String(body.length) } });
+      if (!response.ok) throw await fail(response);
+      await response.body?.cancel();
+    },
     async deleteObject(key) {
       const response = await call("DELETE", objectPath(key));
       if (!response.ok && response.status !== 404) throw await fail(response);
@@ -185,10 +191,12 @@ export function createS3Client({ bucket, region, credentials, fetchImpl = fetch,
       if (!response.ok) throw new AwsError(xmlValue(xml, "Code"), response.status);
       if (/<Error>/.test(xml)) throw new AwsError(xmlValue(xml.slice(xml.indexOf("<Error>")), "Code") ?? "DeleteObjectsPartialFailure", response.status);
     },
-    async *list() {
+    /** Every object under `prefix` (required: nothing outside the given prefix is ever listed). */
+    async *list(prefix) {
+      if (typeof prefix !== "string" || prefix.length === 0) throw new Error("list needs a prefix");
       let token;
       do {
-        const query = { "list-type": "2", "max-keys": "1000" };
+        const query = { "list-type": "2", "max-keys": "1000", prefix };
         if (token) query["continuation-token"] = token;
         const response = await call("GET", "/", { query });
         const xml = await response.text();

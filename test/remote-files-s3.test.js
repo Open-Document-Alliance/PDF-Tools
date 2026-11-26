@@ -80,7 +80,9 @@ function fakeAws({ clock, maxSession = ROLE_SESSION_SECONDS, pageSize = 1000 } =
     calls.s3.push({ method, key: url.pathname === "/" ? url.search : key, presigned });
 
     if (url.pathname === "/" && method === "GET") {
-      const all = [...objects.keys()].sort();
+      const prefix = url.searchParams.get("prefix") ?? "";
+      if (!prefix) return error(400, "PrefixRequiredByThisTest");
+      const all = [...objects.keys()].filter(k => k.startsWith(prefix)).sort();
       const start = Number(url.searchParams.get("continuation-token") ?? 0);
       const page = all.slice(start, start + pageSize);
       const truncated = start + pageSize < all.length;
@@ -138,11 +140,11 @@ describe("AWS Signature Version 4", () => {
 });
 
 describe("Files S3 store configuration", () => {
-  const complete = { PDF_TOOLS_FILES_ENABLED: "1", S3_BUCKET_NAME: BUCKET, AWS_REGION: "us-east-1", AWS_ROLE_ARN: ROLE, PDF_TOOLS_FILES_ORIGIN: ORIGIN };
+  const complete = { PDF_TOOLS_FILES_ENABLED: "1", S3_BUCKET_NAME: BUCKET, AWS_REGION: "us-east-1", AWS_ROLE_ARN: ROLE, PDF_TOOLS_FILES_ORIGIN: ORIGIN, CRON_SECRET: "synthetic" };
 
   it("is selected only when enabled with a complete configuration and an https origin", () => {
     expect(fileStoreFromEnv({ ...complete, PDF_TOOLS_FILES_ENABLED: undefined })).toBeNull();
-    for (const missing of ["S3_BUCKET_NAME", "AWS_REGION", "AWS_ROLE_ARN", "PDF_TOOLS_FILES_ORIGIN"]) {
+    for (const missing of ["S3_BUCKET_NAME", "AWS_REGION", "AWS_ROLE_ARN", "PDF_TOOLS_FILES_ORIGIN", "CRON_SECRET"]) {
       expect(fileStoreFromEnv({ ...complete, [missing]: undefined })).toBeNull();
     }
     for (const origin of ["http://files.example.test", "https://files.example.test/", "https://files.example.test/path", "https://localhost"]) {
@@ -172,8 +174,9 @@ describe("Files S3 store configuration", () => {
 describe("Files S3 store", () => {
   it("presigns one write of exactly the declared size on the files host, never the bucket host", async () => {
     const { aws, store, clock } = harness();
-    const expiresAt = Math.floor(clock() / 1000) + UPLOAD_TARGET_SECONDS;
-    const target = await store.presignUpload("up/abc", { size: 10, mimeType: "application/pdf", expiresAt });
+    const target = await store.presignUpload("up/abc", { size: 10, mimeType: "application/pdf", lifetimeSeconds: UPLOAD_TARGET_SECONDS });
+    const signedAt = Date.parse(new URL(target.url).searchParams.get("X-Amz-Date").replace(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z/, "$1-$2-$3T$4:$5:$6Z")) / 1000;
+    expect(target.expiresAt).toBe(signedAt + UPLOAD_TARGET_SECONDS);
     const url = new URL(target.url);
     expect(url.origin).toBe(ORIGIN);
     expect(url.pathname).toBe("/up/abc");
@@ -191,36 +194,38 @@ describe("Files S3 store", () => {
   it("keeps every URL inside the one-hour role session, and cannot sign the 75 minutes several uploads need", async () => {
     const { aws, store, clock, advance } = harness();
     const seconds = () => Math.floor(clock() / 1000);
-    await store.presignUpload("up/a", { size: 1, mimeType: "application/pdf", expiresAt: seconds() + UPLOAD_TARGET_SECONDS });
-    await store.presignUpload("up/b", { size: 1, mimeType: "application/pdf", expiresAt: seconds() + UPLOAD_TARGET_SECONDS });
-    await store.presignDownload("dl/a", { expiresAt: seconds() + DOWNLOAD_SECONDS });
+    await store.presignUpload("up/a", { size: 1, mimeType: "application/pdf", lifetimeSeconds: UPLOAD_TARGET_SECONDS });
+    await store.presignUpload("up/b", { size: 1, mimeType: "application/pdf", lifetimeSeconds: UPLOAD_TARGET_SECONDS });
+    await store.presignDownload("dl/a", { lifetimeSeconds: DOWNLOAD_SECONDS });
     expect(aws.calls.sts).toBe(1);
 
     advance(10 * 60 * 1000);
-    await store.presignUpload("up/c", { size: 1, mimeType: "application/pdf", expiresAt: seconds() + UPLOAD_TARGET_SECONDS });
+    await store.presignUpload("up/c", { size: 1, mimeType: "application/pdf", lifetimeSeconds: UPLOAD_TARGET_SECONDS });
     expect(aws.calls.sts).toBe(1);
-    await store.presignDownload("dl/b", { expiresAt: seconds() + DOWNLOAD_SECONDS });
+    await store.presignDownload("dl/b", { lifetimeSeconds: DOWNLOAD_SECONDS });
     expect(aws.calls.sts).toBe(2);
 
-    await expect(store.presignUpload("up/d", { size: 1, mimeType: "application/pdf", expiresAt: seconds() + 75 * 60 })).rejects.toThrow(/session is shorter/);
+    await expect(store.presignUpload("up/d", { size: 1, mimeType: "application/pdf", lifetimeSeconds: 75 * 60 })).rejects.toThrow(/session is shorter/);
   });
 
   it("takes an upload at most once, even when two repeats race", async () => {
     const { aws, store, clock } = harness();
-    const target = await store.presignUpload("up/race", { size: 4, mimeType: "application/pdf", expiresAt: Math.floor(clock() / 1000) + 600 });
+    const target = await store.presignUpload("up/race", { size: 4, mimeType: "application/pdf", lifetimeSeconds: 600 });
     await hostUpload(aws, target, new Uint8Array([1, 2, 3, 4]));
     const results = await Promise.all([store.take("up/race"), store.take("up/race")]);
     expect(results.filter(Boolean)).toHaveLength(1);
     expect([...results.find(Boolean)]).toEqual([1, 2, 3, 4]);
-    expect(aws.objects.has("up/race")).toBe(false);
+    expect(aws.objects.get("up/race").bytes.length).toBe(0);
     expect(await store.take("up/race")).toBeNull();
+    expect((await hostUpload(aws, target, new Uint8Array([5, 6, 7, 8]))).status).toBe(412);
+    expect(aws.objects.get("up/race").bytes.length).toBe(0);
   });
 
   it("writes results once and serves them as attachments through the files host", async () => {
     const { aws, store, clock } = harness();
     await store.putResult("dl/r", new Uint8Array([9, 9]), { mimeType: "application/pdf" });
     await expect(store.putResult("dl/r", new Uint8Array([1]), { mimeType: "application/pdf" })).rejects.toThrow(/already exists/);
-    const { url } = await store.presignDownload("dl/r", { expiresAt: Math.floor(clock() / 1000) + DOWNLOAD_SECONDS });
+    const { url } = await store.presignDownload("dl/r", { lifetimeSeconds: DOWNLOAD_SECONDS });
     const parsed = new URL(url);
     expect(parsed.origin).toBe(ORIGIN);
     expect(parsed.searchParams.get("response-content-disposition")).toBe("attachment");
@@ -239,8 +244,9 @@ describe("Files S3 store", () => {
     expect([...aws.objects.keys()]).toContain("claimed/up/x");
     advance(106 * 60 * 1000);
     await store.putResult("dl/new", new Uint8Array([5]));
-    expect(await sweepTransfers(store, { now: Date.UTC(2026, 10, 26, 12) + 106 * 60 * 1000 })).toEqual({ deleted: 4, kept: 1 });
-    expect([...aws.objects.keys()]).toEqual(["dl/new"]);
+    aws.objects.set("unrelated/keep", { bytes: new Uint8Array([7]), modified: 0 });
+    expect(await sweepTransfers(store, { now: Date.UTC(2026, 10, 26, 12) + 106 * 60 * 1000 })).toMatchObject({ deleted: 5, kept: 1 });
+    expect([...aws.objects.keys()].sort()).toEqual(["dl/new", "unrelated/keep"]);
   });
 });
 
@@ -285,7 +291,7 @@ describe("Files over S3, end to end through the MCP handler", () => {
     const second = await rpc("get_pdf_info", args, first.result.requestState);
     expect(second.result.isError).toBeFalsy();
     expect(second.result.structuredContent.source.page_count).toBe(3);
-    expect([...aws.objects.keys()].filter(key => key.startsWith("up/"))).toEqual([]);
+    expect([...aws.objects].filter(([key, object]) => key.startsWith("up/") && object.bytes.length > 0)).toEqual([]);
     expect((await rpc("get_pdf_info", args, first.result.requestState)).error?.code).toBe(-32602);
 
     const selectArgs = { upload: { id: "f2", mimeType: "application/pdf", size: bytes.length }, page_numbers: [3, 1] };
@@ -310,7 +316,7 @@ describe("Files over S3, end to end through the MCP handler", () => {
     const second = await rpc("get_pdf_info", args, first.result.requestState);
     expect(second.result.isError).toBe(true);
     expect(second.result.content[0].text).toMatch(/^UPLOAD_MISMATCH/);
-    expect([...aws.objects.keys()].filter(key => key.startsWith("up/"))).toEqual([]);
+    expect([...aws.objects].filter(([key, object]) => key.startsWith("up/") && object.bytes.length > 0)).toEqual([]);
   });
 });
 

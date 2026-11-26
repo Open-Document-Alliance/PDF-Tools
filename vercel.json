@@ -27,7 +27,7 @@
   "crons": [
     {
       "path": "/api/files-sweep",
-      "schedule": "*/15 * * * *"
+      "schedule": "*/10 * * * *"
     }
   ],
   "rewrites": [

@@ -21,7 +21,13 @@ import { open, seal } from "./sealed.mjs";
 
 export const FILES_EXTENSION = "io.modelcontextprotocol/files";
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-export const UPLOAD_TARGET_SECONDS = 20 * 60;
+/**
+ * The Files guide asks for at least 20 minutes from when the target is
+ * returned. 25 leaves room for signing, the response, and whole-second
+ * rounding; the response states the expiry the URL was actually signed with.
+ */
+export const UPLOAD_TARGET_SECONDS = 25 * 60;
+export const MIN_UPLOAD_TARGET_SECONDS = 20 * 60;
 /** Upload sessions end here, before the sweeper (files-sweeper.mjs) may delete the upload. */
 export const STATE_SECONDS = 60 * 60;
 /**
@@ -91,13 +97,12 @@ export function createFilesHandler({ store, keys, principal = "public" }) {
 
       if (requestState === undefined) {
         const key = `up/${randomBytes(18).toString("base64url")}`;
-        const expiresAt = nowSeconds + UPLOAD_TARGET_SECONDS;
-        const target = await store.presignUpload(key, { size: upload.size, mimeType: "application/pdf", expiresAt });
+        const target = await store.presignUpload(key, { size: upload.size, mimeType: "application/pdf", lifetimeSeconds: UPLOAD_TARGET_SECONDS });
         const state = seal("files", { b: binding, k: key, z: upload.size, d: upload.digest?.value }, { keys, expiresAt: nowSeconds + STATE_SECONDS });
         return {
           resultType: "upload_required",
           content: [],
-          uploads: [{ fileId: upload.id, url: target.url, method: target.method, headers: target.headers, credentials: "omit", expiresAt: new Date(expiresAt * 1000).toISOString() }],
+          uploads: [{ fileId: upload.id, url: target.url, method: target.method, headers: target.headers, credentials: "omit", expiresAt: new Date(target.expiresAt * 1000).toISOString() }],
           requestState: state,
         };
       }
@@ -107,16 +112,15 @@ export function createFilesHandler({ store, keys, principal = "public" }) {
         throw new FilesProtocolError("The upload state is not valid or has expired.");
       }
       if (state.b !== binding) throw new FilesProtocolError("The repeated call does not match the call that requested the upload.");
-      const observed = await store.head(state.k);
-      if (!observed) throw new FilesProtocolError("The upload was not received, or this upload was already used.");
-      const mismatch = () => refusal("UPLOAD_MISMATCH", "The uploaded bytes do not match the declared size or digest. Nothing was processed.");
-      if (observed.size !== state.z) {
-        await store.take(state.k);
-        return mismatch();
-      }
+      // HEAD first, so a repeat that arrives before the upload does not use up
+      // the claim. take() then decides the single run; after it, the key holds
+      // an empty tombstone and the claim, so any replay lands here as "used".
+      if (!(await store.head(state.k))) throw new FilesProtocolError("The upload was not received, or this upload was already used.");
       const bytes = await store.take(state.k);
       if (!bytes) throw new FilesProtocolError("This upload was already used.");
-      if (bytes.length !== state.z || (state.d && createHash("sha256").update(bytes).digest("base64url") !== state.d)) return mismatch();
+      if (bytes.length !== state.z || (state.d && createHash("sha256").update(bytes).digest("base64url") !== state.d)) {
+        return refusal("UPLOAD_MISMATCH", "The uploaded bytes do not match the declared size or digest. Nothing was processed.");
+      }
       const { upload: _declared, ...rest } = args;
       return run({ ...rest, _uploaded_bytes: bytes });
     },
@@ -128,7 +132,7 @@ export function createFilesHandler({ store, keys, principal = "public" }) {
       const bytes = Buffer.from(base64, "base64");
       const key = `dl/${randomBytes(18).toString("base64url")}`;
       await store.putResult(key, bytes, { mimeType: "application/pdf" });
-      const { url } = await store.presignDownload(key, { expiresAt: nowSeconds + DOWNLOAD_SECONDS });
+      const { url, expiresAt } = await store.presignDownload(key, { lifetimeSeconds: DOWNLOAD_SECONDS });
       const structuredContent = { ...result.structuredContent };
       delete structuredContent.pdf_base64;
       const meta = { ...(result._meta ?? {}) };
@@ -137,7 +141,7 @@ export function createFilesHandler({ store, keys, principal = "public" }) {
         downloads: [{
           name: fileName, mimeType: "application/pdf", size: bytes.length,
           digest: { algorithm: "sha-256", value: createHash("sha256").update(bytes).digest("base64url") },
-          url, credentials: "omit", expiresAt: new Date((nowSeconds + DOWNLOAD_SECONDS) * 1000).toISOString(),
+          url, credentials: "omit", expiresAt: new Date(expiresAt * 1000).toISOString(),
         }],
       };
       const content = [...(result.content ?? []), { type: "text", text: `The PDF (${bytes.length} bytes) is attached as a download.` }];

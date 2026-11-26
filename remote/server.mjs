@@ -456,6 +456,11 @@ async function callToolWithinBudget(name, args, context) {
   }
 }
 
+/** The tools that advertise an `upload` argument when Files is on: those that take one document as `file`. */
+export function uploadToolNames({ signing = false } = {}) {
+  return new Set((signing ? [...TOOLS, ...SIGNING_TOOLS] : TOOLS).filter(tool => tool.inputSchema.properties?.file).map(tool => tool.name));
+}
+
 export function listTools({ signing = false, files = false } = {}) {
   return {
     tools: (signing ? [...TOOLS, ...SIGNING_TOOLS] : TOOLS).map(({ name, description, inputSchema: baseSchema, annotations }) => {
@@ -484,8 +489,10 @@ export const SIGNING_INSTRUCTIONS =
  * /mcp/sign route, with the Lumin access token it opened for this request.
  */
 export function createRemoteServer({ dispatchTool = callTool, signing = null, era = "legacy", files = null } = {}) {
-  // The Files extension needs 2026-07-28 and a configured transfer store.
-  const filesOn = era === "modern" && files !== null;
+  // The Files extension needs 2026-07-28 and a configured transfer store, and
+  // is offered on the public route only: the signing route's upload state would
+  // have to bind the Lumin principal first.
+  const filesOn = era === "modern" && files !== null && !signing;
   // Skills over MCP is a 2026-07-28 extension, so only modern connections see
   // it. The skill describes the public tool set, so the signing connection,
   // which has more tools, does not offer it (P7). A skill that fails to load
@@ -506,6 +513,7 @@ export function createRemoteServer({ dispatchTool = callTool, signing = null, er
   );
   const context = signing ? { lumin: { accessToken: signing.luminAccessToken } } : {};
 
+  const uploadable = filesOn ? uploadToolNames({ signing: Boolean(signing) }) : new Set();
   server.setRequestHandler("tools/list", async () => listTools({ signing: Boolean(signing), files: filesOn }));
 
   server.setRequestHandler("tools/call", async (request, extra) => {
@@ -515,6 +523,11 @@ export function createRemoteServer({ dispatchTool = callTool, signing = null, er
     if (!filesOn) return run(args);
     const declared = declaredFiles(extra?.mcpReq?.envelope);
     const nowSeconds = Math.floor(Date.now() / 1000);
+    // Only the tools that advertise `upload` may open the upload flow; anything
+    // else is refused before a target is issued.
+    if (args.upload !== undefined && !uploadable.has(name)) {
+      return refusal("UPLOAD_UNSUPPORTED_TOOL", "This tool does not take an upload. Tools that list an upload argument accept one PDF each.");
+    }
     const result = args.upload !== undefined
       ? await files.handleUpload({ name, args, requestState: extra?.mcpReq?.requestState?.(), declared, nowSeconds, run })
       : await run(args);
