@@ -96,7 +96,7 @@ function assertModernComplete(result, { cacheable = false } = {}) {
   expect(result.resultType).toBe("complete");
   expect(result._meta?.[SERVER_INFO_META]).toEqual({
     name: "pdf-tools",
-    version: "0.15.0",
+    version: "0.16.0",
   });
   if (cacheable) {
     expect(result.ttlMs).toBe(0);
